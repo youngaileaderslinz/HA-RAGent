@@ -32,6 +32,6 @@ jobs:
         uses: softprops/action-gh-release@v2.5.0
         if: ${{ github.event_name == 'release' }}
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           tag_name: ${{ github.event.release.tag_name }}
           files: "${{ github.workspace }}/custom_components/ha_ragent/ha_ragent.zip"
