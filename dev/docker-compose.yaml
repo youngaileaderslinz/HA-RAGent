@@ -10,7 +10,7 @@ services:
       - ../custom_components/ha_ragent:/config/custom_components/ha_ragent
 
   ollama:
-    image: ollama/ollama:0.17.7
+    image: ollama/ollama:0.24.0
     container_name: ollama
     restart: unless-stopped
     ports:
