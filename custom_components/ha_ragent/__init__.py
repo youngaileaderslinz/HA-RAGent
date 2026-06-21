@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Any
 
@@ -23,6 +24,7 @@ from custom_components.ha_ragent.src.const import (
     DEFAULT_VECTOR_DB_BACKEND_TYPE,
     DEFAULT_EMBEDDING_BACKEND_TYPE,
     DEFAULT_LLM_BACKEND_TYPE,    
+    STARTUP_EMBEDDING_RUNNING_FLAG
 )
 
 import voluptuous as vol
@@ -143,6 +145,28 @@ async def _register_services(hass: HomeAssistant):
         _handle_unload_models,
         schema=vol.Schema({}).extend(config_validation.TARGET_SERVICE_FIELDS)
     )
+
+
+async def _async_run_startup_embeddings(hass: HomeAssistant, entry: RAGentConfigEntry) -> None:
+    """Run embedding of exposed tools and devices at startup and prevent concurrent runs."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    if domain_data.get(STARTUP_EMBEDDING_RUNNING_FLAG):
+        _logger.info(
+            "Skipping startup embeddings for %s because a run is already in progress",
+            entry.entry_id,
+        )
+        return
+
+    domain_data[STARTUP_EMBEDDING_RUNNING_FLAG] = True
+    try:
+        tool_extractor = ToolExtractor(hass, entry)
+        device_extractor = DeviceExtractor(hass, entry)
+        await asyncio.gather(
+            tool_extractor.async_embed_all_exposed_tools(),
+            device_extractor.async_embed_all_exposed_devices(),
+        )
+    finally:
+        domain_data[STARTUP_EMBEDDING_RUNNING_FLAG] = False
     
 
 async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry):
@@ -164,20 +188,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry):
     entry.llm_backend = _create_llm_client(hass, llm_backend_type, entry)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    tool_extractor = ToolExtractor(hass, entry)
-    device_extractor = DeviceExtractor(hass, entry)
     
     if hass.is_running:
-        hass.async_create_task(tool_extractor.async_embed_all_exposed_tools())
-        hass.async_create_task(device_extractor.async_embed_all_exposed_devices())
+        hass.async_create_task(_async_run_startup_embeddings(hass, entry))
     else:
         hass.bus.async_listen_once(
             EVENT_HOMEASSISTANT_STARTED,
-            lambda _event: (
-                hass.add_job(tool_extractor.async_embed_all_exposed_tools()),
-                hass.add_job(device_extractor.async_embed_all_exposed_devices())
-            )
+            lambda _event: hass.async_create_task(_async_run_startup_embeddings(hass, entry))
         )
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
