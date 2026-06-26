@@ -5,13 +5,14 @@ from typing import Any
 from homeassistant.const import Platform, EVENT_HOMEASSISTANT_STARTED
 from homeassistant.config_entries import ConfigEntryState, OperationNotAllowed
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers import entity_registry, target
+from homeassistant.helpers import entity_registry, llm, target
 
 from custom_components.ha_ragent.src.homeassistant.ragent_config_entry import RAGentConfigEntry
 from custom_components.ha_ragent.src.backends.database.base_backend import ABaseDbBackend
 from custom_components.ha_ragent.src.backends.embedder.base_backend import ABaseEmbedder
 from custom_components.ha_ragent.src.backends.llm.base_backend import ALlmBaseBackend
 from custom_components.ha_ragent.src.homeassistant.device_extractor import DeviceExtractor
+from custom_components.ha_ragent.src.homeassistant.search_tool_api import RAGentLLMAPI
 from custom_components.ha_ragent.src.homeassistant.tool_extractor import ToolExtractor
 
 from custom_components.ha_ragent.src.const import (
@@ -24,6 +25,7 @@ from custom_components.ha_ragent.src.const import (
     DEFAULT_VECTOR_DB_BACKEND_TYPE,
     DEFAULT_EMBEDDING_BACKEND_TYPE,
     DEFAULT_LLM_BACKEND_TYPE,    
+    RAGENT_LLM_API_ID,
     STARTUP_EMBEDDING_RUNNING_FLAG
 )
 
@@ -35,6 +37,14 @@ from custom_components.ha_ragent.src.utils import vector_db_to_class, embedding_
 _logger = logging.getLogger(__name__)
 
 PLATFORMS = (Platform.CONVERSATION,)
+
+
+def _ensure_llm_api_registered(hass: HomeAssistant) -> None:
+    if any(api.id == RAGENT_LLM_API_ID for api in llm.async_get_apis(hass)):
+        return
+
+    llm.async_register_api(hass, RAGentLLMAPI(hass))
+    _logger.debug("Registered HA RAGent LLM API: %s", RAGENT_LLM_API_ID)
 
 def _create_vector_db_client(hass: HomeAssistant, vector_db_backend_type: str, entry: RAGentConfigEntry) -> ABaseDbBackend:
     _logger.debug("Creating Vector DB client of type %s", vector_db_backend_type)
@@ -172,6 +182,7 @@ async def _async_run_startup_embeddings(hass: HomeAssistant, entry: RAGentConfig
 async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry):
     """Set up HA Ragent from a config entry."""
     hass.data.setdefault(DOMAIN, {})
+    _ensure_llm_api_registered(hass)
     hass.data[DOMAIN][entry.entry_id] = entry
     hass.data[DOMAIN].setdefault("subentry_ids", {})[entry.entry_id] = set(entry.subentries)
     hass.data[DOMAIN].setdefault("subentry_data", {})[entry.entry_id] = {

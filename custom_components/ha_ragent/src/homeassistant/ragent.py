@@ -41,6 +41,8 @@ from ..const import (
     DEFAULT_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
     DEFAULT_MAX_TOOL_CALL_ITERATIONS,
     DOMAIN,
+    RAGENT_LLM_API_ID,
+    RAGENT_SEARCH_TOOL_NAME,
     PERSONA_PROMPTS,
     CURRENT_DATE_PROMPT,
     DEVICES_PROMPT,
@@ -222,20 +224,26 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
 
         return parsed_calls
     
-    def _parse_tool_results(self, tool_result: JsonObjectType) -> Dict[str, List[str]]:
+    def _parse_tool_results(self, tool_result: JsonObjectType) -> Dict[str, Any]:
         """Parse tool results from LLM response."""
+        if not isinstance(tool_result, dict):
+            return {"result": tool_result}
+
         data = tool_result.get("data", {})
         success = data.get("success", [])
         failed = data.get("failed", [])
-        tool_result = {}
+        parsed_result: Dict[str, Any] = {}
         
         success_ids = [x["id"] for x in success if x.get("type") == "entity"]
         if success_ids:
-            tool_result["success"] = success_ids
+            parsed_result["success"] = success_ids
 
         failed_ids = [x["id"] for x in failed if x.get("type") == "entity"]
         if failed_ids:
-            tool_result["failed"] = failed_ids
+            parsed_result["failed"] = failed_ids
+
+        if parsed_result:
+            return parsed_result
 
         return tool_result
     
@@ -255,7 +263,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
 
         return area, floor
 
-    async def _async_prompt_model(self, llm_api: llm.APIInstance, user_input: ConversationInput, tool_list: List[LlmTool], chat_log: conversation.ChatLog, message_history: List[conversation.Content]) -> ConversationResult:
+    async def _async_prompt_model(self, llm_api: llm.APIInstance, fallback_llm_api: llm.APIInstance | None, user_input: ConversationInput, tool_list: List[LlmTool], chat_log: conversation.ChatLog, message_history: List[conversation.Content]) -> ConversationResult:
         """Process a prompt through the RAGent."""
         max_tool_call_iterations = self.runtime_options.get(CONF_MAX_TOOL_CALL_ITERATIONS, DEFAULT_MAX_TOOL_CALL_ITERATIONS)
 
@@ -311,7 +319,8 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                         tool_input = ToolInput(tool_name=tool_name, tool_args=tool_args)
                         try:
                             if llm_api:
-                                tool_result = await llm_api.async_call_tool(tool_input)
+                                active_api = fallback_llm_api if tool_name == RAGENT_SEARCH_TOOL_NAME and fallback_llm_api else llm_api
+                                tool_result = await active_api.async_call_tool(tool_input)
                                 _logger.debug(f"Tool result: {tool_result}.")
                                 
                                 tool_calls.append((tool_input, tool_result))
@@ -386,6 +395,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 conversation.async_get_chat_log(self.hass, session, user_input) as chat_log,
             ):
                 llm_api: llm.APIInstance | None = None
+                fallback_llm_api: llm.APIInstance | None = None
 
                 if self.runtime_options.get(CONF_LLM_HASS_API) != "none":
                     try:
@@ -399,6 +409,16 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                         intent_response = intent.IntentResponse(language=user_input.language)
                         intent_response.async_set_error(intent.IntentResponseErrorCode.UNKNOWN, f"Error preparing LLM API.")
                         return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
+
+                    if self.runtime_options[CONF_LLM_HASS_API] != RAGENT_LLM_API_ID:
+                        try:
+                            fallback_llm_api = await llm.async_get_api(
+                                self.hass,
+                                RAGENT_LLM_API_ID,
+                                llm_context=user_input.as_llm_context(DOMAIN)
+                            )
+                        except HomeAssistantError as err:
+                            _logger.debug("Error getting fallback HA RAGent LLM API: %s", err)
                     
                 # ensure this chat log has the LLM API instance
                 chat_log.llm_api = llm_api
@@ -446,7 +466,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     intent_response.async_set_error(intent.IntentResponseErrorCode.UNKNOWN, f"Template rendering failed.")
                     return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
                 
-                return await self._async_prompt_model(llm_api, user_input, retrieved_tools, chat_log, message_history)
+                return await self._async_prompt_model(llm_api, fallback_llm_api, user_input, retrieved_tools, chat_log, message_history)
         except Exception as err:
             _logger.error("Unexpected error in async_process: %s", err)
             intent_response = intent.IntentResponse(language=user_input.language)

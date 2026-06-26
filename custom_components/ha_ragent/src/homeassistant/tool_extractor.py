@@ -4,6 +4,7 @@ import logging
 from typing import Any, Iterable, List, Tuple
 
 from homeassistant.const import CONF_LLM_HASS_API
+from homeassistant.components.conversation.const import DOMAIN as CONVERSATION_DOMAIN
 from homeassistant.components.intent import async_register_timer_handler
 from homeassistant.components.intent.timers import TIMER_DATA, TimerEventType, TimerInfo
 
@@ -20,7 +21,7 @@ from custom_components.ha_ragent.src.models.tool_embedding import LlmToolEmbeddi
 
 from .ragent_config_entry import RAGentConfigEntry
 from ..models.tool import LlmTool
-from ..const import DOMAIN, RAGENT_TIMER_DEVICE_ID
+from ..const import DOMAIN, RAGENT_LLM_API_ID, RAGENT_TIMER_DEVICE_ID
 
 _logger = logging.getLogger(__name__)
 
@@ -123,45 +124,74 @@ class ToolExtractor:
             _logger.warning("Failed to unregister timer device: %s", err)
 
     async def _async_get_embeddable_tools(self, subentry: ConfigSubentry) -> List[LlmTool]:
-        tool_list = []
+        tool_list: list[LlmTool] = []
+        seen_tool_names: set[str] = set()
+        selected_api = subentry.data.get(CONF_LLM_HASS_API, "default")
 
-        if subentry.data.get(CONF_LLM_HASS_API) == "none":
+        if selected_api == "none":
             return tool_list
 
         try:
             self._register_fake_timer_device()
-
-            llm_api = await llm.async_get_api(
-                self._hass,
-                subentry.data.get(CONF_LLM_HASS_API, "default"),
-                llm_context=LLMContext(platform=DOMAIN, context=None, language=None, assistant=None, device_id=RAGENT_TIMER_DEVICE_ID),
+            llm_context = LLMContext(
+                platform=DOMAIN,
+                context=None,
+                language=None,
+                assistant=CONVERSATION_DOMAIN,
+                device_id=RAGENT_TIMER_DEVICE_ID,
             )
 
-            if not llm_api or not hasattr(llm_api, "tools"):
-                return tool_list
+            api_ids = [selected_api]
+            if selected_api != RAGENT_LLM_API_ID:
+                api_ids.append(RAGENT_LLM_API_ID)
 
-            for tool in llm_api.tools:
-                if tool.name == "GetLiveContext":
+            for api_id in api_ids:
+                llm_api = await llm.async_get_api(
+                    self._hass,
+                    api_id,
+                    llm_context=llm_context,
+                )
+
+                if not llm_api or not hasattr(llm_api, "tools"):
+                    _logger.debug(
+                        f"LLM API {api_id} did not expose any tools attribute for subentry {subentry.title}",
+                    )
                     continue
 
-                if hasattr(tool, 'parameters') and tool.parameters:
-                    try:
-                        parameters = convert(tool.parameters, custom_serializer=llm_api.custom_serializer)
-                    except Exception as param_err:
-                        _logger.warning("Could not convert parameters for tool %s: %s", tool.name, param_err)
-                        parameters= {}
-                else:
-                    parameters = {}
-
-                tool_metadata = self._extract_tool_metadata(tool)
-
-                llm_tool = LlmTool(
-                    name=getattr(tool, "name", "unknown"),
-                    description=getattr(tool, "description", ""),
-                    parameters=parameters,
-                    metadata=tool_metadata
+                _logger.debug(
+                    f"LLM API {api_id} exposed {len(llm_api.tools)} raw tools for subentry {subentry.title}",
                 )
-                tool_list.append(llm_tool)
+
+                for tool in llm_api.tools:
+                    tool_name = getattr(tool, "name", "unknown")
+                    if tool_name == "GetLiveContext" or tool_name in seen_tool_names:
+                        continue
+
+                    if hasattr(tool, "parameters") and tool.parameters:
+                        try:
+                            parameters = convert(
+                                tool.parameters,
+                                custom_serializer=llm_api.custom_serializer,
+                            )
+                        except Exception as param_err:
+                            _logger.warning(
+                                "Could not convert parameters for tool %s: %s",
+                                tool_name,
+                                param_err,
+                            )
+                            parameters = {}
+                    else:
+                        parameters = {}
+
+                    tool_list.append(
+                        LlmTool(
+                            name=tool_name,
+                            description=getattr(tool, "description", ""),
+                            parameters=parameters,
+                            metadata=self._extract_tool_metadata(tool),
+                        )
+                    )
+                    seen_tool_names.add(tool_name)
 
         except HomeAssistantError as err:
             _logger.warning(f"Error getting LLM API for tool extraction: {err}")
