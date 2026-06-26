@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Checkout the repo
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
 
       - name: Update manifest version
         run: |
@@ -30,4 +32,6 @@ jobs:
         uses: softprops/action-gh-release@v2.5.0
         if: ${{ github.event_name == 'release' }}
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ github.event.release.tag_name }}
           files: "${{ github.workspace }}/custom_components/ha_ragent/ha_ragent.zip"
