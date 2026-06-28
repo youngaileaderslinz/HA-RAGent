@@ -7,18 +7,10 @@ This is particularly useful on self‑hosted installs, where you deliberately ke
 
 ## Installation
 ### HACS (recommended)
-This integration is available in HACS (Home Assistant Community Store).
 
-1. Install HACS if you don't have it already
-2. Open HACS in Home Assistant
-3. Go to any of the sections (integrations, frontend, automation)
-4. Click on the 3 dots in the top right corner
-5. Select "Custom repositories"
-6. Add following URL to the repository `https://github.com/Young-ai-leaders/HA-RAGent`
-7. Select Integration as category.
-8. Click the "ADD" button
-9. Search for "Home Assistant RAG Agent"
-10. Click the "Download" button
+If HACS is installed on your system use this link to directly go to the install page:
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=youngaileaderslinz&repository=HA-RAGent)
 
 ### Manual
 
