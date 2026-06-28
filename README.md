@@ -34,7 +34,7 @@ Use the `Add Integration` button in the bottom right to add a new integration ca
 - `Embedding backend`
     - **Ollama** requires the setup of external ollama instance and download of an embedding model ([find embedding model](https://ollama.com/search?c=embedding))
 - `LLM backend`
-    - **Ollama** requires the setup of external ollama instance and download of an embedding model ([find LLM model](https://ollama.com/search?c=tools))
+    - **Ollama** requires the setup of external ollama instance and download of an llm model with tool support ([find LLM model](https://ollama.com/search?c=tools))
 - `Language`
     - **English** used in order to setup the default prompt
     - **German** used in order to setup the default prompt
