@@ -96,7 +96,7 @@ Use the `Add Integration` button in the bottom right to add a new integration ca
 
 ## Help and Contribution
 **Found a bug?** <br>
-Open an issue and I’ll take a look.
+Open an issue and I’ll take a look. ([open issue](https://github.com/youngaileaderslinz/HA-RAGent/issues))
 
 **Want to add a feature or otherwise improve the code?** <br>
 Send a pull request (or drop a quick issue first so we can chat about it).
