@@ -259,9 +259,11 @@ def ui_schema_config_options(
         )),
         vol.Optional(
             CONF_PROMPT,
-            description={"suggested_value": options.get(CONF_PROMPT, default_prompt)},
             default=options.get(CONF_PROMPT, default_prompt),
-        ): TextSelector(TextSelectorConfig(multiline=True)),
+        ): TextSelector(TextSelectorConfig(
+            multiline=True,
+            type=TextSelectorType.TEXT,
+        )),
         vol.Optional(
             CONF_TEMPERATURE,
             description={"suggested_value": options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE)},

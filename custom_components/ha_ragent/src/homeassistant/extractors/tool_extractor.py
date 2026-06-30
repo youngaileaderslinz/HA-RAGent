@@ -19,9 +19,9 @@ from homeassistant.helpers.llm import LLMContext
 
 from custom_components.ha_ragent.src.models.tool_embedding import LlmToolEmbedding
 
-from .ragent_config_entry import RAGentConfigEntry
-from ..models.tool import LlmTool
-from ..const import DOMAIN, RAGENT_LLM_API_ID, RAGENT_TIMER_DEVICE_ID
+from ..ragent_config_entry import RAGentConfigEntry
+from ...models.tool import LlmTool
+from ...const import DOMAIN, RAGENT_TIMER_DEVICE_ID
 
 _logger = logging.getLogger(__name__)
 
@@ -141,57 +141,52 @@ class ToolExtractor:
                 device_id=RAGENT_TIMER_DEVICE_ID,
             )
 
-            api_ids = [selected_api]
-            if selected_api != RAGENT_LLM_API_ID:
-                api_ids.append(RAGENT_LLM_API_ID)
+            llm_api = await llm.async_get_api(
+                self._hass,
+                selected_api,
+                llm_context=llm_context,
+            )
 
-            for api_id in api_ids:
-                llm_api = await llm.async_get_api(
-                    self._hass,
-                    api_id,
-                    llm_context=llm_context,
+            if not llm_api or not hasattr(llm_api, "tools"):
+                _logger.debug(
+                    f"LLM API {selected_api} did not expose any tools attribute for subentry {subentry.title}",
                 )
+                return tool_list
 
-                if not llm_api or not hasattr(llm_api, "tools"):
-                    _logger.debug(
-                        f"LLM API {api_id} did not expose any tools attribute for subentry {subentry.title}",
-                    )
+            _logger.debug(
+                f"LLM API {selected_api} exposed {len(llm_api.tools)} raw tools for subentry {subentry.title}",
+            )
+
+            for tool in llm_api.tools:
+                tool_name = getattr(tool, "name", "unknown")
+                if tool_name == "GetLiveContext" or tool_name in seen_tool_names:
                     continue
 
-                _logger.debug(
-                    f"LLM API {api_id} exposed {len(llm_api.tools)} raw tools for subentry {subentry.title}",
-                )
-
-                for tool in llm_api.tools:
-                    tool_name = getattr(tool, "name", "unknown")
-                    if tool_name == "GetLiveContext" or tool_name in seen_tool_names:
-                        continue
-
-                    if hasattr(tool, "parameters") and tool.parameters:
-                        try:
-                            parameters = convert(
-                                tool.parameters,
-                                custom_serializer=llm_api.custom_serializer,
-                            )
-                        except Exception as param_err:
-                            _logger.warning(
-                                "Could not convert parameters for tool %s: %s",
-                                tool_name,
-                                param_err,
-                            )
-                            parameters = {}
-                    else:
-                        parameters = {}
-
-                    tool_list.append(
-                        LlmTool(
-                            name=tool_name,
-                            description=getattr(tool, "description", ""),
-                            parameters=parameters,
-                            metadata=self._extract_tool_metadata(tool),
+                if hasattr(tool, "parameters") and tool.parameters:
+                    try:
+                        parameters = convert(
+                            tool.parameters,
+                            custom_serializer=llm_api.custom_serializer,
                         )
+                    except Exception as param_err:
+                        _logger.warning(
+                            "Could not convert parameters for tool %s: %s",
+                            tool_name,
+                            param_err,
+                        )
+                        parameters = {}
+                else:
+                    parameters = {}
+
+                tool_list.append(
+                    LlmTool(
+                        name=tool_name,
+                        description=getattr(tool, "description", ""),
+                        parameters=parameters,
+                        metadata=self._extract_tool_metadata(tool),
                     )
-                    seen_tool_names.add(tool_name)
+                )
+                seen_tool_names.add(tool_name)
 
         except HomeAssistantError as err:
             _logger.warning(f"Error getting LLM API for tool extraction: {err}")
@@ -203,7 +198,7 @@ class ToolExtractor:
         return tool_list
 
     async def async_embed_all_exposed_tools(self) -> None:
-        _logger.info("===== TOOL EMBEDDING FUNCTION CALLED =====")
+        total_embedded_tools = 0
         try:
             _logger.debug("Device embedding function starting, checking for subentries")
             if not hasattr(self._entry, "subentries") or not self._entry.subentries:
@@ -230,7 +225,7 @@ class ToolExtractor:
                     if tool_embeddings:
                         _logger.debug(f"Saving {len(tool_embeddings)} tool embeddings to collection {collection_name}.")
                         await self._entry.vector_db_backend.async_save_object_embeddings(dict(subentry.data), collection_name, tool_embeddings)
-                        _logger.debug(f"Finished embedding all exposed tools for subentry {subentry_id} ({len(tool_embeddings)} tools)")
+                        total_embedded_tools += len(tool_embeddings)
                     else:
                         _logger.warning(f"No tools to embed for subentry {subentry_id}")
                 except Exception as err:
@@ -239,4 +234,7 @@ class ToolExtractor:
         except Exception as err:
             _logger.error(f"Error in tool embedding job: {err}", exc_info=True)
         finally:
-            _logger.info("===== TOOL EMBEDDING FUNCTION FINISHED =====")
+            if _logger.isEnabledFor(logging.DEBUG):
+                _logger.debug("Tool embedding function finished with %s embedded tools.", total_embedded_tools)
+            else:
+                _logger.info("Finished embedding %s tools.", total_embedded_tools)

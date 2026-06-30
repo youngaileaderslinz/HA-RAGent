@@ -11,9 +11,9 @@ from custom_components.ha_ragent.src.homeassistant.ragent_config_entry import RA
 from custom_components.ha_ragent.src.backends.database.base_backend import ABaseDbBackend
 from custom_components.ha_ragent.src.backends.embedder.base_backend import ABaseEmbedder
 from custom_components.ha_ragent.src.backends.llm.base_backend import ALlmBaseBackend
-from custom_components.ha_ragent.src.homeassistant.device_extractor import DeviceExtractor
+from custom_components.ha_ragent.src.homeassistant.extractors.device_extractor import DeviceExtractor
 from custom_components.ha_ragent.src.homeassistant.search_tool_api import RAGentLLMAPI
-from custom_components.ha_ragent.src.homeassistant.tool_extractor import ToolExtractor
+from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
 
 from custom_components.ha_ragent.src.const import (
     DOMAIN,
@@ -160,14 +160,19 @@ async def _register_services(hass: HomeAssistant):
 async def _async_run_startup_embeddings(hass: HomeAssistant, entry: RAGentConfigEntry) -> None:
     """Run embedding of exposed tools and devices at startup and prevent concurrent runs."""
     domain_data = hass.data.setdefault(DOMAIN, {})
-    if domain_data.get(STARTUP_EMBEDDING_RUNNING_FLAG):
+    running_entries = domain_data.get(STARTUP_EMBEDDING_RUNNING_FLAG)
+    if not isinstance(running_entries, set):
+        running_entries = set()
+        domain_data[STARTUP_EMBEDDING_RUNNING_FLAG] = running_entries
+
+    if entry.entry_id in running_entries:
         _logger.info(
             "Skipping startup embeddings for %s because a run is already in progress",
             entry.entry_id,
         )
         return
 
-    domain_data[STARTUP_EMBEDDING_RUNNING_FLAG] = True
+    running_entries.add(entry.entry_id)
     try:
         tool_extractor = ToolExtractor(hass, entry)
         device_extractor = DeviceExtractor(hass, entry)
@@ -176,7 +181,7 @@ async def _async_run_startup_embeddings(hass: HomeAssistant, entry: RAGentConfig
             device_extractor.async_embed_all_exposed_devices(),
         )
     finally:
-        domain_data[STARTUP_EMBEDDING_RUNNING_FLAG] = False
+        running_entries.discard(entry.entry_id)
     
 
 async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry):
@@ -205,7 +210,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry):
     else:
         hass.bus.async_listen_once(
             EVENT_HOMEASSISTANT_STARTED,
-            lambda _event: hass.async_create_task(_async_run_startup_embeddings(hass, entry))
+            lambda _event: hass.add_job(_async_run_startup_embeddings(hass, entry))
         )
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))

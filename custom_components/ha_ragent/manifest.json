@@ -2,13 +2,13 @@
   "domain": "ha_ragent",
   "name": "Home Assistant RAG Agent",
   "after_dependencies": ["assist_pipeline"],
-  "codeowners": ["@Young-ai-leaders"],
+  "codeowners": ["@youngaileaderslinz"],
   "config_flow": true,
   "dependencies": ["intent", "conversation"],
-  "documentation": "https://github.com/Young-ai-leaders/HA-RAGent",
+  "documentation": "https://github.com/youngaileaderslinz/HA-RAGent",
   "integration_type": "service",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/Young-ai-leaders/HA-RAGent/issues",
+  "issue_tracker": "https://github.com/youngaileaderslinz/HA-RAGent/issues",
   "requirements": [
       "langchain-core==0.3.9",
       "pymongo==4.16.0",
@@ -17,5 +17,5 @@
       "faiss-cpu>=1.13.2",
       "pickledb>=1.6"
   ],
-  "version": "0.0.0"
+  "version": "0.0.3-beta1"
 }
