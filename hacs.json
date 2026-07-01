@@ -1,6 +1,6 @@
 {
     "name": "Home Assistant RAG Agent",    
-    "homeassistant": "2026.4.0",
+    "homeassistant": "2026.6.4",
     "hide_default_branch": true,
     "render_readme": true,
     "zip_release": true,

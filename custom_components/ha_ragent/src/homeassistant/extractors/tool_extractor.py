@@ -4,6 +4,7 @@ import logging
 from typing import Any, Iterable, List, Tuple
 
 from homeassistant.const import CONF_LLM_HASS_API
+from homeassistant.components.conversation.const import DOMAIN as CONVERSATION_DOMAIN
 from homeassistant.components.intent import async_register_timer_handler
 from homeassistant.components.intent.timers import TIMER_DATA, TimerEventType, TimerInfo
 
@@ -18,9 +19,9 @@ from homeassistant.helpers.llm import LLMContext
 
 from custom_components.ha_ragent.src.models.tool_embedding import LlmToolEmbedding
 
-from .ragent_config_entry import RAGentConfigEntry
-from ..models.tool import LlmTool
-from ..const import DOMAIN, RAGENT_TIMER_DEVICE_ID
+from ..ragent_config_entry import RAGentConfigEntry
+from ...models.tool import LlmTool
+from ...const import DOMAIN, RAGENT_TIMER_DEVICE_ID
 
 _logger = logging.getLogger(__name__)
 
@@ -123,45 +124,69 @@ class ToolExtractor:
             _logger.warning("Failed to unregister timer device: %s", err)
 
     async def _async_get_embeddable_tools(self, subentry: ConfigSubentry) -> List[LlmTool]:
-        tool_list = []
+        tool_list: list[LlmTool] = []
+        seen_tool_names: set[str] = set()
+        selected_api = subentry.data.get(CONF_LLM_HASS_API, "default")
 
-        if subentry.data.get(CONF_LLM_HASS_API) == "none":
+        if selected_api == "none":
             return tool_list
 
         try:
             self._register_fake_timer_device()
+            llm_context = LLMContext(
+                platform=DOMAIN,
+                context=None,
+                language=None,
+                assistant=CONVERSATION_DOMAIN,
+                device_id=RAGENT_TIMER_DEVICE_ID,
+            )
 
             llm_api = await llm.async_get_api(
                 self._hass,
-                subentry.data.get(CONF_LLM_HASS_API, "default"),
-                llm_context=LLMContext(platform=DOMAIN, context=None, language=None, assistant=None, device_id=RAGENT_TIMER_DEVICE_ID),
+                selected_api,
+                llm_context=llm_context,
             )
 
             if not llm_api or not hasattr(llm_api, "tools"):
+                _logger.debug(
+                    f"LLM API {selected_api} did not expose any tools attribute for subentry {subentry.title}",
+                )
                 return tool_list
 
+            _logger.debug(
+                f"LLM API {selected_api} exposed {len(llm_api.tools)} raw tools for subentry {subentry.title}",
+            )
+
             for tool in llm_api.tools:
-                if tool.name == "GetLiveContext":
+                tool_name = getattr(tool, "name", "unknown")
+                if tool_name == "GetLiveContext" or tool_name in seen_tool_names:
                     continue
 
-                if hasattr(tool, 'parameters') and tool.parameters:
+                if hasattr(tool, "parameters") and tool.parameters:
                     try:
-                        parameters = convert(tool.parameters, custom_serializer=llm_api.custom_serializer)
+                        parameters = convert(
+                            tool.parameters,
+                            custom_serializer=llm_api.custom_serializer,
+                        )
                     except Exception as param_err:
-                        _logger.warning("Could not convert parameters for tool %s: %s", tool.name, param_err)
-                        parameters= {}
+                        _logger.warning(
+                            "Could not convert parameters for tool %s: %s",
+                            tool_name,
+                            param_err,
+                        )
+                        parameters = {}
                 else:
                     parameters = {}
 
-                tool_metadata = self._extract_tool_metadata(tool)
-
-                llm_tool = LlmTool(
-                    name=getattr(tool, "name", "unknown"),
-                    description=getattr(tool, "description", ""),
-                    parameters=parameters,
-                    metadata=tool_metadata
+                tool_list.append(
+                    LlmTool(
+                        name=tool_name,
+                        description=getattr(tool, "description", ""),
+                        parameters=parameters,
+                        metadata=self._extract_tool_metadata(tool),
+                    )
                 )
-                tool_list.append(llm_tool)
+                seen_tool_names.add(tool_name)
 
         except HomeAssistantError as err:
             _logger.warning(f"Error getting LLM API for tool extraction: {err}")
@@ -173,7 +198,7 @@ class ToolExtractor:
         return tool_list
 
     async def async_embed_all_exposed_tools(self) -> None:
-        _logger.info("===== TOOL EMBEDDING FUNCTION CALLED =====")
+        total_embedded_tools = 0
         try:
             _logger.debug("Device embedding function starting, checking for subentries")
             if not hasattr(self._entry, "subentries") or not self._entry.subentries:
@@ -200,7 +225,7 @@ class ToolExtractor:
                     if tool_embeddings:
                         _logger.debug(f"Saving {len(tool_embeddings)} tool embeddings to collection {collection_name}.")
                         await self._entry.vector_db_backend.async_save_object_embeddings(dict(subentry.data), collection_name, tool_embeddings)
-                        _logger.debug(f"Finished embedding all exposed tools for subentry {subentry_id} ({len(tool_embeddings)} tools)")
+                        total_embedded_tools += len(tool_embeddings)
                     else:
                         _logger.warning(f"No tools to embed for subentry {subentry_id}")
                 except Exception as err:
@@ -209,4 +234,7 @@ class ToolExtractor:
         except Exception as err:
             _logger.error(f"Error in tool embedding job: {err}", exc_info=True)
         finally:
-            _logger.info("===== TOOL EMBEDDING FUNCTION FINISHED =====")
+            if _logger.isEnabledFor(logging.DEBUG):
+                _logger.debug("Tool embedding function finished with %s embedded tools.", total_embedded_tools)
+            else:
+                _logger.info("Finished embedding %s tools.", total_embedded_tools)

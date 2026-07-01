@@ -38,6 +38,7 @@ from ..const import (
     CONF_LLM_BACKEND_TYPE,
     CONF_LLM_MODEL,
     CONF_CONTEXT_LENGTH,
+    RAGENT_LLM_API_ID,
     CONF_MAX_TOKENS,
     CONF_MAX_TOOL_CALL_ITERATIONS,
     CONF_PROMPT,
@@ -241,6 +242,8 @@ def ui_schema_config_options(
     llm_api_options = [SelectOptionDict(value="none", label="No Control")]
     try:
         for api in llm.async_get_apis(hass):
+            if api.id == RAGENT_LLM_API_ID:
+                continue
             api_label = getattr(api, "name", None) or api.id
             llm_api_options.append(SelectOptionDict(value=api.id, label=str(api_label)))
     except Exception as err:
@@ -259,9 +262,11 @@ def ui_schema_config_options(
         )),
         vol.Optional(
             CONF_PROMPT,
-            description={"suggested_value": options.get(CONF_PROMPT, default_prompt)},
             default=options.get(CONF_PROMPT, default_prompt),
-        ): TextSelector(TextSelectorConfig(multiline=True)),
+        ): TextSelector(TextSelectorConfig(
+            multiline=True,
+            type=TextSelectorType.TEXT,
+        )),
         vol.Optional(
             CONF_TEMPERATURE,
             description={"suggested_value": options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE)},

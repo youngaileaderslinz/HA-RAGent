@@ -5,7 +5,10 @@ import re
 #-----------------------------------------------
 DOMAIN = "ha_ragent"
 RAGENT_LLM_API_ID = "ha_ragent_api"
-INTEGRATION_VERSION = "0.1.0"
+RAGENT_LLM_API_NAME = "HA RAGent"
+RAGENT_SEARCH_DEVICES_TOOL_NAME = "HassSearchDevices"
+RAGENT_SEARCH_TOOLS_TOOL_NAME = "HassSearchTools"
+INTEGRATION_VERSION = "0.3.0"
 
 STARTUP_EMBEDDING_RUNNING_FLAG = "ha_ragent_startup_embedding_running"
 
@@ -135,52 +138,63 @@ AREAS_PROMPT = {
 - If the user does not name a room, you MUST ask for clarification.
 {% endif %}"""
 }
-DEVICE_CONTROL_PROMPT = {
-    "de": """## Geräte Steuerungsanweisungen:
-Wenn du ein Gerät steuerst folge diesen Anweisungen:
-1. Geräteauflösung
-   - Suchkriterien: Identifiziere Zielgeräte anhand des genauen Namens oder spezifischer Domäne oder device_class innerhalb des angegebenen Bereichs.
-   - Intelligente Bereichserweiterung: Wenn ein Benutzer einen Bereich anspricht (z. B. „Wohnzimmer“), finde ALLE Geräte in diesem Bereich, die zur angeforderten Domäne oder device_class passen (z. B. „Lichter“).
-   - Benutzerintention: Schließe keine Geräte ein, die für die Anfrage des Benutzers nicht relevant sind. Steuere keine Geräte in Bereichen, die vom Benutzer nicht erwähnt wurden.
-2. Struktur der Tool-Aufrufe
-   - Umfassende Aktion: Wenn ein Benutzer „alle Lichter“ sagt, MUSST du einen separaten Tool-Aufruf für jedes passende Licht generieren, das sich im angegebenen Bereich befindet.
-   - Atomizität: Kapsle jeden einzelnen JSON-Aufruf in seinem eigenen `homeassistant`-Tag-Block ein.
-   - Identifikation: Kürze den Namen `light.bedroom_1_lamp` niemals zu `bedroom_1_lamp`. Das Tool wird ohne die Domäne fehlschlagen.
-3. Strenges Ausgabeformat
-   3.1 Beantwortung mit Tool-Aufrufen:
-       - Format: Gib gültige JSON-Objekte innerhalb von `homeassistant`-Tags zurück.
-       - Nachverfolgung: Sobald alle Tool-Aufrufe aufgelistet sind, gib eine kurze Bestätigung mit den friendly_names.
-    3.2 Beantwortung mit Text:
-       - Verwende dies nur, wenn keine passenden Geräte existieren.
-       - Verwende immer den friendly_name und lasse den Raumnamen weg, wenn er redundant ist (z. B. „Nachttischlampe“ statt „Schlafzimmer Nachttischlampe“).""",
-    "en": """## Device Control Instructions:
-When controlling a device, you MUST follow these rules:
-1. Device Resolution
-    - Search Criteria: Identify target devices using the exact entity_id, name, domain, or device_class within the specified area provided in the state.
-    - Smart Area Expansion: If an area is targeted (e.g., "Living Room"), include ALL devices in that area matching the requested domain (e.g., "lights").
-    - Relevance: EXCLUDE devices irrelevant to the request. NEVER control devices in areas not explicitly mentioned.
-    - Contextual Priority: Prioritize devices mentioned earlier in the conversation. If the target is still unclear, ask for clarification instead of guessing.
-2. Tool Call Execution
-    - Exhaustive Action: For requests involving multiple devices (e.g., "turn on all lights"), you MUST generate a separate tool call for every matching entity.
-    - Atomicity: each individual JSON call must be encapsulated within its own unique `homeassistant` tag block.
-    - Multiple Tool Calls: You are permitted—and encouraged—to return multiple `homeassistant` blocks in a single response. Do **not** combine them into a single JSON list or array; keep them as distinct, sequential blocks.
-    - Precise Addressing: Always use the full entity_id (e.g., `light.bedroom_lamp`). Do not truncate or invent IDs.
-3. Strict Output Format
-    3.1 Execution Order:
-        - Tool First: Output all `homeassistant` blocks at the very beginning of your response.
-        - Speech Second: Provide the conversational text response only after all tool blocks have been declared.
-    3.2 Error Handling:
-        - If no devices match the criteria, provide a concise text response explaining that the device or area could not be found.
-    3.3 TTS-Optimized Speech:
-        - Style: Keep responses brief, warm, and conversational.
-        - No IDs: NEVER use entity IDs, device IDs, or technical labels (e.g., "light.kitchen_1") in the text response.
-        - Natural Identification: Use simple, friendly names (e.g., "the kitchen lights" or "the floor lamp").
-        - Fluent Aggregation: When controlling multiple devices, summarize the action naturally (e.g., "Sure, I've turned off all the lights in the lounge for you") rather than listing each entity."""
-}
 
 USER_INSTRUCTION = {
     "de": "## Benutzeranweisung:",
     "en": "## User instruction:"
+}
+
+
+DEVICE_CONTROL_PROMPT = {
+    "de": """## Geräte Steuerungsanweisungen:
+1. Auflösung
+- Nutze zuerst die neueste Benutzernachricht. Älterer Verlauf ist nur Hilfskontext.
+- Wenn die neueste Nachricht eine Folgeanweisung wie "auch", "dann", "zusätzlich" oder eine weitere direkte Aktion enthält, behandle sie als neue auszufuehrende Steuerungsanweisung.
+- Löse Ziele ueber Name, entity_id, Domain, device_class und Bereich auf.
+- Wenn Bereich und Kategorie genannt sind, nimm alle passenden Geräte in diesem Bereich.
+- Wenn der Benutzer nur einen Bereich nennt oder die Formulierung ungenau ist, nutze `HassSearchDevices`, um das wahrscheinlichste Ziel in diesem Bereich zu finden.
+- Wenn `HassSearchDevices` für einen genannten Bereich nur ein plausibles Gerät zur Aktion liefert, behandle dieses Gerät als aufgelöst und führe die Aktion aus statt nachzufragen.
+- Interpretiere offensichtliche Speech-to-Text- oder Tippfehler bei direkten Steuerbefehlen sinnvoll. Beispiel: "turn one the fountain" meint sehr wahrscheinlich "turn on the fountain", wenn ein passender Brunnen-Schalter gefunden wird.
+- Wenn ein natürlicher Name wie "the fountain" semantisch genau zu einem Schalter, Licht oder anderem steuerbaren Gerät passt, wähle dieses konkrete Gerät auch ohne exakten Entitätsnamen.
+- Steuere nie irrelevante Geräte oder Geräte aus nicht genannten Bereichen.
+- Nutze `HassSearchDevices` nur als Fallback zur Auflösung, nicht um erst Optionen vorzuschlagen oder um Erlaubnis für eine bereits klare Steuerungsanweisung zu erfragen. Verwende Treffer danach wie normale Geräte und bevorzuge ihre exakte `entity_id`.
+2. Tool-Aufrufe
+- Bei mehreren Treffern gib pro Gerät einen eigenen `homeassistant`-Block aus.
+- Gib erst alle Tool-Blöcke aus, danach kurzen natürlichen Text.
+3. Antworten
+- Behaupte nie Erfolg ohne Tool-Aufruf und bestätige Erfolg nur aus echten Tool-Ergebnissen.
+- Bei Folgeanweisungen beziehe dich im Text nur auf die neueste Aktion und wiederhole keine früheren Bereiche oder Geräte, ausser der Benutzer verlangt eine Gesamtsummary.
+- Wenn nichts passt oder das Ziel unklar ist, antworte kurz oder frage nach Klarstellung.
+- Nutze im Text nur freundliche Namen, keine technischen IDs.""",
+    "en": """## Device Control Instructions:
+1. Resolution
+- Use the latest user message first. Older conversation is supporting context only.
+- If the latest message is a follow-up command like "also", "then", or another direct action, treat it as a new command to execute.
+- Resolve targets by name, entity_id, domain, device_class, and area.
+- If the user names an area and a category, include all matching devices in that area.
+- Map the requested action strictly to the state the user asked for. "turn on" means on, "turn off" means off, and "toggle" means toggle.
+- Do not use a generic light-setting tool when a dedicated on or off tool is available and matches the user's intent more precisely.
+- If the user only names an area or the wording is fuzzy, use `HassSearchDevices` to find the most likely target in that area.
+- If `HassSearchDevices` returns only one plausible device for the named area and requested action, treat that device as resolved and execute the action instead of asking a follow-up question.
+- Interpret obvious speech-to-text or typo mistakes in direct control commands sensibly. Example: "turn one the fountain" most likely means "turn on the fountain" if a matching fountain switch is found.
+- If a natural phrase like "the fountain" semantically matches a switch, light, or other controllable entity, pick that concrete device even when the exact entity name was not said.
+- If you only see one matching device but the request sounds like a category or room-wide action, you may use `HassSearchDevices` once to check whether more matching devices exist.
+- Never control irrelevant devices or devices from areas the user did not mention.
+- Use `HassSearchDevices` only as a fallback for resolution, not to preview options or ask permission for an already clear control request. Treat returned devices like normal available devices and prefer their exact `entity_id`.
+2. Tool Calls
+- If multiple devices match, emit one `homeassistant` block per device.
+- Output all tool blocks first, then the short natural-language response.
+- For a clear control request, never output explanatory text like "please use this command". Execute the action directly with tool calls.
+3. Responses
+- Never claim an action happened without a tool call, and confirm success only from real tool results.
+- For follow-up commands, talk only about the newest action and do not repeat earlier rooms or devices unless the user asks for a full summary.
+- If nothing matches or the target is unclear, reply briefly or ask for clarification.
+- Use friendly names in text, never technical IDs."""
+}
+
+CONVERSATION_PRIORITY_PROMPT = {
+    "de": """Die neueste Benutzernachricht hat Priorität. Direkte Folgeanweisungen sind auszuführende Befehle, keine Bitte um Bestätigung. Antworte bei Folgeanweisungen nur über die neueste Aktion. Nutze `HassSearchDevices` als Auflösungshilfe bei ungenauen Namen, Bereichsreferenzen oder offensichtlichen Speech-to-Text-Fehlern, aber nicht zum Vorschlagen von Optionen. Wenn genau ein plausibles Ziel übrig bleibt, handle selbstständig. Simuliere keine erfolgreiche Gerätesteuerung: gib Tool-Aufrufe aus, frage nur bei echter Unklarheit nach oder antworte auf Basis echter Tool-Ergebnisse.""",
+    "en": """The latest user message has priority. Direct follow-up commands should be executed, not turned into confirmation questions. For follow-up commands, respond only about the newest action. Use `HassSearchDevices` as a resolution aid for fuzzy names, area-based references, or obvious speech-to-text mistakes, but not to preview options. If exactly one plausible target remains, act on it confidently. For clear on or off commands, choose the semantically correct action rather than a similar tool with different default behavior. Do not simulate successful device control: emit tool calls, ask only when genuinely unclear, or respond from real tool results.""",
 }
 
 DEVICE_ATTRIBUTES_TO_EXCLUDE = ["friendly_name", "persistent", "supported_features"]
@@ -188,8 +202,8 @@ DEVICE_ATTRIBUTES_MAX_JSON_LENGTH = 100
 
 TOOL_REGEX_PATTERN = re.compile(r"```homeassistant\s*(.*?)\s*```", re.DOTALL)
 
-DEFAULT_NUM_DEVICES_TO_EXTRACT = 10
-DEFAULT_NUM_TOOLS_TO_EXTRACT = 10
+DEFAULT_NUM_DEVICES_TO_EXTRACT = 4
+DEFAULT_NUM_TOOLS_TO_EXTRACT = 4
 DEFAULT_CONTEXT_LENGTH = 4096
 
 DEFAULT_MAX_TOKENS = 1000
@@ -200,6 +214,8 @@ DEFAULT_PROMPT = """<persona>
 <area_prompt>
 
 <device_control_prompt>
+
+<conversation_priority_prompt>
 
 <devices>
 {% for device in device_list %}

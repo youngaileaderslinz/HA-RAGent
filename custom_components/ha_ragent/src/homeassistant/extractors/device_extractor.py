@@ -2,14 +2,14 @@ import logging
 
 from custom_components.ha_ragent.src.models.device_embedding import DeviceEmbedding
 
-from ..models.device import Device
+from ...models.device import Device
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry, device_registry, entity_registry, label_registry, llm
 from homeassistant.components.homeassistant.exposed_entities import async_should_expose
 
-from .ragent_config_entry import RAGentConfigEntry
-from ..const import (
+from ..ragent_config_entry import RAGentConfigEntry
+from ...const import (
     DOMAIN
 )
 
@@ -83,7 +83,7 @@ class DeviceExtractor:
         return devices
     
     async def async_embed_all_exposed_devices(self) -> None:
-        _logger.info("===== DEVICE EMBEDDING FUNCTION CALLED =====")
+        total_embedded_devices = 0
         try:
             _logger.debug("Device embedding function starting, checking for subentries")
             if not hasattr(self._entry, "subentries") or not self._entry.subentries:
@@ -112,7 +112,7 @@ class DeviceExtractor:
                     if device_embeddings:
                         _logger.debug(f"Saving {len(device_embeddings)} device embeddings to collection {collection_name}.")
                         await self._entry.vector_db_backend.async_save_object_embeddings(dict(subentry.data), collection_name, device_embeddings)
-                        _logger.debug(f"Finished embedding all exposed devices for subentry {subentry_id} ({len(device_embeddings)} devices)")
+                        total_embedded_devices += len(device_embeddings)
                     else:
                         _logger.warning("No devices to embed for subentry %s", subentry_id)
                 except Exception as err:
@@ -121,5 +121,8 @@ class DeviceExtractor:
         except Exception as err:
             _logger.error(f"Error in tool embedding job: {err}", exc_info=True)
         finally:
-            _logger.info("===== DEVICE EMBEDDING FUNCTION FINISHED =====")
+            if _logger.isEnabledFor(logging.DEBUG):
+                _logger.debug("Device embedding function finished with %s embedded devices.", total_embedded_devices)
+            else:
+                _logger.info("Finished embedding %s devices.", total_embedded_devices)
 
