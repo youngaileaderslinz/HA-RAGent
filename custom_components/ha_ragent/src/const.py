@@ -152,6 +152,10 @@ DEVICE_CONTROL_PROMPT = {
 - Wenn die neueste Nachricht eine Folgeanweisung wie "auch", "dann", "zusätzlich" oder eine weitere direkte Aktion enthält, behandle sie als neue auszufuehrende Steuerungsanweisung.
 - Löse Ziele ueber Name, entity_id, Domain, device_class und Bereich auf.
 - Wenn Bereich und Kategorie genannt sind, nimm alle passenden Geräte in diesem Bereich.
+- Wenn der Benutzer nur einen Bereich nennt oder die Formulierung ungenau ist, nutze `HassSearchDevices`, um das wahrscheinlichste Ziel in diesem Bereich zu finden.
+- Wenn `HassSearchDevices` für einen genannten Bereich nur ein plausibles Gerät zur Aktion liefert, behandle dieses Gerät als aufgelöst und führe die Aktion aus statt nachzufragen.
+- Interpretiere offensichtliche Speech-to-Text- oder Tippfehler bei direkten Steuerbefehlen sinnvoll. Beispiel: "turn one the fountain" meint sehr wahrscheinlich "turn on the fountain", wenn ein passender Brunnen-Schalter gefunden wird.
+- Wenn ein natürlicher Name wie "the fountain" semantisch genau zu einem Schalter, Licht oder anderem steuerbaren Gerät passt, wähle dieses konkrete Gerät auch ohne exakten Entitätsnamen.
 - Steuere nie irrelevante Geräte oder Geräte aus nicht genannten Bereichen.
 - Nutze `HassSearchDevices` nur als Fallback zur Auflösung, nicht um erst Optionen vorzuschlagen oder um Erlaubnis für eine bereits klare Steuerungsanweisung zu erfragen. Verwende Treffer danach wie normale Geräte und bevorzuge ihre exakte `entity_id`.
 2. Tool-Aufrufe
@@ -168,12 +172,19 @@ DEVICE_CONTROL_PROMPT = {
 - If the latest message is a follow-up command like "also", "then", or another direct action, treat it as a new command to execute.
 - Resolve targets by name, entity_id, domain, device_class, and area.
 - If the user names an area and a category, include all matching devices in that area.
+- Map the requested action strictly to the state the user asked for. "turn on" means on, "turn off" means off, and "toggle" means toggle.
+- Do not use a generic light-setting tool when a dedicated on or off tool is available and matches the user's intent more precisely.
+- If the user only names an area or the wording is fuzzy, use `HassSearchDevices` to find the most likely target in that area.
+- If `HassSearchDevices` returns only one plausible device for the named area and requested action, treat that device as resolved and execute the action instead of asking a follow-up question.
+- Interpret obvious speech-to-text or typo mistakes in direct control commands sensibly. Example: "turn one the fountain" most likely means "turn on the fountain" if a matching fountain switch is found.
+- If a natural phrase like "the fountain" semantically matches a switch, light, or other controllable entity, pick that concrete device even when the exact entity name was not said.
 - If you only see one matching device but the request sounds like a category or room-wide action, you may use `HassSearchDevices` once to check whether more matching devices exist.
 - Never control irrelevant devices or devices from areas the user did not mention.
 - Use `HassSearchDevices` only as a fallback for resolution, not to preview options or ask permission for an already clear control request. Treat returned devices like normal available devices and prefer their exact `entity_id`.
 2. Tool Calls
 - If multiple devices match, emit one `homeassistant` block per device.
 - Output all tool blocks first, then the short natural-language response.
+- For a clear control request, never output explanatory text like "please use this command". Execute the action directly with tool calls.
 3. Responses
 - Never claim an action happened without a tool call, and confirm success only from real tool results.
 - For follow-up commands, talk only about the newest action and do not repeat earlier rooms or devices unless the user asks for a full summary.
@@ -182,8 +193,8 @@ DEVICE_CONTROL_PROMPT = {
 }
 
 CONVERSATION_PRIORITY_PROMPT = {
-    "de": """Die neueste Benutzernachricht hat Priorität. Direkte Folgeanweisungen sind auszuführende Befehle, keine Bitte um Bestätigung. Antworte bei Folgeanweisungen nur über die neueste Aktion. Nutze `HassSearchDevices` nur als Fallback zur Auflösung. Simuliere keine erfolgreiche Gerätesteuerung: gib Tool-Aufrufe aus, frage nur bei echter Unklarheit nach oder antworte auf Basis echter Tool-Ergebnisse.""",
-    "en": """The latest user message has priority. Direct follow-up commands should be executed, not turned into confirmation questions. For follow-up commands, respond only about the newest action. Use `HassSearchDevices` only as a fallback for resolution. Do not simulate successful device control: emit tool calls, ask only when genuinely unclear, or respond from real tool results.""",
+    "de": """Die neueste Benutzernachricht hat Priorität. Direkte Folgeanweisungen sind auszuführende Befehle, keine Bitte um Bestätigung. Antworte bei Folgeanweisungen nur über die neueste Aktion. Nutze `HassSearchDevices` als Auflösungshilfe bei ungenauen Namen, Bereichsreferenzen oder offensichtlichen Speech-to-Text-Fehlern, aber nicht zum Vorschlagen von Optionen. Wenn genau ein plausibles Ziel übrig bleibt, handle selbstständig. Simuliere keine erfolgreiche Gerätesteuerung: gib Tool-Aufrufe aus, frage nur bei echter Unklarheit nach oder antworte auf Basis echter Tool-Ergebnisse.""",
+    "en": """The latest user message has priority. Direct follow-up commands should be executed, not turned into confirmation questions. For follow-up commands, respond only about the newest action. Use `HassSearchDevices` as a resolution aid for fuzzy names, area-based references, or obvious speech-to-text mistakes, but not to preview options. If exactly one plausible target remains, act on it confidently. For clear on or off commands, choose the semantically correct action rather than a similar tool with different default behavior. Do not simulate successful device control: emit tool calls, ask only when genuinely unclear, or respond from real tool results.""",
 }
 
 DEVICE_ATTRIBUTES_TO_EXCLUDE = ["friendly_name", "persistent", "supported_features"]
