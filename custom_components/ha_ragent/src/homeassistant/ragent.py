@@ -200,22 +200,16 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         if RetrievalHelper.retrieval_method(options) == RETRIEVAL_METHOD_VECTOR:
             return [result.item for result in scored_tools[:n_tools]]
 
-        # Rank once at the largest exposure limit; shortlist expansion reuses
-        # this pool instead of repeating database requests and schema scoring.
-        expanded_limit = max(n_tools, RetrievalHelper.expanded_tool_limit(n_tools))
         ranked_tools = RetrievalHelper.rank_tool_candidates(
             scored_tools,
             all_tools,
             query,
             devices or [],
-            expanded_limit,
+            n_tools,
             continuity_score=continuity.tool_score,
         )
         tools = ranked_tools[:n_tools]
-        confidence = RetrievalHelper.tool_search_confidence(tools, query, devices or [])
-        if confidence in {"high", "medium"}:
-            return tools
-        return ranked_tools
+        return tools
 
     async def _async_retrieve_memories(self, query_embedding: List[float] | QueryEmbedding, n_memories: int) -> List[Memory]:
         """Retrieve relevant persistent memories for this agent."""
@@ -404,14 +398,23 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             )
             formatted_index = len(history_manager.message_history)
 
+            if _logger.isEnabledFor(logging.DEBUG):
+                message_chars = sum(
+                    len(json.dumps(message, ensure_ascii=False, default=str))
+                    for message in formatted_messages
+                )
+                tool_schema_chars = sum(
+                    len(json.dumps(tool.parameters, ensure_ascii=False, default=str))
+                    + len(tool.name) + len(tool.description or "")
+                    for tool in tool_list
+                )
+                _logger.debug(f"RAGent prompt size (iteration {idx + 1}): messages={message_chars} chars, tools={tool_schema_chars} chars, tool_count={len(tool_list)}")
+
             tool_calls_in_iteration = []
             try:
                 _logger.debug(f"Sending prompt to LLM (Iteration {idx + 1}/{max_tool_call_iterations}).")
                 if _logger.isEnabledFor(logging.DEBUG):
-                    _logger.debug(
-                        "Full messages sent to the LLM:\n%s",
-                        json.dumps(formatted_messages, ensure_ascii=False, indent=2, default=str),
-                    )
+                    _logger.debug(f"Full messages sent to the LLM:\n{json.dumps(formatted_messages, ensure_ascii=False, indent=2, default=str)}")
                 
                 content_chunks = []
                 async for chunk in self.entry.llm_backend.async_send_chat_request(
@@ -583,8 +586,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 f"{call.tool_name}: {json.dumps(result, ensure_ascii=False, default=str)}"
                 for call, result in tool_calls_overall
             )
-            # Generate from this turn's actual effects, never pre-action prose or
-            # an assistant message from an earlier request. Disable further calls.
             try:
                 summary_messages = [{
                     "role": "system",
@@ -701,10 +702,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                         self._async_retrieve_memories(query_embedding, memory_limit)
                     )
                     configured_device_limit = get_setting_value(CONF_NUM_DEVICES_TO_EXTRACT, self.runtime_options)
-                    effective_device_limit = RetrievalHelper.expanded_device_limit(
-                        configured_device_limit,
-                        continuity,
-                    )
+                    effective_device_limit = configured_device_limit
                     running_entries = self.hass.data.get(DOMAIN, {}).get(STARTUP_EMBEDDING_RUNNING_FLAG, set())
                     indexes_ready = self.entry_id not in running_entries
                     retrieved_devices = await self._async_retrieve_devices(
@@ -783,6 +781,22 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     system_prompt_content,
                     relevant_turn_keys=continuity.selected_turn_keys,
                 )
+                if _logger.isEnabledFor(logging.DEBUG):
+                    device_chars = len(json.dumps(
+                        [device.to_dict() for device in device_list],
+                        ensure_ascii=False,
+                        default=str,
+                    ))
+                    memory_chars = len(json.dumps(
+                        [memory.to_dict() for memory in retrieved_memories],
+                        ensure_ascii=False,
+                        default=str,
+                    ))
+                    history_chars = sum(
+                        len(str(getattr(message, "content", "") or ""))
+                        for message in history_manager.message_history[1:-1]
+                    )
+                    _logger.debug(f"RAGent prompt breakdown: system={len(system_prompt_content)} chars, devices={device_chars} chars, memories={memory_chars} chars, continuity_turns={len(continuity.selected_turn_keys)}, history={history_chars} chars")
 
                 result = await self._async_prompt_model(
                     llm_api,
