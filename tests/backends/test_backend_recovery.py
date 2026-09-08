@@ -10,7 +10,6 @@ from openai import AsyncOpenAI, APIConnectionError
 import pytest
 
 from custom_components.ha_ragent.src import const
-from custom_components.ha_ragent.src.backends import retry
 from custom_components.ha_ragent.src.backends.llm import ollama_backend as ollama_llm
 from custom_components.ha_ragent.src.backends.embedder import ollama_backend as ollama_embedder
 from custom_components.ha_ragent.src.backends.llm.openai_backend import OpenAiLlmBackend
@@ -76,7 +75,7 @@ class Session:
 @pytest.fixture
 def backoff(monkeypatch):
     sleep = AsyncMock()
-    monkeypatch.setattr(retry.asyncio, "sleep", sleep)
+    monkeypatch.setattr(ollama_llm.asyncio, "sleep", sleep)
     return sleep
 
 
@@ -131,14 +130,19 @@ def test_ollama_does_not_replay_partial_text_or_tool_calls(monkeypatch, backoff,
 
 
 def test_ollama_connection_retries_are_bounded(monkeypatch, backoff):
-    session = Session(*(aiohttp.ClientConnectionError() for _ in range(3)))
+    attempts = const.CONNECTION_RETRIES + 1
+    session = Session(*(aiohttp.ClientConnectionError() for _ in range(attempts)))
     backend = ollama_backend(monkeypatch, session)
 
     with pytest.raises(aiohttp.ClientConnectionError):
         asyncio.run(chat(backend))
 
-    assert len(session.requests) == 3
-    assert [call.args[0] for call in backoff.await_args_list] == [0.5, 1.0]
+    assert len(session.requests) == attempts
+    assert [call.args[0] for call in backoff.await_args_list] == [
+        const.RETRY_BACKOFF_BASE_SECONDS
+        * (const.RETRY_BACKOFF_MULTIPLIER**attempt)
+        for attempt in range(const.CONNECTION_RETRIES)
+    ]
 
 
 @pytest.mark.parametrize("status,retries", [(400, 0), (401, 0), (403, 0), (404, 0),
@@ -191,7 +195,7 @@ def test_embedding_retries_whole_batch_after_truncated_response(monkeypatch, bac
     assert asyncio.run(backend._async_embed_batch(CONFIG, ["first", "second"])) == [[1.0], [2.0]]
     assert session.requests[0] == session.requests[1]
     assert session.requests[0][2]["json"]["input"] == ["first", "second"]
-    assert session.requests[0][2]["timeout"].sock_read == 300
+    assert session.requests[0][2]["timeout"].sock_read == const.STREAM_READ_TIMEOUT
     assert failed.closed
 
 
@@ -224,7 +228,7 @@ def test_openai_sdk_recovers_connection_failure_with_original_payload(backoff, e
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as transport:
             async with AsyncOpenAI(api_key="test", http_client=transport,
-                                   max_retries=retry.CONNECTION_RETRIES) as client:
+                                   max_retries=const.CONNECTION_RETRIES) as client:
                 cls = OpenAiEmbedder if embedding else OpenAiLlmBackend
                 backend = cls(SimpleNamespace(), {})
                 backend._client = client
@@ -247,14 +251,14 @@ def test_openai_sdk_connection_retries_are_not_multiplied(backoff):
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as transport:
             async with AsyncOpenAI(api_key="test", http_client=transport,
-                                   max_retries=retry.CONNECTION_RETRIES) as client:
+                                   max_retries=const.CONNECTION_RETRIES) as client:
                 backend = OpenAiLlmBackend(SimpleNamespace(), {})
                 backend._client = client
                 with pytest.raises(APIConnectionError):
                     await chat(backend)
 
     asyncio.run(run())
-    assert len(attempts) == 3
+    assert len(attempts) == const.CONNECTION_RETRIES + 1
 
 
 def test_openai_does_not_replay_and_closes_failed_stream(backoff):
@@ -281,7 +285,7 @@ def test_openai_does_not_replay_and_closes_failed_stream(backoff):
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as transport:
             async with AsyncOpenAI(api_key="test", http_client=transport,
-                                   max_retries=retry.CONNECTION_RETRIES) as client:
+                                   max_retries=const.CONNECTION_RETRIES) as client:
                 backend = OpenAiLlmBackend(SimpleNamespace(), {})
                 backend._client = client
                 emitted = []

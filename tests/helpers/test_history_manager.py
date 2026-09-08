@@ -1,5 +1,4 @@
 from types import SimpleNamespace
-from datetime import datetime, timezone
 
 from custom_components.ha_ragent.src.const import (
     CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
@@ -19,7 +18,6 @@ def test_structured_context_prefers_canonical_tool_calls_and_results() -> None:
     chat_log = SimpleNamespace(content=[
         conversation.UserContent(
             content="first request",
-            created_at=datetime.now(timezone.utc),
         ),
         conversation.AssistantContent(
             agent_id="agent",
@@ -75,7 +73,6 @@ def test_prompt_history_uses_selected_semantic_turns() -> None:
     chat_log = SimpleNamespace(content=[
         conversation.UserContent(
             content="turn on the kitchen light",
-            created_at=datetime.now(timezone.utc),
         ),
         conversation.AssistantContent(
             agent_id="agent",
@@ -84,7 +81,6 @@ def test_prompt_history_uses_selected_semantic_turns() -> None:
         ),
         conversation.UserContent(
             content="what is the weather",
-            created_at=datetime.now(timezone.utc),
         ),
         conversation.AssistantContent(
             agent_id="agent",
@@ -111,7 +107,6 @@ def test_failed_tool_calls_are_excluded_from_structured_history() -> None:
     chat_log = SimpleNamespace(content=[
         conversation.UserContent(
             content="turn on the bedroom lamp",
-            created_at=datetime.now(timezone.utc),
         ),
         conversation.AssistantContent(
             agent_id="agent",

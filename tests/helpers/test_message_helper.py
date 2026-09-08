@@ -137,7 +137,8 @@ def test_compact_search_preserves_device_state_and_location() -> None:
                 "area": "Kitchen",
                 "floor": "Ground floor",
                 "domain": ["sensor"],
-                "aliases": ["ignored to keep history compact"],
+                "aliases": ["kitchen thermometer"],
+                "attributes": {"temperature": 21.5},
             }],
             "error": [],
         },
@@ -152,6 +153,8 @@ def test_compact_search_preserves_device_state_and_location() -> None:
         "area": "Kitchen",
         "floor": "Ground floor",
         "domain": ["sensor"],
+        "aliases": ["kitchen thermometer"],
+        "attributes": {"temperature": 21.5},
     }
     assert "directly" in result["candidate_data_notice"]
 
@@ -174,7 +177,7 @@ def test_compact_search_preserves_zero_tool_fallback_signal() -> None:
     assert result["tool_search_message"] == "Do not invent a tool name."
 
 
-def test_compact_search_preserves_tool_ranking_metadata() -> None:
+def test_compact_search_keeps_capabilities_without_detailed_ranking_signals() -> None:
     result = MessageHelper.compact_tool_result_value(
         "ha_ragent__HassSemanticSearch",
         {
@@ -199,7 +202,8 @@ def test_compact_search_preserves_tool_ranking_metadata() -> None:
     candidate = result["candidate_tools"][0]
     assert candidate["name"] == "HassTurnOn"
     assert candidate["canonical_action"] == "on"
-    assert candidate["ranking_signals"]["semantic_similarity"] == 0.8
+    assert candidate["retrieval_score"] == 6.25
+    assert "ranking_signals" not in candidate
     assert "parameters" not in candidate
     assert result["tool_search_confidence"] == "high"
 
@@ -220,3 +224,31 @@ def test_tool_result_success_rejects_failed_and_error_results() -> None:
     assert not MessageHelper.tool_result_succeeded({"success": []})
     assert not MessageHelper.tool_result_succeeded({"failed": ["light.kitchen"]})
     assert not MessageHelper.tool_result_succeeded({"error": "unavailable"})
+
+
+def test_custom_result_status_does_not_hide_payload_or_recovery_details():
+    results = [
+        {"success": True, "temperature": 21, "unit": "C"},
+        {"success": True, "memory_id": "abc", "content": "Thermostat target is 21 C"},
+        {"success": True, "minutes": 10, "execute_at": "2026-09-05T12:10:00"},
+        {"success": False, "error": "invalid profile", "valid_profiles": ["quiet", "boost"]},
+    ]
+    for result in results:
+        compact = MessageHelper.compact_tool_result_value("VendorTool", result)
+        assert compact == result
+        assert MessageHelper.compact_tool_result_value("VendorTool", compact) == compact
+
+
+def test_custom_nested_result_is_bounded_and_keeps_status():
+    result = {
+        "rows": [{"text": "x" * 10000} for _ in range(100)],
+        "details": {str(index): "x" * 10000 for index in range(100)},
+        "deep": {"a": {"b": {"c": {"d": {"e": 1}}}}},
+        "success": True,
+    }
+    compact = MessageHelper.compact_tool_result_value("VendorTool", result)
+    assert compact["success"] is True
+    assert len(compact["rows"]) == MessageHelper._MAX_RESULT_ITEMS
+    assert len(compact["rows"][0]["text"]) == MessageHelper._MAX_RESULT_TEXT
+    assert len(compact["details"]) == MessageHelper._MAX_RESULT_ITEMS
+    assert compact["deep"]["a"]["b"]["c"]["d"] == "[truncated]"

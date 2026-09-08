@@ -12,6 +12,7 @@ from custom_components.ha_ragent.src.homeassistant.tools.forget_fact import RAGe
 from custom_components.ha_ragent.src.homeassistant.tools.remember_fact import RAGentRememberTool
 from custom_components.ha_ragent.src.models.embedding.memory import Memory
 from custom_components.ha_ragent.src.models.embedding.memory_embedding import MemoryEmbedding
+from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 
 class FakeEmbedder:
@@ -49,6 +50,7 @@ class FakeVectorDb:
 
 
 def create_memory_hass() -> tuple[SimpleNamespace, FakeVectorDb]:
+    RAGentTranslations._load("en")
     vector_db = FakeVectorDb()
     entry = SimpleNamespace(
         subentries={"agent": SimpleNamespace(data={"model": "embed"})},
@@ -66,6 +68,8 @@ def test_memory_model_round_trip() -> None:
     assert MemoryEmbedding.parse_object(embedding.to_dict()) == memory
     assert "reading lamp" in memory.to_embedding_text()
     assert memory.to_dict()["id"] == memory.id
+    assert embedding.to_dict()["id"] == memory.id
+    assert "memory_id" not in embedding.to_dict()
 
 
 def test_memory_manager_remember_recall_replace_and_forget() -> None:
@@ -92,7 +96,7 @@ def test_memory_tools() -> None:
         hass, _ = create_memory_hass()
         remember = RAGentRememberTool(hass, "entry", "agent")
         remember_result = await remember.async_call(
-            SimpleNamespace(tool_args={"memory": "My preferred temperature is 21 C."})
+            SimpleNamespace(tool_args={"memory": "The thermostat target is 21 C."})
         )
 
         assert remember_result["success"] is True
@@ -135,7 +139,7 @@ def test_faiss_memory_persistence_and_delete(tmp_path: Path) -> None:
             collection,
             [MemoryEmbedding(first, [1.0, 0.0, 0.0]), MemoryEmbedding(second, [0.0, 1.0, 0.0])],
         )
-        assert await backend.async_delete_objects(config, collection, "memory_id", [first.id]) == 1
+        assert await backend.async_delete_objects(config, collection, "id", [first.id]) == 1
 
         reloaded_backend = FaissDbBackend(hass, config)
         recalled = await reloaded_backend.async_retrieve_objects(
