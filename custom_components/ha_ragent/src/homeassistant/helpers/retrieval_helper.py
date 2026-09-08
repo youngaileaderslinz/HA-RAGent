@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import math
 import time
-import json
 import unicodedata
 from collections import Counter
 from collections.abc import Callable, Iterable
@@ -119,9 +118,9 @@ class RetrievalHelper:
         return query
 
     @staticmethod
-    def continuity_prompt(continuity: ContinuityContext) -> str:
-        """Supply bounded historical data for the existing LLM to interpret."""
-        groups = [
+    def continuity_groups(continuity: ContinuityContext) -> list[dict[str, object]]:
+        """Return bounded historical target data for prompt rendering."""
+        return [
             {
                 "entities": list(group.entities[:12]),
                 "areas": list(group.areas[:4]),
@@ -132,13 +131,6 @@ class RetrievalHelper:
             }
             for group, _ in continuity.target_groups[:2]
         ]
-        if not groups:
-            return ""
-        return (
-            "\nRecent successful targets (historical data, not a new request; "
-            "resolve references from the current message and conversation):\n"
-            + json.dumps(groups, ensure_ascii=False)
-        )
 
     @staticmethod
     def _candidate_identity_values(device: Any) -> tuple[object, ...]:

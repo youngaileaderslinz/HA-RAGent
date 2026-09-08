@@ -187,7 +187,6 @@ async def _async_forward_platforms_after_embeddings(hass: HomeAssistant, entry: 
 async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry):
     """Set up HA Ragent from a config entry."""
     hass.data.setdefault(DOMAIN, {})
-    entry.translations = await RAGentTranslations.async_create(hass, get_setting_value(CONF_SELECTED_LANGUAGE, entry.data))
 
     _ensure_llm_api_registered(hass)
     _cancel_scheduled_actions(hass, entry.subentries)
@@ -198,7 +197,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry):
         subentry_id: dict(subentry.data)
         for subentry_id, subentry in entry.subentries.items()
     }
-    
+
+    entry.translations = await RAGentTranslations.async_create(hass, get_setting_value(CONF_SELECTED_LANGUAGE, entry.data))
     entry.vector_db_backend = _create_vector_db_client(hass, get_setting_value(CONF_VECTOR_DB_BACKEND_TYPE, entry.data), entry)
     entry.embedder_backend = _create_embedding_client(hass, get_setting_value(CONF_EMBEDDING_BACKEND_TYPE, entry.data), entry)    
     entry.llm_backend = _create_llm_client(hass, get_setting_value(CONF_LLM_BACKEND_TYPE, entry.data), entry)

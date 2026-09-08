@@ -41,6 +41,8 @@ from custom_components.ha_ragent.src.homeassistant.ragent_api import (
 )
 from custom_components.ha_ragent.src.models.embedding.device import Device
 
+from custom_components.ha_ragent.src.translation import RAGentTranslations
+
 from custom_components.ha_ragent.src.const import (
     CONF_NUM_DEVICES_TO_EXTRACT,
     CONF_NUM_TOOLS_TO_EXTRACT,
@@ -62,6 +64,7 @@ from custom_components.ha_ragent.src.const import (
     TRANSLATION_PROMPT_PERSONA,
     TRANSLATION_PROMPT_AREAS,
     TRANSLATION_PROMPT_DEVICES,
+    TRANSLATION_PROMPT_CONTINUITY,
     TRANSLATION_PROMPT_MEMORIES,
     TRANSLATION_PROMPT_RETRIES,
     TRANSLATION_PROMPT_INSTRUCTIONS,
@@ -243,6 +246,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         memories: List[Memory],
         area: ar.AreaEntry,
         floor: fr.FloorEntry,
+        continuity: ContinuityContext | None = None,
         scheduled_request: bool = False,
         scheduled_context: ScheduledContext | None = None,
     ) -> str | None:
@@ -254,12 +258,13 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             template_key = (raw_prompt, language)
             if getattr(self, "_prompt_template_key", None) != template_key:
                 self._prompt_template = Template(
-                    self.build_base_prompt_template(language, raw_prompt, self.entry.translations), self.hass,
+                    self.build_base_prompt_template(self.entry.translations, raw_prompt), self.hass,
                 )
                 self._prompt_template_key = template_key
             rendered_prompt = self._prompt_template.async_render({
                 "device_list": devices,
                 "memory_list": memories,
+                "continuity_list": RetrievalHelper.continuity_groups(continuity or ContinuityContext()),
                 "area_list": sorted({device.area_name for device in devices if device.area_name}),
                 "area_name": scheduled_context.area if scheduled_context else (area.name if area else None),
                 "floor_name": scheduled_context.floor if scheduled_context else (floor.name if floor else None),
@@ -763,6 +768,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     retrieved_memories,
                     area,
                     floor,
+                    continuity=continuity,
                     scheduled_request=scheduled_request,
                     scheduled_context=scheduled_context,
                 )
@@ -772,7 +778,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     intent_response.async_set_error(intent.IntentResponseErrorCode.UNKNOWN, self.entry.translations.error(TRANSLATION_ERROR_TEMPLATE))
                     return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
 
-                system_prompt_content += RetrievalHelper.continuity_prompt(continuity)
                 history_manager.build_prompt_history(
                     chat_log,
                     user_input,
@@ -815,14 +820,12 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
 
     @staticmethod
-    def build_base_prompt_template(selected_language: str, prompt_template: str, translations=None):
+    def build_base_prompt_template(translations: RAGentTranslations, prompt_template: str) -> str:
         """Build a prompt template from the selected translation file."""
-        if translations is None:
-            from custom_components.ha_ragent.src.translation import RAGentTranslations
-            translations = RAGentTranslations(selected_language)
         prompt_template = prompt_template.replace("<persona_prompt>", translations.prompt(TRANSLATION_PROMPT_PERSONA))
         prompt_template = prompt_template.replace("<area_prompt>", translations.prompt(TRANSLATION_PROMPT_AREAS))
         prompt_template = prompt_template.replace("<devices_prompt>", translations.prompt(TRANSLATION_PROMPT_DEVICES))
+        prompt_template = prompt_template.replace("<continuity_prompt>", translations.prompt(TRANSLATION_PROMPT_CONTINUITY))
         prompt_template = prompt_template.replace("<memories_context_prompt>", translations.prompt(TRANSLATION_PROMPT_MEMORIES))
         prompt_template = prompt_template.replace("<max_retries_prompt>", translations.prompt(TRANSLATION_PROMPT_RETRIES))
         prompt_template = prompt_template.replace("<instruction_prompt>", translations.prompt(TRANSLATION_PROMPT_INSTRUCTIONS))

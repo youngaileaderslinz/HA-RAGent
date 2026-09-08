@@ -1,4 +1,3 @@
-import json
 import pytest
 
 from dataclasses import dataclass
@@ -224,12 +223,10 @@ def test_history_is_separate_data_and_never_rewrites_current_request(query):
     group = TargetGroup(entities=("light.kitchen",), areas=("Kitchen",),
                         action="HassTurnOff", tool="HassTurnOff")
     continuity = ContinuityContext(target_groups=[(group, 0.9)])
-    prompt = RetrievalHelper.continuity_prompt(continuity)
-    payload = json.loads(prompt.split(":\n", 1)[1])
+    groups = RetrievalHelper.continuity_groups(continuity)
 
-    assert payload[0]["entities"] == ["light.kitchen"]
-    assert payload[0]["action"] == "HassTurnOff"
-    assert "not a new request" in prompt
+    assert groups[0]["entities"] == ["light.kitchen"]
+    assert groups[0]["action"] == "HassTurnOff"
     assert RetrievalHelper.build_retrieval_text(query) == query
     assert RetrievalHelper.build_tool_search_query(query, "", []) == query
     assert not RetrievalHelper.target_is_confident(
@@ -237,14 +234,14 @@ def test_history_is_separate_data_and_never_rewrites_current_request(query):
     )
 
 
-def test_continuity_prompt_is_bounded_and_empty_without_successful_targets():
-    assert RetrievalHelper.continuity_prompt(ContinuityContext()) == ""
+def test_continuity_groups_are_bounded_and_empty_without_successful_targets():
+    assert RetrievalHelper.continuity_groups(ContinuityContext()) == []
     groups = [(TargetGroup(entities=tuple(f"light.{i}" for i in range(30))), 0.5)] * 10
-    payload = json.loads(RetrievalHelper.continuity_prompt(
+    continuity_groups = RetrievalHelper.continuity_groups(
         ContinuityContext(target_groups=groups),
-    ).split(":\n", 1)[1])
-    assert len(payload) == 2
-    assert len(payload[0]["entities"]) == 12
+    )
+    assert len(continuity_groups) == 2
+    assert len(continuity_groups[0]["entities"]) == 12
 
 
 def test_literal_name_resolves_one_identity_candidate() -> None:

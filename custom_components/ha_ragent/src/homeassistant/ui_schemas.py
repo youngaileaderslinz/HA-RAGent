@@ -95,7 +95,15 @@ def _backend_connection_defaults(backend_type: str, *, ollama_port: int, openai_
 
     return ollama_port, False
 
-def ui_schema_pick_backends(ventor_db_backend_type=None, embedding_backend_type=None, llm_backend_type=None, selected_language=None) -> vol.Schema:
+def ui_schema_pick_backends(
+        ventor_db_backend_type=None,
+        embedding_backend_type=None,
+        llm_backend_type=None,
+        selected_language=None,
+        options: dict[str, Any] | None = None,
+) -> vol.Schema:
+    """Build backend selection schema using supplied values or integration defaults."""
+    options = options or {}
     return vol.Schema(
         {
             vol.Required(
@@ -262,10 +270,11 @@ def ui_schema_config_options(
     embedding_backend_type: str,
     llm_backend_type: str, 
     subentry_type: str,
+    translations: Any,
     excluded_tool_options: list[str] | None = None,
 ) -> dict:
     default_prompt = RAGent.build_base_prompt_template(
-        language,
+        translations,
         get_setting_value(CONF_PROMPT, options) or DEFAULT_PROMPT,
     )
     default_llm_api = getattr(llm, "LLM_API_ASSIST", "assist")

@@ -154,6 +154,7 @@ class RagentConfigFlow(ConfigFlow, domain=DOMAIN):
         )
         
     async def _step_finish_async(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        language = self.client_config[CONF_SELECTED_LANGUAGE]
         vector_db_backend = self.client_config[CONF_VECTOR_DB_BACKEND_TYPE]
         embedding_backend = self.client_config[CONF_EMBEDDING_BACKEND_TYPE]
         llm_backend = self.client_config[CONF_LLM_BACKEND_TYPE]
@@ -168,6 +169,7 @@ class RagentConfigFlow(ConfigFlow, domain=DOMAIN):
             title=title,
             description="A local RAG agent.",
             data={
+                CONF_SELECTED_LANGUAGE: language,
                 CONF_VECTOR_DB_BACKEND_TYPE: vector_db_backend,
                 CONF_EMBEDDING_BACKEND_TYPE: embedding_backend,
                 CONF_LLM_BACKEND_TYPE: llm_backend
