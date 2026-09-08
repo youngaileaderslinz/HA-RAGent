@@ -317,16 +317,6 @@ class RetrievalHelper:
         return min(20, limit * 3) if limit > 0 else 0
 
     @staticmethod
-    def expanded_device_limit(limit: int, continuity: ContinuityContext) -> int:
-        """Keep all recent successful entity targets within a bounded shortlist."""
-        successful_entities = {
-            entity.casefold()
-            for group, _ in continuity.target_groups
-            for entity in group.entities
-        }
-        return min(12, max(limit, len(successful_entities))) if limit > 0 else 0
-
-    @staticmethod
     def _character_ngrams(text: str, size: int = 3) -> set[str]:
         compact = text.replace(" ", "")
         if len(compact) <= size:

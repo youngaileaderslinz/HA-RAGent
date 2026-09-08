@@ -57,10 +57,6 @@ class HistoryManager:
 
         return turns
 
-    def select_retained_history(self, chat_log: conversation.ChatLog) -> list[conversation.Content]:
-        """Return retained history as a flat message list."""
-        return [message for turn in self._select_retained_turns(chat_log) for message in turn]
-
     @staticmethod
     def _add_values(target: set[str], value: object) -> None:
         if isinstance(value, str) and value:
@@ -139,14 +135,6 @@ class HistoryManager:
         if isinstance(success_value, (str, list, tuple, set)):
             return reported_entities
         return argument_entities | reported_entities
-
-    @staticmethod
-    def _call_has_successful_result(call: object, successful_ids: set[str], successful_names: set[str]) -> bool:
-        """Match an assistant tool call to a retained successful result."""
-        call_id = str(getattr(call, "id", "") or "")
-        if call_id:
-            return call_id in successful_ids
-        return str(getattr(call, "tool_name", "") or "") in successful_names
 
     @staticmethod
     def _take_matching_tool_call(result_message: object, calls_by_id: dict[str, object], unmatched_calls: list[object]) -> object | None:

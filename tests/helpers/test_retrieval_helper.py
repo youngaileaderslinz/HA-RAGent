@@ -643,19 +643,6 @@ def test_successful_target_group_is_preserved_for_weak_followup() -> None:
     assert not RetrievalHelper.target_is_confident("adjust it", result, continuity)
 
 
-def test_successful_target_group_expands_device_limit() -> None:
-    context = TurnContext(
-        key="turn",
-        text="",
-        target_groups=(TargetGroup(
-            entities=tuple(f"light.room_{index}" for index in range(7)),
-        ),),
-    )
-    continuity = RetrievalHelper.build_continuity_context([(context, 0.8)])
-
-    assert RetrievalHelper.expanded_device_limit(4, continuity) == 7
-
-
 def test_canonical_tool_name_parts_and_family_are_embedded() -> None:
     tool = LlmTool(name="HassTurnOn", description="Control a target",
                    metadata=ToolMetadata(family="power"))

@@ -79,6 +79,19 @@ def test_search_context_signature_accepts_empty_keyword_context() -> None:
     assert tool._candidate_context == []
 
 
+def test_corrective_search_uses_subentry_retrieval_limits() -> None:
+    entry = SimpleNamespace(options={
+        const.CONF_NUM_DEVICES_TO_EXTRACT: 9,
+        const.CONF_NUM_TOOLS_TO_EXTRACT: 8,
+    })
+    subentry = SimpleNamespace(data={
+        const.CONF_NUM_DEVICES_TO_EXTRACT: 2,
+        const.CONF_NUM_TOOLS_TO_EXTRACT: 3,
+    })
+
+    assert RAGentSemanticSearchTool._get_effective_limits(entry, subentry) == (2, 3)
+
+
 def test_contextual_fallback_includes_trusted_location() -> None:
     tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
     tool.set_search_context(

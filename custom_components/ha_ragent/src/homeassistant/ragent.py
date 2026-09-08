@@ -119,6 +119,14 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         )
         return RetrievalHelper.build_continuity_context(selected)
 
+    @staticmethod
+    def _configured_retrieval_limits(runtime_options: dict[str, object]) -> tuple[int, int]:
+        """Return the user-selected device and tool exposure limits."""
+        return (
+            int(get_setting_value(CONF_NUM_DEVICES_TO_EXTRACT, runtime_options)),
+            int(get_setting_value(CONF_NUM_TOOLS_TO_EXTRACT, runtime_options)),
+        )
+
     async def _async_retrieve_devices(
         self,
         query_embedding: List[float] | QueryEmbedding,
@@ -698,28 +706,18 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 # Recall memory alongside the full device/tool retrieval chain.
                 # TaskGroup also cancels and awaits recall if retrieval is interrupted.
                 async with asyncio.TaskGroup() as retrieval_tasks:
-                    memory_task = retrieval_tasks.create_task(
-                        self._async_retrieve_memories(query_embedding, memory_limit)
-                    )
-                    configured_device_limit = get_setting_value(CONF_NUM_DEVICES_TO_EXTRACT, self.runtime_options)
-                    effective_device_limit = configured_device_limit
-                    running_entries = self.hass.data.get(DOMAIN, {}).get(STARTUP_EMBEDDING_RUNNING_FLAG, set())
-                    indexes_ready = self.entry_id not in running_entries
+                    memory_task = retrieval_tasks.create_task(self._async_retrieve_memories(query_embedding, memory_limit))
+                    configured_device_limit, configured_tool_limit = self._configured_retrieval_limits(self.runtime_options)
                     retrieved_devices = await self._async_retrieve_devices(
                         query_embedding,
                         retrieval_query,
-                        n_devices=effective_device_limit if indexes_ready else 0,
+                        n_devices=configured_device_limit,
                         continuity=continuity,
                         current_area=current_area,
                         current_floor=current_floor,
                     )
-                    configured_tool_limit = get_setting_value(CONF_NUM_TOOLS_TO_EXTRACT, self.runtime_options)
-                    tool_retrieval_query = RetrievalHelper.build_tool_search_query(
-                        retrieval_query,
-                        "",
-                        retrieved_devices,
-                    )
-                    if llm_api and indexes_ready:
+                    tool_retrieval_query = RetrievalHelper.build_tool_search_query(retrieval_query, "", retrieved_devices)
+                    if llm_api:
                         retrieved_tools = await self._async_retrieve_tools(
                             query_embedding,
                             tool_retrieval_query,
