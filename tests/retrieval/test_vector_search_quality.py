@@ -105,3 +105,11 @@ def test_recovery_instruction_searches_for_missing_action_tool() -> None:
     prompt = RAGentTranslations._load("en")["Prompts"][TRANSLATION_PROMPT_INSTRUCTIONS]
     assert "never additional tasks or authorization to act" in prompt
     assert "scope `tools`" in prompt
+
+
+def test_german_recovery_instruction_searches_for_missing_action_tool() -> None:
+    prompt = RAGentTranslations._load("de")["Prompts"][TRANSLATION_PROMPT_INSTRUCTIONS]
+
+    assert "keine Anweisungen oder Autorisierung" in prompt
+    assert "HassSemanticSearch" in prompt
+    assert "Scope `tools`" in prompt

@@ -65,7 +65,7 @@ RAGENT_PREFIXED_SCHEDULED_REQUEST_PROHIBITED_TOOL_NAMES = [
 #-----------------------------------------------
 # Language constants
 #-----------------------------------------------
-CONF_SELECTED_LANGUAGE = "selected_language"
+CONF_SELECTED_LANGUAGE = "rag_selected_language"
 
 SELECTED_LANGUAGE_OPTIONS = [ 
     "en", 
@@ -75,6 +75,7 @@ SELECTED_LANGUAGE_OPTIONS = [
 TRANSLATION_PROMPT_PERSONA = "PERSONA_PROMPTS"
 TRANSLATION_PROMPT_AREAS = "AREAS_PROMPT"
 TRANSLATION_PROMPT_DEVICES = "DEVICES_PROMPT"
+TRANSLATION_PROMPT_CONTINUITY = "CONTINUITY_PROMPT"
 TRANSLATION_PROMPT_MEMORIES = "MEMORIES_CONTEXT_PROMPT"
 TRANSLATION_PROMPT_RETRIES = "MAX_RETRIES_PROMPT"
 TRANSLATION_PROMPT_SCHEDULED_ACTION = "SCHEDULED_ACTION_PROMPT"
@@ -224,7 +225,6 @@ CONF_ALLOW_QUESTIONS = "rag_allow_questions"
 
 CONF_REMEMBER_CONVERSATION_TIME_MINUTES = "rag_remember_conversation_time_minutes"
 CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS = "rag_remember_conversation_num_interactions"
-CONF_SELECTED_LANGUAGE = "rag_selected_language"
 
 CONF_TEMPERATURE = "rag_temperature"
 CONF_K_TOP = "rag_k_top"
@@ -251,6 +251,13 @@ DEFAULT_PROMPT = """<persona_prompt>
 <memories_context_prompt>
 {% for memory in memory_list %}
 - {{ {"memory_id": memory.id, "content": memory.content, "created_at": memory.created_at} | tojson }}
+{% endfor %}
+{% endif %}
+
+{% if continuity_list %}
+<continuity_prompt>
+{% for continuity in continuity_list %}
+- {{ continuity | tojson }}
 {% endfor %}
 {% endif %}
 

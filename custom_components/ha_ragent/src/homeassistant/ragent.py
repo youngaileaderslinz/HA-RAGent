@@ -41,6 +41,8 @@ from custom_components.ha_ragent.src.homeassistant.ragent_api import (
 )
 from custom_components.ha_ragent.src.models.embedding.device import Device
 
+from custom_components.ha_ragent.src.translation import RAGentTranslations
+
 from custom_components.ha_ragent.src.const import (
     CONF_NUM_DEVICES_TO_EXTRACT,
     CONF_NUM_TOOLS_TO_EXTRACT,
@@ -62,6 +64,7 @@ from custom_components.ha_ragent.src.const import (
     TRANSLATION_PROMPT_PERSONA,
     TRANSLATION_PROMPT_AREAS,
     TRANSLATION_PROMPT_DEVICES,
+    TRANSLATION_PROMPT_CONTINUITY,
     TRANSLATION_PROMPT_MEMORIES,
     TRANSLATION_PROMPT_RETRIES,
     TRANSLATION_PROMPT_INSTRUCTIONS,
@@ -118,6 +121,14 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             contexts, {}, [], max_age_seconds=300.0,
         )
         return RetrievalHelper.build_continuity_context(selected)
+
+    @staticmethod
+    def _configured_retrieval_limits(runtime_options: dict[str, object]) -> tuple[int, int]:
+        """Return the user-selected device and tool exposure limits."""
+        return (
+            int(get_setting_value(CONF_NUM_DEVICES_TO_EXTRACT, runtime_options)),
+            int(get_setting_value(CONF_NUM_TOOLS_TO_EXTRACT, runtime_options)),
+        )
 
     async def _async_retrieve_devices(
         self,
@@ -200,22 +211,16 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         if RetrievalHelper.retrieval_method(options) == RETRIEVAL_METHOD_VECTOR:
             return [result.item for result in scored_tools[:n_tools]]
 
-        # Rank once at the largest exposure limit; shortlist expansion reuses
-        # this pool instead of repeating database requests and schema scoring.
-        expanded_limit = max(n_tools, RetrievalHelper.expanded_tool_limit(n_tools))
         ranked_tools = RetrievalHelper.rank_tool_candidates(
             scored_tools,
             all_tools,
             query,
             devices or [],
-            expanded_limit,
+            n_tools,
             continuity_score=continuity.tool_score,
         )
         tools = ranked_tools[:n_tools]
-        confidence = RetrievalHelper.tool_search_confidence(tools, query, devices or [])
-        if confidence in {"high", "medium"}:
-            return tools
-        return ranked_tools
+        return tools
 
     async def _async_retrieve_memories(self, query_embedding: List[float] | QueryEmbedding, n_memories: int) -> List[Memory]:
         """Retrieve relevant persistent memories for this agent."""
@@ -241,6 +246,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         memories: List[Memory],
         area: ar.AreaEntry,
         floor: fr.FloorEntry,
+        continuity: ContinuityContext | None = None,
         scheduled_request: bool = False,
         scheduled_context: ScheduledContext | None = None,
     ) -> str | None:
@@ -252,12 +258,13 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             template_key = (raw_prompt, language)
             if getattr(self, "_prompt_template_key", None) != template_key:
                 self._prompt_template = Template(
-                    self.build_base_prompt_template(language, raw_prompt, self.entry.translations), self.hass,
+                    self.build_base_prompt_template(self.entry.translations, raw_prompt), self.hass,
                 )
                 self._prompt_template_key = template_key
             rendered_prompt = self._prompt_template.async_render({
                 "device_list": devices,
                 "memory_list": memories,
+                "continuity_list": RetrievalHelper.continuity_groups(continuity or ContinuityContext()),
                 "area_list": sorted({device.area_name for device in devices if device.area_name}),
                 "area_name": scheduled_context.area if scheduled_context else (area.name if area else None),
                 "floor_name": scheduled_context.floor if scheduled_context else (floor.name if floor else None),
@@ -404,14 +411,23 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             )
             formatted_index = len(history_manager.message_history)
 
+            if _logger.isEnabledFor(logging.DEBUG):
+                message_chars = sum(
+                    len(json.dumps(message, ensure_ascii=False, default=str))
+                    for message in formatted_messages
+                )
+                tool_schema_chars = sum(
+                    len(json.dumps(tool.parameters, ensure_ascii=False, default=str))
+                    + len(tool.name) + len(tool.description or "")
+                    for tool in tool_list
+                )
+                _logger.debug(f"RAGent prompt size (iteration {idx + 1}): messages={message_chars} chars, tools={tool_schema_chars} chars, tool_count={len(tool_list)}")
+
             tool_calls_in_iteration = []
             try:
                 _logger.debug(f"Sending prompt to LLM (Iteration {idx + 1}/{max_tool_call_iterations}).")
                 if _logger.isEnabledFor(logging.DEBUG):
-                    _logger.debug(
-                        "Full messages sent to the LLM:\n%s",
-                        json.dumps(formatted_messages, ensure_ascii=False, indent=2, default=str),
-                    )
+                    _logger.debug(f"Full messages sent to the LLM:\n{json.dumps(formatted_messages, ensure_ascii=False, indent=2, default=str)}")
                 
                 content_chunks = []
                 async for chunk in self.entry.llm_backend.async_send_chat_request(
@@ -583,8 +599,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 f"{call.tool_name}: {json.dumps(result, ensure_ascii=False, default=str)}"
                 for call, result in tool_calls_overall
             )
-            # Generate from this turn's actual effects, never pre-action prose or
-            # an assistant message from an earlier request. Disable further calls.
             try:
                 summary_messages = [{
                     "role": "system",
@@ -697,31 +711,18 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 # Recall memory alongside the full device/tool retrieval chain.
                 # TaskGroup also cancels and awaits recall if retrieval is interrupted.
                 async with asyncio.TaskGroup() as retrieval_tasks:
-                    memory_task = retrieval_tasks.create_task(
-                        self._async_retrieve_memories(query_embedding, memory_limit)
-                    )
-                    configured_device_limit = get_setting_value(CONF_NUM_DEVICES_TO_EXTRACT, self.runtime_options)
-                    effective_device_limit = RetrievalHelper.expanded_device_limit(
-                        configured_device_limit,
-                        continuity,
-                    )
-                    running_entries = self.hass.data.get(DOMAIN, {}).get(STARTUP_EMBEDDING_RUNNING_FLAG, set())
-                    indexes_ready = self.entry_id not in running_entries
+                    memory_task = retrieval_tasks.create_task(self._async_retrieve_memories(query_embedding, memory_limit))
+                    configured_device_limit, configured_tool_limit = self._configured_retrieval_limits(self.runtime_options)
                     retrieved_devices = await self._async_retrieve_devices(
                         query_embedding,
                         retrieval_query,
-                        n_devices=effective_device_limit if indexes_ready else 0,
+                        n_devices=configured_device_limit,
                         continuity=continuity,
                         current_area=current_area,
                         current_floor=current_floor,
                     )
-                    configured_tool_limit = get_setting_value(CONF_NUM_TOOLS_TO_EXTRACT, self.runtime_options)
-                    tool_retrieval_query = RetrievalHelper.build_tool_search_query(
-                        retrieval_query,
-                        "",
-                        retrieved_devices,
-                    )
-                    if llm_api and indexes_ready:
+                    tool_retrieval_query = RetrievalHelper.build_tool_search_query(retrieval_query, "", retrieved_devices)
+                    if llm_api:
                         retrieved_tools = await self._async_retrieve_tools(
                             query_embedding,
                             tool_retrieval_query,
@@ -767,6 +768,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     retrieved_memories,
                     area,
                     floor,
+                    continuity=continuity,
                     scheduled_request=scheduled_request,
                     scheduled_context=scheduled_context,
                 )
@@ -776,13 +778,28 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     intent_response.async_set_error(intent.IntentResponseErrorCode.UNKNOWN, self.entry.translations.error(TRANSLATION_ERROR_TEMPLATE))
                     return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
 
-                system_prompt_content += RetrievalHelper.continuity_prompt(continuity)
                 history_manager.build_prompt_history(
                     chat_log,
                     user_input,
                     system_prompt_content,
                     relevant_turn_keys=continuity.selected_turn_keys,
                 )
+                if _logger.isEnabledFor(logging.DEBUG):
+                    device_chars = len(json.dumps(
+                        [device.to_dict() for device in device_list],
+                        ensure_ascii=False,
+                        default=str,
+                    ))
+                    memory_chars = len(json.dumps(
+                        [memory.to_dict() for memory in retrieved_memories],
+                        ensure_ascii=False,
+                        default=str,
+                    ))
+                    history_chars = sum(
+                        len(str(getattr(message, "content", "") or ""))
+                        for message in history_manager.message_history[1:-1]
+                    )
+                    _logger.debug(f"RAGent prompt breakdown: system={len(system_prompt_content)} chars, devices={device_chars} chars, memories={memory_chars} chars, continuity_turns={len(continuity.selected_turn_keys)}, history={history_chars} chars")
 
                 result = await self._async_prompt_model(
                     llm_api,
@@ -803,14 +820,12 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
 
     @staticmethod
-    def build_base_prompt_template(selected_language: str, prompt_template: str, translations=None):
+    def build_base_prompt_template(translations: RAGentTranslations, prompt_template: str) -> str:
         """Build a prompt template from the selected translation file."""
-        if translations is None:
-            from custom_components.ha_ragent.src.translation import RAGentTranslations
-            translations = RAGentTranslations(selected_language)
         prompt_template = prompt_template.replace("<persona_prompt>", translations.prompt(TRANSLATION_PROMPT_PERSONA))
         prompt_template = prompt_template.replace("<area_prompt>", translations.prompt(TRANSLATION_PROMPT_AREAS))
         prompt_template = prompt_template.replace("<devices_prompt>", translations.prompt(TRANSLATION_PROMPT_DEVICES))
+        prompt_template = prompt_template.replace("<continuity_prompt>", translations.prompt(TRANSLATION_PROMPT_CONTINUITY))
         prompt_template = prompt_template.replace("<memories_context_prompt>", translations.prompt(TRANSLATION_PROMPT_MEMORIES))
         prompt_template = prompt_template.replace("<max_retries_prompt>", translations.prompt(TRANSLATION_PROMPT_RETRIES))
         prompt_template = prompt_template.replace("<instruction_prompt>", translations.prompt(TRANSLATION_PROMPT_INSTRUCTIONS))

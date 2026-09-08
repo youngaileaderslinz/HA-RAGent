@@ -21,6 +21,7 @@ class HistoryManager:
     def __init__(self, runtime_options: dict[str, Any]) -> None:
         self._runtime_options = runtime_options
         self._message_history: list[conversation.Content] = []
+        self._stored_chat_history: list[conversation.Content] = []
 
     @property
     def message_history(self) -> list[conversation.Content]:
@@ -35,8 +36,6 @@ class HistoryManager:
         if not remember_time_minutes and not remember_num_interactions:
             return []
 
-        # Home Assistant has already appended the current user input to the log.
-        # It is added explicitly when the prompt history is built below.
         raw_history = list(chat_log.content)[:-1]
         turns: list[list[conversation.Content]] = []
 
@@ -57,10 +56,6 @@ class HistoryManager:
             turns = turns[-remember_num_interactions:]
 
         return turns
-
-    def select_retained_history(self, chat_log: conversation.ChatLog) -> list[conversation.Content]:
-        """Return retained history as a flat message list."""
-        return [message for turn in self._select_retained_turns(chat_log) for message in turn]
 
     @staticmethod
     def _add_values(target: set[str], value: object) -> None:
@@ -140,14 +135,6 @@ class HistoryManager:
         if isinstance(success_value, (str, list, tuple, set)):
             return reported_entities
         return argument_entities | reported_entities
-
-    @staticmethod
-    def _call_has_successful_result(call: object, successful_ids: set[str], successful_names: set[str]) -> bool:
-        """Match an assistant tool call to a retained successful result."""
-        call_id = str(getattr(call, "id", "") or "")
-        if call_id:
-            return call_id in successful_ids
-        return str(getattr(call, "tool_name", "") or "") in successful_names
 
     @staticmethod
     def _take_matching_tool_call(result_message: object, calls_by_id: dict[str, object], unmatched_calls: list[object]) -> object | None:
@@ -284,7 +271,7 @@ class HistoryManager:
         return contexts
 
     def filter_prompt_history(self, chat_log: conversation.ChatLog, relevant_turn_keys: set[str] | None = None) -> list[conversation.Content]:
-        """Return relevant prompt history without failed tool-call pairs."""
+        """Return compact conversational text without replaying tool protocol data."""
         prompt_history: list[conversation.Content] = []
         turns = self._select_retained_turns(chat_log)
         if relevant_turn_keys is not None:
@@ -296,44 +283,17 @@ class HistoryManager:
             ]
 
         for turn in turns:
-            successful_results = [
-                message
-                for message in turn
-                if isinstance(message, conversation.ToolResultContent)
-                and MessageHelper.tool_result_succeeded(getattr(message, "tool_result", None))
-            ]
-            successful_ids = {
-                str(getattr(message, "tool_call_id", "") or "")
-                for message in successful_results
-                if getattr(message, "tool_call_id", None)
-            }
-            successful_names = {
-                str(getattr(message, "tool_name", "") or "")
-                for message in successful_results
-            }
-
             for message in turn:
                 if isinstance(message, conversation.UserContent):
                     prompt_history.append(message)
                 elif isinstance(message, conversation.AssistantContent):
-                    original_calls = list(getattr(message, "tool_calls", None) or [])
-                    retained_calls = [
-                        call for call in original_calls
-                        if self._call_has_successful_result(
-                            call,
-                            successful_ids,
-                            successful_names,
-                        )
-                    ]
                     content = str(getattr(message, "content", "") or "")
-                    if not original_calls or retained_calls or content:
+                    if content:
                         prompt_history.append(conversation.AssistantContent(
                             agent_id=getattr(message, "agent_id", None),
                             content=content,
-                            tool_calls=retained_calls,
+                            tool_calls=[],
                         ))
-                elif message in successful_results:
-                    prompt_history.append(MessageHelper.compact_tool_result(message))
 
         return prompt_history
 
@@ -345,6 +305,7 @@ class HistoryManager:
         relevant_turn_keys: set[str] | None = None,
     ) -> list[conversation.Content]:
         """Build model history with system prompt first and current user last."""
+        self._stored_chat_history = list(chat_log.content)
         self._message_history = [
             conversation.SystemContent(content=system_prompt_content)
         ]
@@ -357,6 +318,7 @@ class HistoryManager:
     def append_message(self, message: conversation.Content) -> None:
         """Append content to the active history."""
         self._message_history.append(message)
+        self._stored_chat_history.append(message)
 
     def replace_system_prompt(self, content: str) -> None:
         """Replace the active system prompt without retaining stale candidates."""
@@ -364,5 +326,5 @@ class HistoryManager:
             self._message_history[0] = conversation.SystemContent(content=content)
 
     def persist_chat_history(self, chat_log: conversation.ChatLog) -> None:
-        """Persist the active normalized history to Home Assistant."""
-        chat_log.content = self._message_history
+        """Persist full protocol history while keeping the prompt compact."""
+        chat_log.content = self._stored_chat_history

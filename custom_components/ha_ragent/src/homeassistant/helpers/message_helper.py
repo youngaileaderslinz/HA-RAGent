@@ -226,33 +226,6 @@ class MessageHelper:
         )
 
     @staticmethod
-    def compact_tool_result(tool_message: conversation.ToolResultContent) -> conversation.ToolResultContent:
-        """Compact tool results stored in prompt history."""
-        return conversation.ToolResultContent(
-            agent_id=tool_message.agent_id,
-            tool_call_id=tool_message.tool_call_id,
-            tool_name=tool_message.tool_name,
-            tool_result=MessageHelper.compact_tool_result_value(
-                tool_message.tool_name,
-                tool_message.tool_result,
-            ),
-        )
-
-    @staticmethod
-    def message_to_retrieval_text(message: conversation.Content) -> str:
-        """Convert Home Assistant content into retrieval text."""
-        if isinstance(
-            message,
-            (conversation.UserContent, conversation.AssistantContent),
-        ):
-            return (message.content or "").strip()
-
-        if isinstance(message, conversation.ToolResultContent):
-            return f"{message.tool_name} {message.tool_result}".strip()
-
-        return ""
-
-    @staticmethod
     def message_to_chat_messages(messages: list[conversation.Content]) -> list[ChatMessage]:
         """Convert Home Assistant content into canonical backend messages."""
         formatted_messages: list[ChatMessage] = []

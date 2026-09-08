@@ -18,7 +18,7 @@ def test_create_tool_failure_message() -> None:
         "error": "failed",
     }
 
-def test_compact_tool_result_labels_semantic_search_candidates() -> None:
+def test_compact_tool_result_value_labels_semantic_search_candidates() -> None:
     search = conversation.ToolResultContent(
         agent_id="agent", tool_call_id="call-1",
         tool_name="ha_ragent__HassSemanticSearch",
@@ -29,24 +29,16 @@ def test_compact_tool_result_labels_semantic_search_candidates() -> None:
         tool_name="HassTurnOn", tool_result={"success": False},
     )
 
-    compact_search = MessageHelper.compact_tool_result(search).tool_result
+    compact_search = MessageHelper.compact_tool_result_value(
+        search.tool_name, search.tool_result,
+    )
 
     assert compact_search["result_type"] == "candidate_search"
     assert compact_search["candidate_devices"] == ["large"]
     assert "no action has been performed" in compact_search["candidate_notice"]
-    assert MessageHelper.compact_tool_result(other).tool_result == {"success": False}
-
-def test_message_to_retrieval_text() -> None:
-    assert MessageHelper.message_to_retrieval_text(
-        conversation.UserContent(content="  turn on light  ")
-    ) == "turn on light"
-    assert MessageHelper.message_to_retrieval_text(
-        conversation.ToolResultContent(
-            agent_id="agent", tool_call_id="call", tool_name="HassTurnOn",
-            tool_result={"success": True},
-        )
-    ) == "HassTurnOn {'success': True}"
-    assert MessageHelper.message_to_retrieval_text(object()) == ""
+    assert MessageHelper.compact_tool_result_value(
+        other.tool_name, other.tool_result,
+    ) == {"success": False}
 
 def test_message_to_chat_messages() -> None:
     messages = MessageHelper.message_to_chat_messages([

@@ -148,3 +148,42 @@ def test_replace_system_prompt_removes_stale_candidate_context() -> None:
 
     assert manager.message_history[0].content == "candidate-free prompt"
     assert manager.message_history[1].content == "turn it on"
+
+
+def test_persist_keeps_tool_protocol_out_of_prompt_but_in_chat_log() -> None:
+    manager = HistoryManager({
+        CONF_REMEMBER_CONVERSATION_TIME_MINUTES: 10,
+        CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS: 10,
+    })
+    current_user = conversation.UserContent(content="turn it off")
+    tool_call = conversation.AssistantContent(
+        agent_id="agent",
+        content="",
+        tool_calls=[SimpleNamespace(
+            id="call-1", tool_name="HassTurnOn", tool_args={"name": "light.kitchen"},
+        )],
+    )
+    tool_result = conversation.ToolResultContent(
+        agent_id="agent",
+        tool_call_id="call-1",
+        tool_name="HassTurnOn",
+        tool_result={"success": ["light.kitchen"]},
+    )
+    chat_log = SimpleNamespace(content=[
+        conversation.UserContent(content="turn it on"),
+        tool_call,
+        tool_result,
+        current_user,
+    ])
+
+    prompt = manager.build_prompt_history(
+        chat_log,
+        SimpleNamespace(text="turn it off"),
+        "system prompt",
+    )
+    manager.append_message(conversation.AssistantContent(agent_id="agent", content="Done"))
+    manager.persist_chat_history(chat_log)
+
+    assert not any(isinstance(message, conversation.ToolResultContent) for message in prompt)
+    assert tool_call in chat_log.content
+    assert tool_result in chat_log.content

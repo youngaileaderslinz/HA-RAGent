@@ -19,6 +19,7 @@ from custom_components.ha_ragent.src.homeassistant.ragent_api import RAGentLLMAP
 from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
 
 from custom_components.ha_ragent.src.const import (
+    CONF_SELECTED_LANGUAGE,
     CONF_ALLOW_AUTO_EMBEDDING,
     DOMAIN,
     PLATFORMS,
@@ -132,14 +133,12 @@ async def _register_services(hass: HomeAssistant):
     if not hass.services.has_service(DOMAIN, "unload_models"):
         register_unload_models_service(hass)
 
-
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     """Set up the HA RAGent component."""
     hass.data.setdefault(DOMAIN, {})
     _ensure_llm_api_registered(hass)
     await _register_services(hass)
     return True
-
 
 async def _async_run_startup_embeddings(hass: HomeAssistant, entry: RAGentConfigEntry) -> None:
     """Run embedding of exposed tools and devices at startup and prevent concurrent runs."""
@@ -150,7 +149,7 @@ async def _async_run_startup_embeddings(hass: HomeAssistant, entry: RAGentConfig
     ]
 
     if not auto_embedding_subentry_ids:
-        _logger.debug("Skipping startup embeddings for %s because auto embedding is disabled for all subentries", entry.entry_id)
+        _logger.debug(f"Skipping startup embeddings for {entry.entry_id} because auto embedding is disabled for all subentries")
         return
 
     domain_data = hass.data.setdefault(DOMAIN, {})
@@ -160,10 +159,7 @@ async def _async_run_startup_embeddings(hass: HomeAssistant, entry: RAGentConfig
         domain_data[STARTUP_EMBEDDING_RUNNING_FLAG] = running_entries
 
     if entry.entry_id in running_entries:
-        _logger.info(
-            "Skipping startup embeddings for %s because a run is already in progress",
-            entry.entry_id,
-        )
+        _logger.info(f"Skipping startup embeddings for {entry.entry_id} because a run is already in progress")
         return
 
     running_entries.add(entry.entry_id)
@@ -182,13 +178,15 @@ async def _async_run_startup_embeddings(hass: HomeAssistant, entry: RAGentConfig
         )
     finally:
         running_entries.discard(entry.entry_id)
-    
+
+async def _async_forward_platforms_after_embeddings(hass: HomeAssistant, entry: RAGentConfigEntry) -> None:
+    """Make conversation entities available only after their indexes are ready."""
+    await _async_run_startup_embeddings(hass, entry)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
 async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry):
     """Set up HA Ragent from a config entry."""
     hass.data.setdefault(DOMAIN, {})
-    selected_language = entry.data.get("rag_selected_language", "en")
-    entry.translations = await RAGentTranslations.async_create(hass, selected_language)
 
     _ensure_llm_api_registered(hass)
     _cancel_scheduled_actions(hass, entry.subentries)
@@ -199,21 +197,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry):
         subentry_id: dict(subentry.data)
         for subentry_id, subentry in entry.subentries.items()
     }
-    
-    vector_db_backend_type = get_setting_value(CONF_VECTOR_DB_BACKEND_TYPE, entry.data)
-    embedding_backend_type = get_setting_value(CONF_EMBEDDING_BACKEND_TYPE, entry.data)
-    llm_backend_type = get_setting_value(CONF_LLM_BACKEND_TYPE, entry.data)
 
-    entry.vector_db_backend = _create_vector_db_client(hass, vector_db_backend_type, entry)
-    entry.embedder_backend = _create_embedding_client(hass, embedding_backend_type, entry)    
-    entry.llm_backend = _create_llm_client(hass, llm_backend_type, entry)
+    entry.translations = await RAGentTranslations.async_create(hass, get_setting_value(CONF_SELECTED_LANGUAGE, entry.data))
+    entry.vector_db_backend = _create_vector_db_client(hass, get_setting_value(CONF_VECTOR_DB_BACKEND_TYPE, entry.data), entry)
+    entry.embedder_backend = _create_embedding_client(hass, get_setting_value(CONF_EMBEDDING_BACKEND_TYPE, entry.data), entry)    
+    entry.llm_backend = _create_llm_client(hass, get_setting_value(CONF_LLM_BACKEND_TYPE, entry.data), entry)
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    
     if hass.is_running:
-        hass.async_create_task(_async_run_startup_embeddings(hass, entry))
+        await _async_forward_platforms_after_embeddings(hass, entry)
     else:
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, lambda _event: hass.add_job(_async_run_startup_embeddings(hass, entry)))
+        hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STARTED,
+            lambda _event: hass.add_job(
+                _async_forward_platforms_after_embeddings(hass, entry)
+            ),
+        )
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     await _register_services(hass)
