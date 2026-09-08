@@ -19,7 +19,7 @@ from custom_components.ha_ragent.src.homeassistant.ragent_api import RAGentLLMAP
 from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
 
 from custom_components.ha_ragent.src.const import (
-    CONF_TRANSLATIONS,
+    CONF_SELECTED_LANGUAGE,
     CONF_ALLOW_AUTO_EMBEDDING,
     DOMAIN,
     PLATFORMS,
@@ -187,7 +187,7 @@ async def _async_forward_platforms_after_embeddings(hass: HomeAssistant, entry: 
 async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry):
     """Set up HA Ragent from a config entry."""
     hass.data.setdefault(DOMAIN, {})
-    entry.translations = await RAGentTranslations.async_create(hass, get_setting_value(CONF_TRANSLATIONS, entry.data))
+    entry.translations = await RAGentTranslations.async_create(hass, get_setting_value(CONF_SELECTED_LANGUAGE, entry.data))
 
     _ensure_llm_api_registered(hass)
     _cancel_scheduled_actions(hass, entry.subentries)
