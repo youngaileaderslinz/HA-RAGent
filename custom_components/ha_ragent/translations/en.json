@@ -112,11 +112,11 @@
                     },
                     "data_description": {
                         "rag_prompt": "The system prompt that defines the behavior and personality of the assistant",
-                        "rag_retrieval_method": "How devices and tools are retrieved. Automatic combines vector, lexical and metadata matching; Vector search uses embeddings only; Lexical search uses names, aliases and metadata.",
+                        "rag_retrieval_method": "Choose how devices and tools are retrieved.",
                         "rag_allow_auto_embedding": "Automatically embed exposed devices and tools for this AI RAGent during startup and after configuration changes.",
                         "rag_allow_questions": "Allow the assistant to ask clarification questions and continue the conversation.",
                         "rag_enable_model_thinking": "Disables thinking of the model in order to speed up response times.",
-                        "rag_temperature": "Sampling temperature; higher = more random, lower = more deterministic",
+                        "rag_temperature": "Sampling temperature: higher = more random, lower = more deterministic",
                         "rag_max_tokens": "Maximum number of tokens the model may generate per response",
                         "rag_context_length": "How many past messages to include in the model context window",
                         "rag_max_tool_call_iterations": "Limit on how many times the agent may call external tools per request",

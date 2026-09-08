@@ -1,41 +1,34 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
 import voluptuous as vol
 
-try:
-    from homeassistant.const import CONF_LLM_HASS_API
-    from homeassistant.core import HomeAssistant
-    from homeassistant.helpers import llm
-except ImportError:
-    from custom_components.ha_ragent.src.mock import (
-        CONF_LLM_HASS_API,
-        MockHomeAssistant as HomeAssistant,
-        llm,
-    )
+from homeassistant.const import CONF_LLM_HASS_API
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import llm
 
 from custom_components.ha_ragent.src.const import (
     CONF_NUM_DEVICES_TO_EXTRACT,
     CONF_NUM_TOOLS_TO_EXTRACT,
-    DEFAULT_NUM_DEVICES_TO_EXTRACT,
-    DEFAULT_NUM_TOOLS_TO_EXTRACT,
     DOMAIN,
     RAGENT_MAX_SEARCH_QUERY_CHARS,
+    RAGENT_MAX_SEARCH_QUERIES,
     RAGENT_SEMANTIC_SEARCH_TOOL_NAME,
-    CONF_RETRIEVAL_METHOD,
-    RETRIEVAL_METHOD_AUTOMATIC,
     RETRIEVAL_METHOD_VECTOR,
     RETRIEVAL_METHOD_LEXICAL,
+    TRANSLATION_ERROR_SEARCH_QUERY_EMPTY,
+    TRANSLATION_ERROR_SEARCH_QUERIES_TOO_MANY,
 )
 from custom_components.ha_ragent.src.models.embedding.device import Device
 from custom_components.ha_ragent.src.models.embedding.device_embedding import DeviceEmbedding
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_embedding import LlmToolEmbedding
 from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
-from custom_components.ha_ragent.src.utils import get_tool_description
+from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
+from custom_components.ha_ragent.src.translation import RAGentTranslations
+from custom_components.ha_ragent.src.utils import get_setting_value
 
 _logger = logging.getLogger(__name__)
 
@@ -44,7 +37,9 @@ class RAGentSemanticSearchTool(llm.Tool):
     name = RAGENT_SEMANTIC_SEARCH_TOOL_NAME
     parameters = vol.Schema(
         {
-            vol.Required("search_query"): str,
+            vol.Required("search_queries"): vol.All(
+                [str], vol.Length(min=1, max=RAGENT_MAX_SEARCH_QUERIES)
+            ),
             vol.Optional("scope", default="devices_and_tools"): vol.In(["devices", "tools", "devices_and_tools"]),
         }
     )
@@ -53,7 +48,8 @@ class RAGentSemanticSearchTool(llm.Tool):
         self.hass = hass
         self.entry_id = entry_id
         self.subentry_id = subentry_id
-        self.description = get_tool_description(language, RAGENT_SEMANTIC_SEARCH_TOOL_NAME)
+        self.translations = RAGentTranslations(language or "en")
+        self.description = self.translations.tool(RAGENT_SEMANTIC_SEARCH_TOOL_NAME)
         self._latest_request = ""
         self._contextual_query = ""
         self._candidate_context: list[dict[str, object]] = []
@@ -152,19 +148,79 @@ class RAGentSemanticSearchTool(llm.Tool):
         entry_options = getattr(entry, "options", {}) or {}
         subentry_data = getattr(subentry, "data", {}) or {}
         runtime_options = {**entry_options, **subentry_data}
-        device_limit = int(runtime_options.get(CONF_NUM_DEVICES_TO_EXTRACT, DEFAULT_NUM_DEVICES_TO_EXTRACT))
-        tool_limit = int(runtime_options.get(CONF_NUM_TOOLS_TO_EXTRACT, DEFAULT_NUM_TOOLS_TO_EXTRACT))
+        device_limit = int(get_setting_value(CONF_NUM_DEVICES_TO_EXTRACT, runtime_options))
+        tool_limit = int(get_setting_value(CONF_NUM_TOOLS_TO_EXTRACT, runtime_options))
         return device_limit, tool_limit
+
+    def _model_search_queries(self, tool_input: llm.ToolInput) -> list[str]:
+        """Return the distinct focused search intents supplied by the model."""
+        raw_queries = tool_input.tool_args.get("search_queries")
+        if raw_queries is None:
+            raw_queries = [tool_input.tool_args.get("search_query")]
+        elif isinstance(raw_queries, str):
+            raw_queries = [raw_queries]
+
+        queries: list[str] = []
+        seen: set[str] = set()
+        for raw_query in raw_queries if isinstance(raw_queries, list) else []:
+            query = self._clean(raw_query)
+            normalized = query.casefold()
+            if query and normalized not in seen:
+                queries.append(query)
+                seen.add(normalized)
+        return queries
 
     async def _validate_query(self, tool_input: llm.ToolInput) -> str | None:
         """Prefer the model's explicit search intent, with user context as fallback."""
-        model_search_query = self._clean(tool_input.tool_args.get("search_query"))
+        model_search_query = next(iter(self._model_search_queries(tool_input)), "")
         if model_search_query:
             sections = [f"Search intent: {model_search_query}"]
             if self._contextual_query:
                 sections.append(self._contextual_query)
             return "\n".join(sections)[:RAGENT_MAX_SEARCH_QUERY_CHARS].strip()
         return self._contextual_query or None
+
+    async def _validate_queries(self, tool_input: llm.ToolInput) -> list[str]:
+        """Keep explicit intents isolated; retain legacy single-query context."""
+        queries = self._model_search_queries(tool_input)
+        if "search_queries" in tool_input.tool_args:
+            return [query[:RAGENT_MAX_SEARCH_QUERY_CHARS] for query in queries]
+        if not queries:
+            return [self._contextual_query] if self._contextual_query else []
+        return [
+            "\n".join(
+                section
+                for section in (f"Search intent: {query}", self._contextual_query)
+                if section
+            )[:RAGENT_MAX_SEARCH_QUERY_CHARS].strip()
+            for query in queries
+        ]
+
+    @staticmethod
+    def _merge_query_candidates(
+        candidate_batches: list[list[dict[str, object]]],
+        limit: int,
+    ) -> list[dict[str, object]]:
+        """Take each query's next unseen candidate in turn within the limit."""
+        merged: list[dict[str, object]] = []
+        seen_names: set[str] = set()
+        batches = [iter(candidates) for candidates in candidate_batches]
+        while len(merged) < limit:
+            added = False
+            for candidates in batches:
+                for candidate in candidates:
+                    name = str(candidate["name"])
+                    if name in seen_names:
+                        continue
+                    merged.append(candidate)
+                    seen_names.add(name)
+                    added = True
+                    break
+                if len(merged) >= limit:
+                    break
+            if not added:
+                break
+        return merged
 
     def _iter_searchable_entries(self):
         """Yield only the active entry and subentry."""
@@ -180,18 +236,33 @@ class RAGentSemanticSearchTool(llm.Tool):
 
     async def _embed_query_for_subentry(self, entry: Any, subentry: Any, query: str) -> list[float]:
         """Embed a search query for a specific subentry."""
-        return await entry.embedder_backend.async_embed_text(dict(subentry.data), query)
+        options = {**(getattr(entry, "options", {}) or {}), **subentry.data}
+        if RetrievalHelper.retrieval_method(options) == RETRIEVAL_METHOD_LEXICAL:
+            return []
+        try:
+            return await entry.embedder_backend.async_embed_text(dict(subentry.data), query) or []
+        except Exception as err:
+            _logger.warning("Search embedding failed: %s", err)
+            return []
 
-    def _device_search_query(self, model_search_query: str, fallback_query: str) -> str:
-        """Use trusted request text for devices instead of a model rewrite."""
+    def _device_search_query(
+        self, model_search_query: str, fallback_query: str, *, focused: bool = False,
+    ) -> str:
+        """Search a focused target without adding unrelated tasks."""
+        if focused:
+            return model_search_query[:RAGENT_MAX_SEARCH_QUERY_CHARS]
         return self._latest_request or model_search_query or fallback_query
 
     def _tool_search_query(
         self,
         model_search_query: str,
         devices: list[Device | dict[str, object]],
+        *,
+        focused: bool = False,
     ) -> str:
-        """Use only canonical action and resolved domains for tool retrieval."""
+        """Keep each explicit query independent of the compound request."""
+        if focused:
+            return model_search_query[:RAGENT_MAX_SEARCH_QUERY_CHARS]
         return RetrievalHelper.build_tool_search_query(
             self._latest_request,
             model_search_query,
@@ -214,7 +285,7 @@ class RAGentSemanticSearchTool(llm.Tool):
                 "No tools were retrieved. Do not invent a tool name; "
                 "broaden retrieval or report that no action tool is available.",
             )
-        if confidence == "low":
+        if confidence in {"none", "low"}:
             return (
                 "weak_candidates",
                 True,
@@ -231,10 +302,13 @@ class RAGentSemanticSearchTool(llm.Tool):
             "friendly_name": device.friendly_name,
             "area": device.area_name,
             "floor": device.floor_name,
+            "area_aliases": device.area_aliases or [],
+            "floor_aliases": device.floor_aliases or [],
             "domain": device.domain,
             "device_class": device.device_class,
             "aliases": device.aliases or [],
             "state": state.state if state else None,
+            "attributes": Device.clean_attributes(state.attributes) if state else {},
             "unit_of_measurement": (
                 state.attributes.get("unit_of_measurement")
                 if state
@@ -243,15 +317,22 @@ class RAGentSemanticSearchTool(llm.Tool):
         }
 
     async def async_call(self, tool_input, *args, **kwargs) -> dict[str, object]:
-        model_search_query = self._clean(tool_input.tool_args.get("search_query"))
-        query = await self._validate_query(tool_input)
-        if not query:
-            return {"error": "search_query must not be empty"}
-        device_query = self._device_search_query(model_search_query, query)
+        model_search_queries = self._model_search_queries(tool_input)
+        raw_queries = tool_input.tool_args.get("search_queries", model_search_queries)
+        if len(raw_queries) > RAGENT_MAX_SEARCH_QUERIES:
+            return {
+                "error": self.translations.error(
+                    TRANSLATION_ERROR_SEARCH_QUERIES_TOO_MANY,
+                    max_queries=RAGENT_MAX_SEARCH_QUERIES,
+                )
+            }
+        queries = await self._validate_queries(tool_input)
+        if not queries:
+            return {"error": self.translations.error(TRANSLATION_ERROR_SEARCH_QUERY_EMPTY)}
+        query = queries[0]
         _logger.debug(
-            "Semantic search model query=%r trusted device query=%r",
-            model_search_query,
-            device_query,
+            "Semantic search model queries=%r",
+            model_search_queries,
         )
 
         scope = (
@@ -264,187 +345,165 @@ class RAGentSemanticSearchTool(llm.Tool):
         devices: list[dict[str, object]] = []
         tools: list[dict[str, object]] = []
         errors: list[str] = []
-        seen_device_ids: set[str] = set()
-        seen_tool_names: set[str] = set()
+        focused = "search_queries" in tool_input.tool_args
+        device_queries: list[str] = []
+        device_candidate_batches: list[list[dict[str, object]]] = [[] for _ in queries]
+        result_tool_limit = 0
+        tool_confidences: list[str] = []
         device_limit = 0
         tool_limit = 0
         tool_query = ""
+        tool_queries: list[str] = []
+        tool_candidate_batches: list[list[dict[str, object]]] = [
+            [] for _ in queries
+        ]
         tool_confidence = "not_requested"
 
         for entry, subentry_id, subentry, device_limit, tool_limit in self._iter_searchable_entries():
-            try:
-                retrieval_method = str(getattr(subentry, "data", {}).get(CONF_RETRIEVAL_METHOD, RETRIEVAL_METHOD_AUTOMATIC)).strip().lower()
-                if retrieval_method not in {RETRIEVAL_METHOD_AUTOMATIC, RETRIEVAL_METHOD_VECTOR, RETRIEVAL_METHOD_LEXICAL}:
-                    retrieval_method = RETRIEVAL_METHOD_AUTOMATIC
-                compatible_devices: list[Device | dict[str, object]] = list(self._candidate_context)
-                if search_devices and len(devices) < device_limit:
-                    device_embedding = await self._embed_query_for_subentry(
-                        entry,
-                        subentry,
-                        device_query,
+            result_tool_limit = max(result_tool_limit, tool_limit)
+            for query_index, model_query in enumerate(model_search_queries or [""]):
+                try:
+                    options = {**(getattr(entry, "options", {}) or {}), **subentry.data}
+                    retrieval_method = RetrievalHelper.retrieval_method(options)
+                    compatible_devices: list[Device | dict[str, object]] = list(self._candidate_context)
+                    device_query = self._device_search_query(model_query, queries[query_index], focused=focused)
+                    if search_devices:
+                        device_queries.append(device_query)
+                    tool_query = self._tool_search_query(model_query, compatible_devices, focused=focused)
+                    shared_query = tool_query if search_tools else device_query
+                    shared_embedding = QueryEmbedding(
+                        lambda query=shared_query: self._embed_query_for_subentry(entry, subentry, query)
                     )
-                    collection_name = f"devices_{subentry_id}"
-                    candidate_limit = RetrievalHelper.adaptive_candidate_limit(device_limit)
-                    scored_devices, all_devices = await asyncio.gather(
-                        entry.vector_db_backend.async_retrieve_scored_objects(
-                            DeviceEmbedding,
-                            dict(subentry.data),
-                            collection_name,
-                            device_embedding,
-                            candidate_limit,
-                        ),
-                        entry.vector_db_backend.async_get_lexical_objects(
-                            DeviceEmbedding,
-                            dict(subentry.data),
-                            collection_name,
-                        ),
-                    )
-                    retrieved_devices = RetrievalHelper.rank_scored_candidates(
-                        scored_devices,
-                        all_devices,
-                        device_query,
-                        lambda device: device.id,
-                        lambda device: (
-                            device.id,
-                            device.friendly_name,
-                            *(device.aliases or []),
-                            device.area_name,
-                            device.floor_name,
-                            *(device.domain or []),
-                            device.device_class,
-                            *(device.device_labels or []),
-                        ),
-                        candidate_limit,
-                        metadata_score=lambda device: 2.0 * RetrievalHelper.device_target_score(
-                            device_query,
-                            device,
-                        ),
-                        trim_confident=False,
-                    )
-                    if retrieval_method == RETRIEVAL_METHOD_VECTOR:
-                        all_devices = []
-                    elif retrieval_method == RETRIEVAL_METHOD_LEXICAL:
-                        scored_devices = []
-                    retrieved_devices = RetrievalHelper.select_device_candidates(
-                        device_query,
-                        retrieved_devices,
-                        device_limit,
-                    )
-                    if retrieved_devices:
-                        compatible_devices = retrieved_devices
-                        self.refresh_candidates([
+                    if search_devices and device_limit > 0:
+                        collection_name = f"devices_{subentry_id}"
+                        candidate_limit = RetrievalHelper.adaptive_candidate_limit(device_limit)
+                        scored_devices, all_devices = await RetrievalHelper.async_retrieve_sources(
+                            entry.vector_db_backend, DeviceEmbedding, options,
+                            collection_name, shared_embedding, candidate_limit, query=device_query,
+                        )
+                        if retrieval_method == RETRIEVAL_METHOD_VECTOR:
+                            retrieved_devices = [result.item for result in scored_devices[:device_limit]]
+                        else:
+                            retrieved_devices = RetrievalHelper.rank_scored_candidates(
+                                scored_devices,
+                                all_devices,
+                                device_query,
+                                lambda device: device.id,
+                                lambda device: (
+                                    device.id,
+                                    device.friendly_name,
+                                    *(device.aliases or []),
+                                    device.area_name,
+                                    device.floor_name,
+                                    *(device.area_aliases or []),
+                                    *(device.floor_aliases or []),
+                                    *(device.domain or []),
+                                    device.device_class,
+                                    *(device.device_labels or []),
+                                ),
+                                candidate_limit,
+                                metadata_score=lambda device: 2.0 * RetrievalHelper.device_target_score(
+                                    device_query,
+                                    device,
+                                ),
+                                trim_confident=False,
+                            )
+                            retrieved_devices = RetrievalHelper.select_device_candidates(
+                                device_query, retrieved_devices, device_limit,
+                            )
+                        if retrieved_devices:
+                            compatible_devices = retrieved_devices
+                        device_candidate_batches[query_index].extend(
                             self._device_candidate(device)
                             for device in retrieved_devices
                             if isinstance(device, Device)
-                        ])
-                    for device in retrieved_devices:
-                        if not isinstance(device, Device) or device.id in seen_device_ids:
-                            continue
-                        seen_device_ids.add(device.id)
-                        devices.append(self._device_candidate(device))
-
-                if search_tools and len(tools) < tool_limit:
-                    tool_query = self._tool_search_query(
-                        model_search_query,
-                        compatible_devices,
-                    )
-                    tool_embedding = await self._embed_query_for_subentry(
-                        entry,
-                        subentry,
-                        tool_query,
-                    )
-                    collection_name = f"tools_{subentry_id}"
-                    candidate_limit = RetrievalHelper.adaptive_candidate_limit(tool_limit)
-                    scored_tools, all_tools = await asyncio.gather(
-                        entry.vector_db_backend.async_retrieve_scored_objects(
-                            LlmToolEmbedding,
-                            dict(subentry.data),
-                            collection_name,
-                            tool_embedding,
-                            candidate_limit,
-                        ),
-                        entry.vector_db_backend.async_get_lexical_objects(
-                            LlmToolEmbedding,
-                            dict(subentry.data),
-                            collection_name,
-                        ),
-                    )
-                    if retrieval_method == RETRIEVAL_METHOD_VECTOR:
-                        all_tools = []
-                    elif retrieval_method == RETRIEVAL_METHOD_LEXICAL:
-                        scored_tools = []
-                    scored_tools, candidate_tools = RetrievalHelper.build_tool_candidate_pool(
-                        scored_tools,
-                        all_tools,
-                        tool_query,
-                        compatible_devices,
-                    )
-                    semantic_ranks = {
-                        result.item.name: result.rank
-                        for result in scored_tools
-                    }
-                    semantic_scores = {
-                        result.item.name: result.score
-                        for result in scored_tools
-                    }
-                    retrieved_tools = RetrievalHelper.rank_tool_candidates(
-                        scored_tools,
-                        candidate_tools,
-                        tool_query,
-                        compatible_devices,
-                        candidate_limit,
-                    )
-                    tool_confidence = RetrievalHelper.tool_search_confidence(
-                        retrieved_tools,
-                        tool_query,
-                        compatible_devices,
-                    )
-                    result_tool_limit = tool_limit
-                    if tool_confidence == "low":
-                        result_tool_limit = min(
-                            candidate_limit,
-                            max(tool_limit * 2, tool_limit + 2),
                         )
-                    for tool in retrieved_tools:
-                        if not isinstance(tool, LlmTool) or tool.name in seen_tool_names:
-                            continue
-                        seen_tool_names.add(tool.name)
-                        ranking_signals = RetrievalHelper.tool_ranking_signals(
-                            tool,
+
+                    if search_tools and tool_limit > 0:
+                        tool_queries.append(tool_query)
+                        collection_name = f"tools_{subentry_id}"
+                        candidate_limit = RetrievalHelper.adaptive_candidate_limit(tool_limit)
+                        scored_tools, all_tools = await RetrievalHelper.async_retrieve_sources(
+                            entry.vector_db_backend, LlmToolEmbedding, options,
+                            collection_name, shared_embedding, candidate_limit, query=tool_query,
+                        )
+                        semantic_ranks = {
+                            result.item.name: result.rank
+                            for result in scored_tools
+                        }
+                        semantic_scores = {
+                            result.item.name: result.score
+                            for result in scored_tools
+                        }
+                        if retrieval_method == RETRIEVAL_METHOD_VECTOR:
+                            retrieved_tools = [result.item for result in scored_tools[:tool_limit]]
+                        else:
+                            retrieved_tools = RetrievalHelper.rank_tool_candidates(
+                                scored_tools,
+                                all_tools,
+                                tool_query,
+                                compatible_devices,
+                                max(tool_limit, RetrievalHelper.expanded_tool_limit(tool_limit)),
+                            )
+                        query_confidence = RetrievalHelper.tool_search_confidence(
+                            retrieved_tools[:tool_limit],
                             tool_query,
                             compatible_devices,
-                            semantic_rank=semantic_ranks.get(tool.name),
-                            semantic_score=semantic_scores.get(tool.name),
                         )
-                        tools.append(
-                            {
-                                "name": tool.name,
-                                "description": tool.description,
-                                "parameters": tool.parameters or {},
-                                "metadata": tool.metadata.to_dict() if tool.metadata else None,
-                                "canonical_action": tool.canonical_action,
-                                "supported_domains": tool.canonical_supported_domains,
-                                "ranking_signals": {
-                                    name: round(value, 4)
-                                    for name, value in ranking_signals.items()
-                                },
-                                "retrieval_score": round(
-                                    RetrievalHelper.tool_signal_score(ranking_signals),
-                                    4,
-                                ),
-                            }
-                        )
-                        if len(tools) >= result_tool_limit:
-                            break
-            except Exception as err:
-                errors.append(f"Failed to search subentry {subentry.title}: {err}")
+                        tool_confidences.append(query_confidence)
+                        query_tool_limit = tool_limit
+                        if query_confidence == "low" and retrieval_method != RETRIEVAL_METHOD_VECTOR:
+                            query_tool_limit = max(tool_limit, RetrievalHelper.expanded_tool_limit(tool_limit))
+                        result_tool_limit = max(result_tool_limit, query_tool_limit)
+                        seen_query_tool_names: set[str] = set()
+                        for tool in retrieved_tools:
+                            if not isinstance(tool, LlmTool) or tool.name in seen_query_tool_names:
+                                continue
+                            seen_query_tool_names.add(tool.name)
+                            ranking_signals = RetrievalHelper.tool_ranking_signals(
+                                tool,
+                                tool_query,
+                                compatible_devices,
+                                semantic_rank=semantic_ranks.get(tool.name),
+                                semantic_score=semantic_scores.get(tool.name),
+                            )
+                            tool_candidate_batches[query_index].append(
+                                {
+                                    "name": tool.name,
+                                    "description": tool.description,
+                                    "parameters": tool.parameters or {},
+                                    "metadata": tool.metadata.to_dict() if tool.metadata else None,
+                                    "canonical_action": tool.canonical_action,
+                                    "supported_domains": tool.canonical_supported_domains,
+                                    "ranking_signals": {
+                                        name: round(value, 4)
+                                        for name, value in ranking_signals.items()
+                                    },
+                                    "retrieval_score": round(
+                                        RetrievalHelper.tool_signal_score(ranking_signals),
+                                        4,
+                                    ),
+                                }
+                            )
+                            if len(tool_candidate_batches[query_index]) >= query_tool_limit:
+                                break
+                except Exception as err:
+                    errors.append(f"Failed to search subentry {subentry.title}: {err}")
+                    if search_tools:
+                        tool_confidences.append("none")
 
-        returned_devices = RetrievalHelper.select_device_candidates(
-            device_query,
-            devices,
-            device_limit,
-        )
-        if not returned_devices:
+        if search_tools:
+            tools = self._merge_query_candidates(tool_candidate_batches, result_tool_limit)
+            # A strong result for one task does not establish coverage of another.
+            confidence_rank = {"none": 0, "low": 1, "medium": 2, "high": 3}
+            tool_confidence = min(tool_confidences, key=confidence_rank.get) if tool_confidences else "none"
+        devices = self._merge_query_candidates(device_candidate_batches, device_limit)
+        if devices:
+            self.refresh_candidates(devices)
+
+        # Device selection already applied the configured mode above.
+        returned_devices = devices
+        if not returned_devices and search_devices:
             returned_devices = list(self._candidate_context[:8])
         tool_status, fallback_required, tool_message = self._tool_search_feedback(
             search_tools,
@@ -458,8 +517,11 @@ class RAGentSemanticSearchTool(llm.Tool):
                 "Use the included state and location data directly when it answers the request."
             ),
             "search_query": query,
-            "device_search_query": device_query if search_devices else "",
-            "tool_search_query": tool_query if search_tools else "",
+            "search_queries": queries,
+            "device_search_query": device_queries[0] if device_queries else "",
+            "device_search_queries": device_queries,
+            "tool_search_query": tool_queries[0] if search_tools and tool_queries else "",
+            "tool_search_queries": tool_queries if search_tools else [],
             "scope": scope,
             "candidate_devices": returned_devices,
             "candidate_tools": tools if search_tools else [],

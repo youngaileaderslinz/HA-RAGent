@@ -25,21 +25,18 @@ from custom_components.ha_ragent.src.const import (
     CONF_MAX_TOKENS,
     CONF_MAX_TOOL_CALL_ITERATIONS,
     CONF_PROMPT,
-    CONF_ALLOW_AUTO_EMBEDDING,
     CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
     CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
     CONF_SELECTED_LANGUAGE,
 
-    DEFAULT_ALLOW_AUTO_EMBEDDING,
-    DEFAULT_OPTIONS,
-    DEFAULT_PROMPT,
+    DEFAULT_SETTINGS,
     CONF_EXCLUDED_TOOLS,
     CONF_NUM_MEMORIES_TO_EXTRACT,
-    CONF_MAX_MEMORY_ENTRIES,
+    CONF_MAX_MEMORY_ENTRIES
 )
 
 from custom_components.ha_ragent.src.utils import (
-    try_parse_int
+    try_parse_int, get_setting_value
 )
 
 from custom_components.ha_ragent.src.homeassistant.ui_schemas import (
@@ -113,13 +110,11 @@ class RagentSubentryFlowHandler(ConfigSubentryFlow):
 
         if CONF_PROMPT not in self.model_config:
             selected_language = self.model_config.get(
-                CONF_SELECTED_LANGUAGE, entry.options.get(CONF_SELECTED_LANGUAGE, "en")
+                CONF_SELECTED_LANGUAGE, get_setting_value(CONF_SELECTED_LANGUAGE, entry.options)
             )
 
-            selected_default_options = {**DEFAULT_OPTIONS}
-
-            selected_default_options[CONF_PROMPT] = RAGent.build_base_prompt_template(selected_language, selected_default_options.get(CONF_PROMPT, DEFAULT_PROMPT))
-            
+            selected_default_options = {**DEFAULT_SETTINGS}
+            selected_default_options[CONF_PROMPT] = RAGent.build_base_prompt_template(selected_language, get_setting_value(CONF_PROMPT, selected_default_options))
             self.model_config = {**selected_default_options, **self.model_config}
 
         excluded_tool_names = { name for name in self.model_config.get(CONF_EXCLUDED_TOOLS, []) if isinstance(name, str) }

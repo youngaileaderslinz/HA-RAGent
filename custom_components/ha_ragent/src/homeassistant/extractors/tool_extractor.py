@@ -84,7 +84,7 @@ class ToolExtractor:
         return list(values), universal, has_field
 
     def _extract_tool_metadata(self, tool_name: str, parameters: Any) -> ToolMetadata:
-        metadata = ToolMetadata(family=ToolMetadata.family_from_name(tool_name))
+        metadata = ToolMetadata()
 
         if not isinstance(parameters, dict):
             return metadata
@@ -191,10 +191,10 @@ class ToolExtractor:
 
         except HomeAssistantError as err:
             _logger.warning(f"Error getting LLM API for tool extraction: {err}")
-            return None
+            return []
         except Exception as err:
             _logger.error(f"Error extracting tools from LLM API: {err}", exc_info=True)
-            return None
+            return []
         finally:
             self._remove_fake_timer_device()
 

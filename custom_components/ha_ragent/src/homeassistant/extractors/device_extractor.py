@@ -36,6 +36,8 @@ class DeviceExtractor:
 
             area_name = ""
             floor_name = ""
+            area_aliases = []
+            floor_aliases = []
             entity_entry = entity_reg.async_get(entity_id)
             device_entry = (
                 device_reg.async_get(entity_entry.device_id)
@@ -51,9 +53,11 @@ class DeviceExtractor:
 
                 if area:
                     area_name = area.name
+                    area_aliases = sorted(getattr(area, "aliases", ()) or ())
                     if area.floor_id:
                         floor = floor_reg.async_get_floor(area.floor_id)
                         floor_name = floor.name if floor else ""
+                        floor_aliases = sorted(getattr(floor, "aliases", ()) or ())
                 
             device_labels = []
             if entity_entry and entity_entry.labels:
@@ -77,6 +81,8 @@ class DeviceExtractor:
                 domain=[domain],
                 floor_name=floor_name,
                 area_name=area_name,
+                area_aliases=area_aliases,
+                floor_aliases=floor_aliases,
                 device_labels=device_labels,
                 aliases=aliases,
                 services=services,

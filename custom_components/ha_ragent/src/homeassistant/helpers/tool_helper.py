@@ -2,20 +2,10 @@ import logging
 import json
 from typing import Any, Dict, List, Tuple
 
-try:
-    from homeassistant.core import HomeAssistant, JsonObjectType
-    from homeassistant.helpers.llm import ToolInput
-    from homeassistant.helpers import area_registry, device_registry, entity_registry, floor_registry
-    from homeassistant.helpers.entity_registry import RegistryEntry as EntityEntry
-except ImportError:
-    from custom_components.ha_ragent.src.mock import (
-        MockHomeAssistant as HomeAssistant,
-        MockToolInput as ToolInput,
-    )
-    area_registry = device_registry = floor_registry = None
-    entity_registry = None
-    JsonObjectType = dict[str, Any]
-    EntityEntry = Any
+from homeassistant.core import HomeAssistant, JsonObjectType
+from homeassistant.helpers.llm import ToolInput
+from homeassistant.helpers import area_registry, device_registry, entity_registry, floor_registry
+from homeassistant.helpers.entity_registry import RegistryEntry as EntityEntry
 
 from custom_components.ha_ragent.src.const import (
     RAGENT_SEMANTIC_SEARCH_TOOL_NAME,

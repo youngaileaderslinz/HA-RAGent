@@ -2,10 +2,7 @@ import logging
 import os
 from typing import Any, Dict, List
 
-try:
-    from homeassistant.core import HomeAssistant
-except ImportError:
-    from custom_components.ha_ragent.src.mock import MockHomeAssistant as HomeAssistant
+from homeassistant.core import HomeAssistant
 
 import faiss
 import numpy as np
@@ -199,7 +196,7 @@ class FaissDbBackend(ABaseDbBackend):
         ids = set(memory_ids)
         changed = False
         for metadata in self._metadata[collection_name]:
-            if metadata.get("memory_id") in ids:
+            if metadata.get("id") in ids:
                 metadata["retrieval_count"] = int(metadata.get("retrieval_count", 0) or 0) + 1
                 changed = True
 

@@ -10,41 +10,110 @@ from typing import Any
 from collections.abc import Awaitable
 
 import pytest
+import aiohttp
+from homeassistant.core import HomeAssistant
 
 if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     import tests
 
 from custom_components.ha_ragent.src.const import (
     CONF_LLM_HOST,
+    CONF_LLM_API_KEY,
     CONF_LLM_MODEL,
     CONF_LLM_PORT,
     CONF_LLM_SSL,
     RAGENT_PREFIXED_REQUIRED_TOOL_NAMES,
+    CONF_CONTEXT_LENGTH,
+    CONF_ENABLE_MODEL_THINKING,
+    CONF_MAX_TOKENS,
+    CONF_TEMPERATURE,
 )
 from custom_components.ha_ragent.src.models.model_info import ModelInfo
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
-from custom_components.ha_ragent.src.models.chat.chat_message import ChatMessage
-from custom_components.ha_ragent.src.backends.llm.base_backend import ALlmBaseBackend
-from custom_components.ha_ragent.src.mock import MockHomeAssistant
-
-
-from tests.mocks import (
-    MOCK_LLM_TOOLS,
-    MOCK_MESSAGES,
-    MOCK_MESSAGE_CONTEXT_OVERFLOW,
-    MOCK_TOOL_HISTORY,
-    MOCK_OLLAMA_CHAT_CONFIG,
-    MOCK_OLLAMA_CHAT_CONFIG_INVALID,
-    MOCK_OLLAMA_CONNECTION_USER_INPUT,
-    MOCK_OLLAMA_CONNECTION_USER_INPUT_INVALID,
-    MOCK_OPENAI_CHAT_CONFIG,
-    MOCK_OPENAI_CHAT_CONFIG_INVALID,
-    MOCK_OPENAI_CONNECTION_USER_INPUT,
-    MOCK_OPENAI_CONNECTION_USER_INPUT_INVALID,
+from custom_components.ha_ragent.src.models.chat.chat_message import (
+    ChatFunction,
+    ChatMessage,
+    ChatToolCall,
 )
+from custom_components.ha_ragent.src.backends.llm.base_backend import ALlmBaseBackend
+
+
 from custom_components.ha_ragent.src.backends.llm.openai_backend import OpenAiLlmBackend
+from custom_components.ha_ragent.src.backends.llm import (
+    ollama_backend as ollama_backend_module,
+)
 from custom_components.ha_ragent.src.backends.llm.ollama_backend import OllamaLlmBackend
+
+
+MOCK_LLM_DEFAULT_OPTIONS = {
+    CONF_LLM_HOST: "llamacpp",
+    CONF_LLM_SSL: False,
+    CONF_LLM_API_KEY: None,
+}
+MOCK_OPENAI_CONNECTION_USER_INPUT = {**MOCK_LLM_DEFAULT_OPTIONS, CONF_LLM_PORT: 8080}
+MOCK_OPENAI_CONNECTION_USER_INPUT_INVALID = {
+    **MOCK_OPENAI_CONNECTION_USER_INPUT,
+    CONF_LLM_HOST: "invalid_host",
+}
+MOCK_OLLAMA_CONNECTION_USER_INPUT = {**MOCK_LLM_DEFAULT_OPTIONS, CONF_LLM_PORT: 11434}
+MOCK_OLLAMA_CONNECTION_USER_INPUT[CONF_LLM_HOST] = "ollama"
+MOCK_OLLAMA_CONNECTION_USER_INPUT_INVALID = {
+    **MOCK_OLLAMA_CONNECTION_USER_INPUT,
+    CONF_LLM_HOST: "invalid_host",
+}
+MOCK_OPENAI_CHAT_CONFIG = {
+    **MOCK_OPENAI_CONNECTION_USER_INPUT,
+    CONF_LLM_MODEL: "Qwen/Qwen3-1.7B-GGUF:Q8_0",
+    CONF_TEMPERATURE: 0.2,
+    CONF_MAX_TOKENS: 128,
+    CONF_ENABLE_MODEL_THINKING: False,
+}
+MOCK_OPENAI_CHAT_CONFIG_INVALID = {**MOCK_OPENAI_CHAT_CONFIG, CONF_LLM_MODEL: "invalid_model"}
+MOCK_OLLAMA_CHAT_CONFIG = {
+    **MOCK_OLLAMA_CONNECTION_USER_INPUT,
+    CONF_LLM_MODEL: "qwen3:1.7b",
+    CONF_TEMPERATURE: 0.2,
+    CONF_MAX_TOKENS: 128,
+    CONF_ENABLE_MODEL_THINKING: False,
+    CONF_CONTEXT_LENGTH: 4096,
+}
+MOCK_OLLAMA_CHAT_CONFIG_INVALID = {**MOCK_OLLAMA_CHAT_CONFIG, CONF_LLM_MODEL: "invalid_model"}
+MOCK_LLM_TOOLS = [
+    LlmTool(name="test_tool", description="A tool used by backend tests.", parameters={}),
+    LlmTool(name="another_tool", description="Another tool used by backend tests.", parameters={}),
+]
+MOCK_MESSAGES = [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "Hello"},
+]
+MOCK_TOOL_HISTORY: list[ChatMessage] = [
+    ChatMessage(role="system", content="Follow instructions."),
+    ChatMessage(role="user", content="Turn on the desk light."),
+    ChatMessage(
+        role="assistant",
+        content="",
+        tool_calls=[
+            ChatToolCall(
+                id="call_1",
+                type="function",
+                function=ChatFunction(name="HassTurnOn", arguments={"name": "Desk light"}),
+            )
+        ],
+    ),
+    ChatMessage(
+        role="tool",
+        content='{"success": ["light.desk"]}',
+        tool_call_id="call_1",
+        tool_name="HassTurnOn",
+    ),
+]
+MOCK_MESSAGE_CONTEXT_OVERFLOW = [
+    ChatMessage(
+        role="user",
+        content="".join(f"Message Overflow INDEX: {index}" for index in range(10000)),
+    )
+]
 
 @dataclass(frozen=True)
 class BackendCase:
@@ -78,19 +147,31 @@ def backend_case(request: pytest.FixtureRequest) -> BackendCase:
     return request.param
 
 @pytest.fixture
-def hass() -> MockHomeAssistant:
-    """Provide an isolated Home Assistant mock for each test."""
-    return MockHomeAssistant()
+def hass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Provide native Home Assistant with an isolated Ollama HTTP session."""
+    loop = asyncio.new_event_loop()
 
-def _run_async_test(hass: MockHomeAssistant, test: Awaitable[None]) -> None:
-    """Run an async test and close resources before its event loop exits."""
-    async def run() -> None:
-        try:
-            await test
-        finally:
-            await hass.async_close()
+    async def create() -> tuple[HomeAssistant, aiohttp.ClientSession]:
+        instance = HomeAssistant(str(tmp_path))
+        await instance.async_start()
+        return instance, aiohttp.ClientSession()
 
-    asyncio.run(run())
+    instance, session = loop.run_until_complete(create())
+    monkeypatch.setattr(
+        ollama_backend_module,
+        "async_get_clientsession",
+        lambda _hass: session,
+    )
+    try:
+        yield instance
+    finally:
+        loop.run_until_complete(session.close())
+        loop.run_until_complete(instance.async_stop(force=True))
+        loop.close()
+
+def _run_async_test(hass: HomeAssistant, test: Awaitable[None]) -> None:
+    """Run an async test on the Home Assistant instance's event loop."""
+    hass.loop.run_until_complete(test)
 
 @pytest.fixture(autouse=True)
 def suppress_logging() -> Any:
@@ -215,7 +296,7 @@ async def _async_test_send_chat_request(
     await _async_test_send_chat_request_overflow_failure(backend_valid, chat_config)
     await _async_test_send_chat_request_connection_failure(backend_invalid, chat_config_invalid)
 
-def test_init(backend_case: BackendCase, hass: MockHomeAssistant) -> None:
+def test_init(backend_case: BackendCase, hass: HomeAssistant) -> None:
     """Test that the backend can be initialized with a mocked Home Assistant."""
     backend = backend_case.backend_class(hass, backend_case.user_input)
     assert backend._url_base == {
@@ -224,7 +305,7 @@ def test_init(backend_case: BackendCase, hass: MockHomeAssistant) -> None:
         "ssl": backend_case.user_input[CONF_LLM_SSL],
     }
 
-def test_url_format(backend_case: BackendCase, hass: MockHomeAssistant) -> None:
+def test_url_format(backend_case: BackendCase, hass: HomeAssistant) -> None:
     """Test that the backend can format URLs correctly."""
     backend = backend_case.backend_class(hass, backend_case.user_input)
     connection_input = backend_case.user_input
@@ -260,7 +341,7 @@ def test_tool_names_are_split_for_request_logging() -> None:
     assert required_tool_names == [RAGENT_PREFIXED_REQUIRED_TOOL_NAMES[0]]
     assert searched_tool_names == ["HassTurnOn"]
 
-def test_validate_connection(backend_case: BackendCase, hass: MockHomeAssistant) -> None:
+def test_validate_connection(backend_case: BackendCase, hass: HomeAssistant) -> None:
     """Test connection validation for every backend."""
     backend_valid = backend_case.backend_class(hass, backend_case.user_input)
     backend_invalid = backend_case.backend_class(hass, backend_case.user_input_invalid)
@@ -273,13 +354,13 @@ def test_validate_connection(backend_case: BackendCase, hass: MockHomeAssistant)
         )
     )
 
-def test_get_available_models(backend_case: BackendCase, hass: MockHomeAssistant) -> None:
+def test_get_available_models(backend_case: BackendCase, hass: HomeAssistant) -> None:
     """Test model discovery for every backend."""
     backend_valid = backend_case.backend_class(hass, backend_case.user_input)
     backend_invalid = backend_case.backend_class(hass, backend_case.user_input_invalid)
     _run_async_test(hass, _async_test_get_available_models(backend_valid, backend_invalid))
 
-def test_get_model_info(backend_case: BackendCase, hass: MockHomeAssistant) -> None:
+def test_get_model_info(backend_case: BackendCase, hass: HomeAssistant) -> None:
     """Test model information retrieval for every backend."""
     backend_valid = backend_case.backend_class(hass, backend_case.user_input)
     backend_invalid = backend_case.backend_class(hass, backend_case.user_input_invalid)
@@ -292,12 +373,12 @@ def test_get_model_info(backend_case: BackendCase, hass: MockHomeAssistant) -> N
         )
     )
 
-def test_preload_and_unload_model(backend_case: BackendCase, hass: MockHomeAssistant) -> None:
+def test_preload_and_unload_model(backend_case: BackendCase, hass: HomeAssistant) -> None:
     """Test model lifecycle operations for every backend."""
     backend = backend_case.backend_class(hass, backend_case.user_input)
     _run_async_test(hass, _async_test_preload_and_unload_model(backend, backend_case.chat_config))
 
-def test_prepares_linked_tool_history(backend_case: BackendCase, hass: MockHomeAssistant) -> None:
+def test_prepares_linked_tool_history(backend_case: BackendCase, hass: HomeAssistant) -> None:
     """Test that a backend preserves the link between tool calls and results."""
     backend = backend_case.backend_class(hass, backend_case.user_input)
     messages = backend.format_messages_for_backend(MOCK_TOOL_HISTORY)
@@ -329,7 +410,7 @@ def test_openai_truncation_keeps_complete_turns() -> None:
     assert [message["role"] for message in truncated] == ["system", "user"]
     assert truncated[-1]["content"] == "What is its state now?"
 
-def test_send_chat_request(backend_case: BackendCase, hass: MockHomeAssistant) -> None:
+def test_send_chat_request(backend_case: BackendCase, hass: HomeAssistant) -> None:
     """Test chat requests for every backend."""
     backend_valid = backend_case.backend_class(hass, backend_case.user_input)
     backend_invalid = backend_case.backend_class(hass, backend_case.user_input_invalid)

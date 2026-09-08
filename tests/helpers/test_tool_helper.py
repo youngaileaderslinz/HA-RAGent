@@ -2,6 +2,9 @@ import json
 from unittest.mock import Mock
 
 
+from custom_components.ha_ragent.src.homeassistant.helpers import (
+    tool_helper as tool_helper_module,
+)
 from custom_components.ha_ragent.src.homeassistant.helpers.tool_helper import ToolHelper
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
@@ -11,7 +14,7 @@ def test_parse_tool_call_preserves_friendly_name() -> None:
     hass = Mock()
     helper = ToolHelper(hass)
     response = """```homeassistant
-{"tool": "HassTurnOn", "arguments": "{\\"name\\":\\"Light Strip\\",\\"area\\":\\"Bedroom Jonas\\"}"}
+{"tool": "HassTurnOn", "arguments": "{\\"name\\":\\"Light Strip\\",\\"area\\":\\"Guest Bedroom\\"}"}
 ```"""
 
     calls = helper.parse_tool_calls(response)
@@ -20,7 +23,7 @@ def test_parse_tool_call_preserves_friendly_name() -> None:
     assert calls[0].tool_name == "HassTurnOn"
     assert calls[0].tool_args == {
         "name": "Light Strip",
-        "area": "Bedroom Jonas",
+        "area": "Guest Bedroom",
     }
     hass.states.get.assert_not_called()
 
@@ -28,13 +31,13 @@ def test_parse_tool_call_preserves_apostrophes_in_json_strings() -> None:
     """Valid JSON strings containing apostrophes must not be rewritten."""
     helper = ToolHelper(Mock())
     response = """```homeassistant
-{"tool": "HassRememberFact", "arguments": {"memory": "My brother's name is Elias."}}
+{"tool": "HassRememberFact", "arguments": {"memory": "The guest's reading lamp is dimmable."}}
 ```"""
 
     calls = helper.parse_tool_calls(response)
 
     assert len(calls) == 1
-    assert calls[0].tool_args == {"memory": "My brother's name is Elias."}
+    assert calls[0].tool_args == {"memory": "The guest's reading lamp is dimmable."}
 
 
 def test_unknown_tool_arguments_are_preserved_exactly_from_live_schema() -> None:
@@ -89,12 +92,16 @@ def test_parse_tool_call_prefers_explicit_domain() -> None:
         "device_class": ["switch"],
     }
 
-def test_parse_tool_call_converts_entity_id_and_resolves_friendly_name() -> None:
+def test_parse_tool_call_converts_entity_id_and_resolves_friendly_name(
+    monkeypatch,
+) -> None:
     """An entity-id target is normalized to its configured friendly name."""
     hass = Mock()
+    hass.data = {}
     hass.states.get.return_value = Mock(
         attributes={"friendly_name": "Bedroom Ceiling Light"}
     )
+    monkeypatch.setattr(tool_helper_module, "entity_registry", None)
     helper = ToolHelper(hass)
     response = """```homeassistant
 {"tool": "HassTurnOn", "arguments": {"entity_id": "light.bedroom_ceiling"}}
@@ -108,10 +115,12 @@ def test_parse_tool_call_converts_entity_id_and_resolves_friendly_name() -> None
     }
     hass.states.get.assert_called_once_with("light.bedroom_ceiling")
 
-def test_parse_tool_call_finds_domain_from_entity_id() -> None:
+def test_parse_tool_call_finds_domain_from_entity_id(monkeypatch) -> None:
     """A full entity ID supplies the missing domain."""
     hass = Mock()
+    hass.data = {}
     hass.states.get.return_value = None
+    monkeypatch.setattr(tool_helper_module, "entity_registry", None)
     helper = ToolHelper(hass)
     response = """```homeassistant
 {"tool": "HassTurnOn", "arguments": {"entity_id": "switch.bedroom_fan"}}
@@ -202,7 +211,7 @@ def test_semantic_search_signature_normalizes_query_and_scope() -> None:
     assert ToolHelper.tool_call_signature(first) == ToolHelper.tool_call_signature(second)
 
 
-def test_semantic_search_signature_reuses_action_aliases() -> None:
+def test_semantic_search_signature_does_not_infer_equivalent_actions() -> None:
     first = Mock(
         tool_name="ha_ragent__HassSemanticSearch",
         tool_args={"search_query": "switch off kitchen lights", "scope": "tools"},
@@ -212,10 +221,10 @@ def test_semantic_search_signature_reuses_action_aliases() -> None:
         tool_args={"search_query": "power off the kitchen light", "scope": "tools"},
     )
 
-    assert ToolHelper.tool_call_signature(first) == ToolHelper.tool_call_signature(second)
+    assert ToolHelper.tool_call_signature(first) != ToolHelper.tool_call_signature(second)
 
 
-def test_semantic_search_signature_reuses_weak_power_rewrites() -> None:
+def test_semantic_search_signature_distinguishes_different_capabilities() -> None:
     first = Mock(
         tool_name="ha_ragent__HassSemanticSearch",
         tool_args={"search_query": "heater bathroom switch toggle", "scope": "tools"},
@@ -225,7 +234,7 @@ def test_semantic_search_signature_reuses_weak_power_rewrites() -> None:
         tool_args={"search_query": "heater bathroom on/off", "scope": "tools"},
     )
 
-    assert ToolHelper.tool_call_signature(first) == ToolHelper.tool_call_signature(second)
+    assert ToolHelper.tool_call_signature(first) != ToolHelper.tool_call_signature(second)
 
 
 def test_exposed_tool_name_normalizes_only_known_namespace_variants() -> None:
@@ -236,6 +245,7 @@ def test_exposed_tool_name_normalizes_only_known_namespace_variants() -> None:
         "ha_ragent__HassSemanticSearch"
     )
     assert ToolHelper.resolve_exposed_tool_name("switch__HassSwitchToggle", exposed) is None
+
 
 
 def test_discovered_tools_are_converted_for_next_iteration() -> None:

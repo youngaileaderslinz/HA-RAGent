@@ -1,8 +1,0 @@
-{
-    "HassRememberFact": "Required when the latest request explicitly asks to remember one stable, non-sensitive fact for future conversations. Never store instructions, commands, secrets, or temporary state.",
-    "HassForgetFact": "Required when the latest request explicitly asks to forget one stored fact. Use its exact memory_id from Relevant Long-Term Memories.",
-    "HassSemanticSearch": "Search for devices or tools, including concepts not explicitly present in the user's request. Put a concise description of what to find, including the action or capability, target, and useful context, in search_query. Choose the narrowest scope.",
-    "HassPlannedAction": "Use only when the latest request explicitly asks to schedule or delay an action by 1 to 1440 minutes. Never use for now, immediately, or an untimed request. Put the complete future action in description; this schedules rather than executes it.",
-    "HassListPlannedActions": "List all pending one-time actions scheduled by this agent. This does not change them.",
-    "HassCancelAllPlannedActions": "Cancel every pending one-time action scheduled by this agent. Use only when the user explicitly asks to cancel all of them."
-}

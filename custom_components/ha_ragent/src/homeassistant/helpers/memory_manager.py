@@ -5,23 +5,17 @@ import hashlib
 import logging
 from typing import Any
 
-try:
-    from homeassistant.core import HomeAssistant
-    from homeassistant.util import dt as dt_util
-except ImportError:
-    from custom_components.ha_ragent.src.mock import (
-        MockHomeAssistant as HomeAssistant,
-        dt_util,
-    )
+from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from custom_components.ha_ragent.src.const import (
     CONF_MAX_MEMORY_ENTRIES,
-    DEFAULT_MAX_MEMORY_ENTRIES,
     DOMAIN,
     RAGENT_MEMORY_LOCKS,
 )
 from custom_components.ha_ragent.src.models.embedding.memory import Memory
 from custom_components.ha_ragent.src.models.embedding.memory_embedding import MemoryEmbedding
+from custom_components.ha_ragent.src.utils import get_setting_value
 
 _logger = logging.getLogger(__name__)
 
@@ -91,7 +85,7 @@ class MemoryManager:
             await entry.vector_db_backend.async_upsert_objects(
                 config,
                 self.collection_name,
-                "memory_id",
+                "id",
                 [MemoryEmbedding(memory, vector)],
             )
 
@@ -102,7 +96,7 @@ class MemoryManager:
                     config_subentry=config,
                     collection_name=self.collection_name,
                 )
-                max_entries = int(config.get(CONF_MAX_MEMORY_ENTRIES, DEFAULT_MAX_MEMORY_ENTRIES))
+                max_entries = int(get_setting_value(CONF_MAX_MEMORY_ENTRIES, config))
                 if max_entries > 0 and len(memories) > max_entries:
                     memories_to_delete = sorted(
                         (item for item in memories if isinstance(item, Memory)),
@@ -111,7 +105,7 @@ class MemoryManager:
                     await entry.vector_db_backend.async_delete_objects(
                         config,
                         self.collection_name,
-                        "memory_id",
+                        "id",
                         [memory.id for memory in memories_to_delete],
                     )
 
@@ -125,7 +119,7 @@ class MemoryManager:
             deleted = await entry.vector_db_backend.async_delete_objects(
                 config,
                 self.collection_name,
-                "memory_id",
+                "id",
                 [memory_id],
             )
         return deleted > 0

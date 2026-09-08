@@ -9,37 +9,83 @@ from typing import Any
 from collections.abc import Awaitable
 
 import pytest
+import aiohttp
+from homeassistant.core import HomeAssistant
 
 if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     import tests
 
 from custom_components.ha_ragent.src.const import (
     CONF_EMBEDDING_HOST,
+    CONF_EMBEDDING_API_KEY,
     CONF_EMBEDDING_MODEL,
     CONF_EMBEDDING_PORT,
     CONF_EMBEDDING_SSL,
 )
 from custom_components.ha_ragent.src.models.model_info import ModelInfo
 from custom_components.ha_ragent.src.models.embedding.tool_embedding import LlmToolEmbedding
+from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.backends.embedder.base_backend import ABaseEmbedder
-from custom_components.ha_ragent.src.mock import MockHomeAssistant
 
 
-from tests.mocks import (
-    MOCK_LLM_TOOLS,
-    MOCK_LLM_TOOLS_EMBEDDING_OVERFLOW,
-    MOCK_OLLAMA_EMBEDDING_CONFIG,
-    MOCK_OLLAMA_EMBEDDING_CONFIG_INVALID,
-    MOCK_OLLAMA_EMBEDDING_CONNECTION_USER_INPUT,
-    MOCK_OLLAMA_EMBEDDING_CONNECTION_USER_INPUT_INVALID,
-    MOCK_OPENAI_EMBEDDING_CONFIG,
-    MOCK_OPENAI_EMBEDDING_CONFIG_INVALID,
-    MOCK_OPENAI_EMBEDDING_CONNECTION_USER_INPUT,
-    MOCK_OPENAI_EMBEDDING_CONNECTION_USER_INPUT_INVALID,
-)
 from custom_components.ha_ragent.src.backends.embedder.openai_backend import OpenAiEmbedder
+from custom_components.ha_ragent.src.backends.embedder import (
+    ollama_backend as ollama_backend_module,
+)
 from custom_components.ha_ragent.src.backends.embedder.ollama_backend import OllamaEmbedder
+
+
+MOCK_EMBEDDING_DEFAULT_OPTIONS = {
+    CONF_EMBEDDING_HOST: "llamacpp_embed",
+    CONF_EMBEDDING_SSL: False,
+    CONF_EMBEDDING_API_KEY: None,
+}
+MOCK_OPENAI_EMBEDDING_CONNECTION_USER_INPUT = {
+    **MOCK_EMBEDDING_DEFAULT_OPTIONS,
+    CONF_EMBEDDING_PORT: 8080,
+}
+MOCK_OPENAI_EMBEDDING_CONNECTION_USER_INPUT_INVALID = {
+    **MOCK_OPENAI_EMBEDDING_CONNECTION_USER_INPUT,
+    CONF_EMBEDDING_HOST: "invalid_host",
+}
+MOCK_OLLAMA_EMBEDDING_CONNECTION_USER_INPUT = {
+    **MOCK_EMBEDDING_DEFAULT_OPTIONS,
+    CONF_EMBEDDING_HOST: "ollama",
+    CONF_EMBEDDING_PORT: 11434,
+}
+MOCK_OLLAMA_EMBEDDING_CONNECTION_USER_INPUT_INVALID = {
+    **MOCK_OLLAMA_EMBEDDING_CONNECTION_USER_INPUT,
+    CONF_EMBEDDING_HOST: "invalid_host",
+}
+MOCK_OPENAI_EMBEDDING_CONFIG = {
+    **MOCK_OPENAI_EMBEDDING_CONNECTION_USER_INPUT,
+    CONF_EMBEDDING_MODEL: "nomic-ai/nomic-embed-text-v1.5-GGUF:Q4_K_M",
+}
+MOCK_OPENAI_EMBEDDING_CONFIG_INVALID = {
+    **MOCK_OPENAI_EMBEDDING_CONNECTION_USER_INPUT,
+    CONF_EMBEDDING_MODEL: "invalid_model",
+}
+MOCK_OLLAMA_EMBEDDING_CONFIG = {
+    **MOCK_OLLAMA_EMBEDDING_CONNECTION_USER_INPUT,
+    CONF_EMBEDDING_MODEL: "all-minilm:33m",
+}
+MOCK_OLLAMA_EMBEDDING_CONFIG_INVALID = {
+    **MOCK_OLLAMA_EMBEDDING_CONNECTION_USER_INPUT,
+    CONF_EMBEDDING_MODEL: "invalid_model",
+}
+MOCK_LLM_TOOLS = [
+    LlmTool(name="test_tool", description="A tool used by backend tests.", parameters={}),
+    LlmTool(name="another_tool", description="Another tool used by backend tests.", parameters={}),
+]
+MOCK_LLM_TOOLS_EMBEDDING_OVERFLOW = [
+    *MOCK_LLM_TOOLS,
+    LlmTool(
+        name="overflow_tool",
+        description="A tool with a very long description to test embedding context overflow.",
+        parameters={"text": "".join(f"Overflow text INDEX: {index}" for index in range(10000))},
+    ),
+]
 
 @dataclass(frozen=True)
 class EmbedderCase:
@@ -74,19 +120,31 @@ def embedder_case(request: pytest.FixtureRequest) -> EmbedderCase:
     return request.param
 
 @pytest.fixture
-def hass() -> MockHomeAssistant:
-    """Provide an isolated Home Assistant mock for each test."""
-    return MockHomeAssistant()
+def hass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Provide native Home Assistant with an isolated Ollama HTTP session."""
+    loop = asyncio.new_event_loop()
 
-def _run_async_test(hass: MockHomeAssistant, test: Awaitable[None]) -> None:
-    """Run an async test and close resources before its event loop exits."""
-    async def run() -> None:
-        try:
-            await test
-        finally:
-            await hass.async_close()
+    async def create() -> tuple[HomeAssistant, aiohttp.ClientSession]:
+        instance = HomeAssistant(str(tmp_path))
+        await instance.async_start()
+        return instance, aiohttp.ClientSession()
 
-    asyncio.run(run())
+    instance, session = loop.run_until_complete(create())
+    monkeypatch.setattr(
+        ollama_backend_module,
+        "async_get_clientsession",
+        lambda _hass: session,
+    )
+    try:
+        yield instance
+    finally:
+        loop.run_until_complete(session.close())
+        loop.run_until_complete(instance.async_stop(force=True))
+        loop.close()
+
+def _run_async_test(hass: HomeAssistant, test: Awaitable[None]) -> None:
+    """Run an async test on the Home Assistant instance's event loop."""
+    hass.loop.run_until_complete(test)
 
 @pytest.fixture(autouse=True)
 def suppress_logging() -> Any:
@@ -194,7 +252,7 @@ async def _async_test_embed_tool_scenarios(
     await _async_test_embed_tools_overflow(backend_valid, embedding_config)
     await _async_test_embed_tools_connection_failure(backend_invalid, embedding_config_invalid)
 
-def test_init(embedder_case: EmbedderCase, hass: MockHomeAssistant) -> None:
+def test_init(embedder_case: EmbedderCase, hass: HomeAssistant) -> None:
     """Test that the backend can be initialized with a mocked Home Assistant."""
     backend = embedder_case.backend_class(hass, embedder_case.user_input)
     assert backend._url_base == {
@@ -203,7 +261,7 @@ def test_init(embedder_case: EmbedderCase, hass: MockHomeAssistant) -> None:
         "ssl": embedder_case.user_input[CONF_EMBEDDING_SSL],
     }
 
-def test_url_format(embedder_case: EmbedderCase, hass: MockHomeAssistant) -> None:
+def test_url_format(embedder_case: EmbedderCase, hass: HomeAssistant) -> None:
     """Test that the backend can format URLs correctly."""
     backend = embedder_case.backend_class(hass, embedder_case.user_input)
     connection_input = embedder_case.user_input
@@ -216,7 +274,7 @@ def test_url_format(embedder_case: EmbedderCase, hass: MockHomeAssistant) -> Non
     expected_url = f"{'https' if connection_input[CONF_EMBEDDING_SSL] else 'http'}://{connection_input[CONF_EMBEDDING_HOST]}{':' + str(connection_input[CONF_EMBEDDING_PORT]) if connection_input[CONF_EMBEDDING_PORT] else ''}/v1"
     assert url == expected_url
 
-def test_validate_connection(embedder_case: EmbedderCase, hass: MockHomeAssistant) -> None:
+def test_validate_connection(embedder_case: EmbedderCase, hass: HomeAssistant) -> None:
     """Test connection validation for every embedder backend."""
     backend_valid = embedder_case.backend_class(hass, embedder_case.user_input)
     backend_invalid = embedder_case.backend_class(hass, embedder_case.user_input_invalid)
@@ -229,13 +287,13 @@ def test_validate_connection(embedder_case: EmbedderCase, hass: MockHomeAssistan
         )
     )
 
-def test_get_available_models(embedder_case: EmbedderCase, hass: MockHomeAssistant) -> None:
+def test_get_available_models(embedder_case: EmbedderCase, hass: HomeAssistant) -> None:
     """Test model discovery for every embedder backend."""
     backend_valid = embedder_case.backend_class(hass, embedder_case.user_input)
     backend_invalid = embedder_case.backend_class(hass, embedder_case.user_input_invalid)
     _run_async_test(hass, _async_test_get_available_models(backend_valid, backend_invalid))
 
-def test_get_model_info(embedder_case: EmbedderCase, hass: MockHomeAssistant) -> None:
+def test_get_model_info(embedder_case: EmbedderCase, hass: HomeAssistant) -> None:
     """Test model information retrieval for every embedder backend."""
     backend_valid = embedder_case.backend_class(hass, embedder_case.user_input)
     backend_invalid = embedder_case.backend_class(hass, embedder_case.user_input_invalid)
@@ -248,7 +306,7 @@ def test_get_model_info(embedder_case: EmbedderCase, hass: MockHomeAssistant) ->
         )
     )
 
-def test_preload_and_unload_model(embedder_case: EmbedderCase, hass: MockHomeAssistant) -> None:
+def test_preload_and_unload_model(embedder_case: EmbedderCase, hass: HomeAssistant) -> None:
     """Test model lifecycle operations for every embedder backend."""
     backend = embedder_case.backend_class(hass, embedder_case.user_input)
     _run_async_test(hass,
@@ -258,7 +316,7 @@ def test_preload_and_unload_model(embedder_case: EmbedderCase, hass: MockHomeAss
         )
     )
 
-def test_embed_tools(embedder_case: EmbedderCase, hass: MockHomeAssistant) -> None:
+def test_embed_tools(embedder_case: EmbedderCase, hass: HomeAssistant) -> None:
     """Test tool embedding for every embedder backend."""
     backend_valid = embedder_case.backend_class(hass, embedder_case.user_input)
     backend_invalid = embedder_case.backend_class(hass, embedder_case.user_input_invalid)

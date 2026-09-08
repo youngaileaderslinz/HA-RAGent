@@ -3,10 +3,7 @@ import json
 import aiohttp
 from typing import Any, Dict, List, AsyncGenerator
 
-try:
-    from homeassistant.core import HomeAssistant
-except ImportError:
-    from custom_components.ha_ragent.src.mock import MockHomeAssistant as HomeAssistant
+from homeassistant.core import HomeAssistant
 
 from custom_components.ha_ragent.src.const import (
     CONF_LLM_API_KEY,
@@ -14,14 +11,17 @@ from custom_components.ha_ragent.src.const import (
     CONF_LLM_PORT,
     CONF_LLM_SSL,
     RAGENT_PREFIXED_REQUIRED_TOOL_NAMES,
+    STREAM_READ_TIMEOUT,
+    HTTP_REQUEST_TIMEOUT,
+    STREAM_CONNECT_TIMEOUT,
 )
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.model_info import ModelInfo
 from custom_components.ha_ragent.src.models.chat.chat_message import ChatMessage
 
 class ALlmBaseBackend(ABC):
-    _default_timeout = aiohttp.ClientTimeout(total=5)
-    _chat_timeout = aiohttp.ClientTimeout(total=None, sock_connect=30)
+    _default_timeout = aiohttp.ClientTimeout(total=HTTP_REQUEST_TIMEOUT)
+    _chat_timeout = aiohttp.ClientTimeout(total=None, sock_connect=STREAM_CONNECT_TIMEOUT, sock_read=STREAM_READ_TIMEOUT)
 
     def __init__(self, hass: HomeAssistant, client_options: dict[str, Any]):
         self._hass = hass

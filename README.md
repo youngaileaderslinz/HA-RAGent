@@ -98,7 +98,7 @@ Use the `Add Integration` button in the bottom right to add a new integration ca
 - `System Prompt`
     - The Jinja template rendered and sent to the model as its system prompt
 - `Retrieval Method`
-    - **Automatic** (default) combines vector, text and metadata matching
+    - **Automatic** (default) uses cached text and metadata matching, adding vector search when there is no unique, complete name or alias match
     - **Vector search** uses embedding similarity only
     - **Lexical search** uses names, aliases and metadata without semantic similarity
 - `Allow Auto Embedding`

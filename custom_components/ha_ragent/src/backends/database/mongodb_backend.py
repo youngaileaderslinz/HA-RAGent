@@ -7,10 +7,7 @@ from pymongo.errors import OperationFailure
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.asynchronous.collection import AsyncCollection
 
-try:
-    from homeassistant.core import HomeAssistant
-except ImportError:
-    from custom_components.ha_ragent.src.mock import MockHomeAssistant as HomeAssistant
+from homeassistant.core import HomeAssistant
 
 from custom_components.ha_ragent.src.backends.database.base_backend import ABaseDbBackend
 from custom_components.ha_ragent.src.models.embedding.device import Device
@@ -302,7 +299,7 @@ class MongoDbBackend(ABaseDbBackend):
             if await self._async_collection_exists(conn, collection_name):
                 collection = self._get_collection(conn, collection_name)
                 await collection.update_many(
-                    {"memory_id": {"$in": memory_ids}},
+                    {"id": {"$in": memory_ids}},
                     {"$inc": {"retrieval_count": 1}},
                 )
         finally:

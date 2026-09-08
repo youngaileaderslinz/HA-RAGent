@@ -24,13 +24,14 @@ from custom_components.ha_ragent.src.homeassistant.helpers.message_helper import
 from custom_components.ha_ragent.src.homeassistant.helpers.tool_helper import ToolHelper
 from custom_components.ha_ragent.src.homeassistant.helpers.memory_manager import MemoryManager
 from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
+from custom_components.ha_ragent.src.models.retrieval.scheduled_context import ScheduledContext
 from custom_components.ha_ragent.src.models.embedding.device_embedding import DeviceEmbedding
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_embedding import LlmToolEmbedding
 from custom_components.ha_ragent.src.models.chat.chat_message import ChatMessage
 from custom_components.ha_ragent.src.models.embedding.memory import Memory
 from custom_components.ha_ragent.src.models.retrieval.continuity_context import ContinuityContext
-from custom_components.ha_ragent.src.models.retrieval.turn_context import TurnContext
+from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
 
 from custom_components.ha_ragent.src.homeassistant.ragent_entity import RAGentEntity
 from custom_components.ha_ragent.src.homeassistant.ragent_config_entry import RAGentConfigEntry
@@ -45,33 +46,34 @@ from custom_components.ha_ragent.src.const import (
     CONF_NUM_TOOLS_TO_EXTRACT,
     CONF_NUM_MEMORIES_TO_EXTRACT,
     CONF_PROMPT,
-    CONF_MAX_TOOL_CALL_ITERATIONS,
-    DEFAULT_NUM_DEVICES_TO_EXTRACT,
-    DEFAULT_NUM_TOOLS_TO_EXTRACT,
-    DEFAULT_NUM_MEMORIES_TO_EXTRACT,
     DEFAULT_PROMPT,
-    DEFAULT_MAX_TOOL_CALL_ITERATIONS,
+    CONF_MAX_TOOL_CALL_ITERATIONS,
     DOMAIN,
-    PERSONA_PROMPTS,
-    DEVICES_PROMPT,
-    AREAS_PROMPT,
-    MAX_RETRIES_PROMPT,
-    INSTRUCTION_PROMPT,
-    MEMORIES_CONTEXT_PROMPT,
     CONF_SELECTED_LANGUAGE,
-    DEFAULT_SELECTED_LANGUAGE,
     CONF_ALLOW_QUESTIONS,
-    DEFAULT_ALLOW_QUESTIONS,
     RAGENT_PREFIXED_REQUIRED_TOOL_NAMES,
     RAGENT_SCHEDULED_REQUEST_PREFIX,
     RAGENT_PREFIXED_SCHEDULED_REQUEST_PROHIBITED_TOOL_NAMES,
     STARTUP_EMBEDDING_RUNNING_FLAG,
+    RETRIEVAL_METHOD_LEXICAL,
+    RETRIEVAL_METHOD_VECTOR,
+    RAGENT_PLANNED_ACTION_TOOL_NAME,
+    TRANSLATION_PROMPT_SCHEDULED_ACTION,
+    TRANSLATION_PROMPT_PERSONA,
+    TRANSLATION_PROMPT_AREAS,
+    TRANSLATION_PROMPT_DEVICES,
+    TRANSLATION_PROMPT_MEMORIES,
+    TRANSLATION_PROMPT_RETRIES,
+    TRANSLATION_PROMPT_INSTRUCTIONS,
+    TRANSLATION_PROMPT_SEARCH_FALLBACK,
+    TRANSLATION_ERROR_BACKEND,
+    TRANSLATION_ERROR_MAX_RETRIES,
+    TRANSLATION_ERROR_LLM_API,
+    TRANSLATION_ERROR_TEMPLATE,
+    TRANSLATION_ERROR_UNEXPECTED,
 )
 
-from custom_components.ha_ragent.src.utils import (
-    get_placeholder_translation,
-    clean_device_attributes
-)
+from custom_components.ha_ragent.src.utils import get_setting_value
 
 _logger = logging.getLogger(__name__)
 
@@ -79,9 +81,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
     """RAG-based conversation agent for Home Assistant."""
     def __init__(self, hass: HomeAssistant, entry: RAGentConfigEntry, subentry: ConfigSubentry) -> None:
         super().__init__(hass, entry, subentry)
-        self._history_contexts: dict[str, dict[str, tuple[TurnContext, float]]] = {}
-        self._history_vectors: dict[tuple[str, str], list[float]] = {}
-        self._pending_requests: dict[str, str] = {}
 
     async def async_added_to_hass(self) -> None:
         """When entity is added to Home Assistant."""
@@ -103,86 +102,26 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         try:
             embedding = await self.entry.embedder_backend.async_embed_text(dict(self.subentry.data), retrieval_text)
         except Exception as err:
-            _logger.error(f"Error embedding user input with history: {err}", exc_info=True)
+            _logger.error(f"Error embedding retrieval query: {err}", exc_info=True)
             return None
 
         return embedding or None
-
-    async def _async_embed_query(self, user_input: ConversationInput) -> list[float] | None:
-        """Embed the current request without language-specific heuristics."""
-        retrieval_text = RetrievalHelper.build_retrieval_text(user_input.text)
-        return await self._async_embed_retrieval_text(retrieval_text)
 
     async def _async_build_continuity_context(
         self,
         history_manager: HistoryManager,
         chat_log: conversation.ChatLog,
-        conversation_id: str | None,
-        query_embedding: list[float],
     ) -> ContinuityContext:
-        """Retrieve short-term structured and longer-term semantic history."""
-        extracted_contexts = history_manager.structured_turn_contexts(chat_log)
-        cache_scope = str(conversation_id or "")
-        now = time.time()
-
-        if cache_scope:
-            stored = self._history_contexts.setdefault(cache_scope, {})
-            for context in extracted_contexts:
-                stored[context.key] = (context, now)
-            stored = {
-                key: value
-                for key, value in stored.items()
-                if now - value[1] <= 300.0
-            }
-            stored = dict(list(stored.items())[-10:])
-            self._history_contexts[cache_scope] = stored
-            contexts = [context for context, _ in stored.values()]
-        else:
-            contexts = extracted_contexts
-
-        missing = [
-            context
-            for context in contexts
-            if (cache_scope, context.key) not in self._history_vectors
-        ]
-
-        async def embed_context(context: TurnContext) -> tuple[TurnContext, list[float] | None]:
-            try:
-                vector = await self.entry.embedder_backend.async_embed_text(
-                    dict(self.subentry.data),
-                    context.to_embedding_text(),
-                )
-                return context, vector or None
-            except Exception as err:
-                _logger.debug("Failed to embed semantic history turn: %s", err)
-                return context, None
-
-        if missing:
-            for context, vector in await asyncio.gather(*(embed_context(context) for context in missing)):
-                if vector:
-                    self._history_vectors[(cache_scope, context.key)] = vector
-
-        active_keys = {(cache_scope, context.key) for context in contexts}
-        self._history_vectors = {
-            key: vector
-            for key, vector in self._history_vectors.items()
-            if key[0] != cache_scope or key in active_keys
-        }
-        vectors = {
-            context.key: self._history_vectors.get((cache_scope, context.key), [])
-            for context in contexts
-        }
+        """Retain bounded recent structured history without embedding turns."""
+        contexts = history_manager.structured_turn_contexts(chat_log)
         selected = RetrievalHelper.select_history_contexts(
-            contexts,
-            vectors,
-            query_embedding,
-            max_age_seconds=300.0,
+            contexts, {}, [], max_age_seconds=300.0,
         )
         return RetrievalHelper.build_continuity_context(selected)
 
     async def _async_retrieve_devices(
         self,
-        query_embedding: List[float],
+        query_embedding: List[float] | QueryEmbedding,
         query: str,
         n_devices: int,
         continuity: ContinuityContext,
@@ -195,23 +134,17 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         collection_name = f"devices_{self.subentry_id}"
         try:
             candidate_limit = RetrievalHelper.adaptive_candidate_limit(n_devices)
-            scored_devices, all_devices = await asyncio.gather(
-                self.entry.vector_db_backend.async_retrieve_scored_objects(
-                    DeviceEmbedding,
-                    dict(self.subentry.data),
-                    collection_name,
-                    query_embedding,
-                    candidate_limit,
-                ),
-                self.entry.vector_db_backend.async_get_lexical_objects(
-                    DeviceEmbedding,
-                    dict(self.subentry.data),
-                    collection_name,
-                ),
+            options = {**self.entry.options, **self.subentry.data}
+            scored_devices, all_devices = await RetrievalHelper.async_retrieve_sources(
+                self.entry.vector_db_backend, DeviceEmbedding, options,
+                collection_name, query_embedding, candidate_limit, query=query,
             )
         except Exception as e:
             _logger.error(f"Error retrieving devices from vector DB: {e}", exc_info=True)
             return []
+
+        if RetrievalHelper.retrieval_method(options) == RETRIEVAL_METHOD_VECTOR:
+            return [result.item for result in scored_devices[:n_devices]]
 
         ranked_devices = RetrievalHelper.rank_scored_candidates(
             scored_devices,
@@ -224,6 +157,8 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 *(device.aliases or []),
                 device.area_name,
                 device.floor_name,
+                *(device.area_aliases or []),
+                *(device.floor_aliases or []),
                 *(device.domain or []),
                 device.device_class,
                 *(device.device_labels or []),
@@ -241,7 +176,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
 
     async def _async_retrieve_tools(
         self,
-        query_embedding: List[float],
+        query_embedding: List[float] | QueryEmbedding,
         query: str,
         n_tools: int,
         continuity: ContinuityContext,
@@ -253,69 +188,43 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         collection_name = f"tools_{self.subentry_id}"
         try:
             candidate_limit = RetrievalHelper.adaptive_candidate_limit(n_tools)
-            scored_tools, all_tools = await asyncio.gather(
-                self.entry.vector_db_backend.async_retrieve_scored_objects(
-                    LlmToolEmbedding,
-                    dict(self.subentry.data),
-                    collection_name,
-                    query_embedding,
-                    candidate_limit,
-                ),
-                self.entry.vector_db_backend.async_get_lexical_objects(
-                    LlmToolEmbedding,
-                    dict(self.subentry.data),
-                    collection_name,
-                ),
+            options = {**self.entry.options, **self.subentry.data}
+            scored_tools, all_tools = await RetrievalHelper.async_retrieve_sources(
+                self.entry.vector_db_backend, LlmToolEmbedding, options,
+                collection_name, query_embedding, candidate_limit, query=query,
             )
         except Exception as e:
             _logger.error(f"Error retrieving tools from vector DB: {e}", exc_info=True)
             return []
 
-        scored_tools, candidate_tools = RetrievalHelper.build_tool_candidate_pool(
+        if RetrievalHelper.retrieval_method(options) == RETRIEVAL_METHOD_VECTOR:
+            return [result.item for result in scored_tools[:n_tools]]
+
+        # Rank once at the largest exposure limit; shortlist expansion reuses
+        # this pool instead of repeating database requests and schema scoring.
+        expanded_limit = max(n_tools, RetrievalHelper.expanded_tool_limit(n_tools))
+        ranked_tools = RetrievalHelper.rank_tool_candidates(
             scored_tools,
             all_tools,
             query,
             devices or [],
-        )
-
-        return RetrievalHelper.rank_tool_candidates(
-            scored_tools,
-            candidate_tools,
-            query,
-            devices or [],
-            n_tools,
+            expanded_limit,
             continuity_score=continuity.tool_score,
         )
-
-    async def _async_expand_tools_if_needed(
-        self,
-        query_embedding: list[float],
-        query: str,
-        tools: list[LlmTool],
-        devices: list[Device],
-        configured_limit: int,
-        continuity: ContinuityContext,
-    ) -> tuple[list[LlmTool], int]:
-        """Expand retrieval when the initial shortlist has weak intent confidence."""
-        confidence = RetrievalHelper.tool_search_confidence(tools, query, devices)
+        tools = ranked_tools[:n_tools]
+        confidence = RetrievalHelper.tool_search_confidence(tools, query, devices or [])
         if confidence in {"high", "medium"}:
-            return tools, configured_limit
+            return tools
+        return ranked_tools
 
-        expanded_limit = RetrievalHelper.expanded_tool_limit(configured_limit)
-        if expanded_limit <= configured_limit:
-            return tools, configured_limit
-
-        expanded_tools = await self._async_retrieve_tools(
-            query_embedding,
-            query,
-            n_tools=expanded_limit,
-            continuity=continuity,
-            devices=devices,
-        )
-        return expanded_tools, expanded_limit
-
-    async def _async_retrieve_memories(self, query_embedding: List[float], n_memories: int) -> List[Memory]:
+    async def _async_retrieve_memories(self, query_embedding: List[float] | QueryEmbedding, n_memories: int) -> List[Memory]:
         """Retrieve relevant persistent memories for this agent."""
+        if n_memories <= 0 or not query_embedding:
+            return []
+        if isinstance(query_embedding, QueryEmbedding):
+            query_embedding = await query_embedding.get()
+        if not query_embedding:
+            return []
         try:
             return await MemoryManager(
                 self.hass,
@@ -332,20 +241,34 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         memories: List[Memory],
         area: ar.AreaEntry,
         floor: fr.FloorEntry,
+        scheduled_request: bool = False,
+        scheduled_context: ScheduledContext | None = None,
     ) -> str | None:
         """Render the system prompt with retrieved device context."""
-        raw_prompt = self.runtime_options.get(CONF_PROMPT, DEFAULT_PROMPT)
+        raw_prompt = get_setting_value(CONF_PROMPT, self.runtime_options) or DEFAULT_PROMPT
+        language = get_setting_value(CONF_SELECTED_LANGUAGE, self.runtime_options)
 
         try:
-            template = Template(raw_prompt, self.hass)
-            rendered_prompt = template.async_render({
+            template_key = (raw_prompt, language)
+            if getattr(self, "_prompt_template_key", None) != template_key:
+                self._prompt_template = Template(
+                    self.build_base_prompt_template(language, raw_prompt, self.entry.translations), self.hass,
+                )
+                self._prompt_template_key = template_key
+            rendered_prompt = self._prompt_template.async_render({
                 "device_list": devices,
                 "memory_list": memories,
-                "area_list": list(set(device.area_name for device in devices if device.area_name)),
-                "area_name": area.name if area else None,
-                "floor_name": floor.name if floor else None,
-                "max_retries": self.runtime_options.get(CONF_MAX_TOOL_CALL_ITERATIONS, DEFAULT_MAX_TOOL_CALL_ITERATIONS),
+                "area_list": sorted({device.area_name for device in devices if device.area_name}),
+                "area_name": scheduled_context.area if scheduled_context else (area.name if area else None),
+                "floor_name": scheduled_context.floor if scheduled_context else (floor.name if floor else None),
+                "max_retries": get_setting_value(CONF_MAX_TOOL_CALL_ITERATIONS, self.runtime_options),
             })
+            if scheduled_request:
+                rendered_prompt += "\n\n" + self.entry.translations.prompt(
+                    TRANSLATION_PROMPT_SCHEDULED_ACTION,
+                )
+            if scheduled_context:
+                rendered_prompt += scheduled_context.prompt_context()
             return rendered_prompt
         except Exception as err:
             _logger.error(f"Error rendering prompt: {err}", exc_info=True)
@@ -432,6 +355,8 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 "aliases": device.aliases,
                 "area": device.area_name,
                 "floor": device.floor_name,
+                "area_aliases": device.area_aliases,
+                "floor_aliases": device.floor_aliases,
                 "domain": device.domain,
                 "device_class": device.device_class,
                 "state": device.state,
@@ -444,26 +369,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         ]
 
 
-    @staticmethod
-    def _latest_success_messages(
-        system_prompt: str,
-        user_input: ConversationInput,
-        tool_call: llm.ToolInput,
-        tool_result: conversation.ToolResultContent,
-    ) -> list[ChatMessage]:
-        """Bind the next answer to the latest request and successful result."""
-        messages = [
-            conversation.SystemContent(content=system_prompt),
-            conversation.UserContent(content=user_input.text),
-            conversation.AssistantContent(
-                agent_id=user_input.agent_id,
-                content="",
-                tool_calls=[ToolHelper.to_history_tool_call(tool_call)],
-            ),
-            tool_result,
-        ]
-        return MessageHelper.message_to_chat_messages(messages)
-
     async def _async_prompt_model(
         self,
         llm_api: llm.APIInstance,
@@ -473,22 +378,14 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         history_manager: HistoryManager,
         candidate_context: list[dict[str, object]],
         request_query: str,
-        request_key: str,
-        post_action_system_prompt: str,
         scheduled_request: bool = False
     ) -> ConversationResult:
         """Process a prompt through the RAGent."""
         tool_helper = ToolHelper(self.hass)
-        max_tool_call_iterations = self.runtime_options.get(
-            CONF_MAX_TOOL_CALL_ITERATIONS,
-            DEFAULT_MAX_TOOL_CALL_ITERATIONS,
-        )
+        max_tool_call_iterations = max(1, get_setting_value(CONF_MAX_TOOL_CALL_ITERATIONS, self.runtime_options))
 
         tool_calls_overall: List[Tuple[llm.ToolInput, Any]] = []
-        successful_calls: dict[str, Any] = {}
-        successful_messages: list[tuple[llm.ToolInput, conversation.ToolResultContent]] = []
-        failed_tool_calls: dict[str, dict[str, Any]] = {}
-        repeated_failed_tool: str | None = None
+        final_model_speech = ""
         tool_metadata_dict = {
             tool.name: tool.metadata
             for tool in tool_list
@@ -498,7 +395,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         formatted_index = 0
         active_candidate_context = list(candidate_context)
 
-        for idx in range(max(1, max_tool_call_iterations)):
+        for idx in range(max_tool_call_iterations):
             iteration_start = time.perf_counter()
             formatted_messages.extend(
                 MessageHelper.message_to_chat_messages(
@@ -559,23 +456,11 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 )
                 history_manager.append_message(message)
                 
-                if tool_calls_in_iteration and len(tool_calls_in_iteration) > 0:                    
+                if tool_calls_in_iteration:
                     for tool_call in tool_calls_in_iteration:
                         tool_name = tool_call.tool_name
-                        tool_call_signature = tool_helper.tool_call_signature(tool_call)
 
                         if tool_name not in exposed_tool_names:
-                            if tool_call_signature in failed_tool_calls:
-                                history_manager.append_message(
-                                    MessageHelper.create_repeated_tool_result_message(
-                                        agent_id=user_input.agent_id,
-                                        tool_call_id=tool_call.id,
-                                        tool_name=tool_name,
-                                        previous_result=failed_tool_calls[tool_call_signature],
-                                    )
-                                )
-                                repeated_failed_tool = tool_name
-                                break
                             error = ValueError(
                                 f"Tool {tool_name} was not exposed. Use only a tool from the native tool list."
                             )
@@ -587,55 +472,27 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                     error=error,
                                 )
                             )
-                            failed_tool_calls[tool_call_signature] = {
-                                "success": False,
-                                "error": str(error),
-                            }
                             continue
-
-                        if tool_helper.is_identical_failed_retry(tool_call, failed_tool_calls):
-                            _logger.warning(
-                                "Aborting identical retry of failed tool call: %s",
-                                tool_name,
-                            )
-                            history_manager.append_message(
-                                MessageHelper.create_repeated_tool_result_message(
-                                    agent_id=user_input.agent_id,
-                                    tool_call_id=tool_call.id,
-                                    tool_name=tool_name,
-                                    previous_result=failed_tool_calls[tool_call_signature],
-                                )
-                            )
-                            repeated_failed_tool = tool_name
-                            break
 
                         try:
                             if llm_api:
                                 execution_call = tool_helper.to_home_assistant_tool_call(
                                     tool_call, tool_metadata_dict.get(tool_name),
                                 )
-                                execution_signature = tool_helper.tool_call_signature(execution_call)
-                                if execution_signature in successful_calls:
-                                    history_manager.append_message(MessageHelper.create_repeated_tool_result_message(
-                                        agent_id=user_input.agent_id,
-                                        tool_call_id=tool_call.id,
-                                        tool_name=tool_name,
-                                        previous_result=successful_calls[execution_signature],
-                                    ))
-                                    continue
-
+                                if (isinstance(llm_api, RAGentAugmentedAPIInstance)
+                                    and tool_name.rsplit("__", 1)[-1] == RAGENT_PLANNED_ACTION_TOOL_NAME):
+                                    llm_api.set_scheduling_context(
+                                        request_query, formatted_messages, active_candidate_context,
+                                    )
                                 tool_start = time.perf_counter()
                                 tool_result = await llm_api.async_call_tool(execution_call)
                                 parsed_tool_result = tool_helper.parse_tool_results(tool_result)
                                 tool_succeeded = MessageHelper.tool_result_succeeded(parsed_tool_result)
-                                if tool_succeeded:
-                                    successful_calls[execution_signature] = parsed_tool_result
-                                if not tool_succeeded:
-                                    failed_tool_calls[tool_call_signature] = parsed_tool_result
-                                elif tool_helper.is_semantic_search_tool(tool_name):
+                                if tool_succeeded and tool_helper.is_semantic_search_tool(tool_name):
                                     existing_names = {tool.name for tool in tool_list}
                                     discovered_tools = tool_helper.discovered_tools(parsed_tool_result, existing_names)
                                     tool_list.extend(discovered_tools)
+                                    exposed_tool_names.update(tool.name for tool in discovered_tools)
                                     tool_metadata_dict.update(
                                         {
                                             tool.name: tool.metadata
@@ -648,13 +505,9 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                         active_candidate_context = tool_helper.merge_candidates(active_candidate_context, discovered_candidates)
                                         if isinstance(llm_api, RAGentAugmentedAPIInstance):
                                             llm_api.refresh_search_candidates(active_candidate_context)
-                                else:
-                                    self._pending_requests.pop(request_key, None)
+                                elif tool_succeeded:
                                     if isinstance(llm_api, RAGentAugmentedAPIInstance):
                                         llm_api.refresh_search_candidates(active_candidate_context)
-                                    history_manager.replace_system_prompt(post_action_system_prompt)
-                                    if formatted_messages and formatted_messages[0]["role"] == "system":
-                                        formatted_messages[0]["content"] = post_action_system_prompt
                                     tool_calls_overall.append((tool_call, parsed_tool_result))
                                 stored_tool_result = MessageHelper.compact_tool_result_value(
                                     tool_name,
@@ -667,23 +520,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                     tool_result=stored_tool_result,
                                 )
                                 history_manager.append_message(tool_result_msg)
-                                if tool_succeeded and not tool_helper.is_semantic_search_tool(tool_name):
-                                    successful_messages.append((tool_call, tool_result_msg))
-                                    formatted_messages = self._latest_success_messages(
-                                        post_action_system_prompt,
-                                        user_input,
-                                        successful_messages[0][0],
-                                        successful_messages[0][1],
-                                    )
-                                    for successful_call, successful_result in successful_messages[1:]:
-                                        formatted_messages.extend(MessageHelper.message_to_chat_messages([
-                                            conversation.AssistantContent(
-                                                agent_id=user_input.agent_id, content="",
-                                                tool_calls=[tool_helper.to_history_tool_call(successful_call)],
-                                            ),
-                                            successful_result,
-                                        ]))
-                                    formatted_index = len(history_manager.message_history)
                                 _logger.debug(f"RAGent timing: tool {tool_name}: {time.perf_counter() - tool_start:.3f}s")
                             else:
                                 _logger.warning(f"LLM API not available, skipping tool execution for tool: {tool_name}")
@@ -704,40 +540,27 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                 error=tool_err,
                             )
                             history_manager.append_message(tool_result_msg)
-                            failed_tool_calls[tool_call_signature] = {
-                                "success": False,
-                                "error": str(tool_err),
-                            }
+
 
             except Exception as err:
                 _logger.error(f"There was a problem talking to the backend: {err}")
                 if tool_calls_overall:
                     break
                 intent_response = intent.IntentResponse(language=user_input.language)
-                intent_response.async_set_error(intent.IntentResponseErrorCode.FAILED_TO_HANDLE, f"Sorry, there was a problem talking to the backend.")
+                intent_response.async_set_error(intent.IntentResponseErrorCode.FAILED_TO_HANDLE, self.entry.translations.error(TRANSLATION_ERROR_BACKEND))
                 return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
 
             history_manager.persist_chat_history(chat_log)
 
-            if repeated_failed_tool and not tool_calls_overall:
-                intent_response = intent.IntentResponse(language=user_input.language)
-                intent_response.async_set_error(
-                    intent.IntentResponseErrorCode.FAILED_TO_HANDLE,
-                    f"Stopped after an identical failed retry of {repeated_failed_tool}.",
-                )
-                return ConversationResult(
-                    response=intent_response,
-                    conversation_id=user_input.conversation_id,
-                )
-
             if not tool_calls_in_iteration:
+                final_model_speech = message_content.strip()
                 break
 
             if idx + 1 == max_tool_call_iterations:
                 if tool_calls_overall:
                     break
                 intent_response = intent.IntentResponse(language=user_input.language)
-                intent_response.async_set_error(intent.IntentResponseErrorCode.FAILED_TO_HANDLE, f"Sorry, I ran out of attempts to handle your request")
+                intent_response.async_set_error(intent.IntentResponseErrorCode.FAILED_TO_HANDLE, self.entry.translations.error(TRANSLATION_ERROR_MAX_RETRIES))
                 return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
             
         intent_response = intent.IntentResponse(language=user_input.language)
@@ -748,7 +571,14 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
 
         has_speech = False
         continue_conversation = False
-        if tool_calls_overall:
+        if final_model_speech:
+            intent_response.async_set_speech(final_model_speech)
+            has_speech = True
+            continue_conversation = (
+                get_setting_value(CONF_ALLOW_QUESTIONS, self.runtime_options)
+                and final_model_speech.endswith(("?", ";", "\uff1f"))
+            )
+        elif tool_calls_overall:
             speech = "\n".join(
                 f"{call.tool_name}: {json.dumps(result, ensure_ascii=False, default=str)}"
                 for call, result in tool_calls_overall
@@ -783,20 +613,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             ))
             history_manager.persist_chat_history(chat_log)
             has_speech = True
-        for cur_msg in ([] if has_speech else reversed(history_manager.message_history[1:])):
-            if isinstance(cur_msg, conversation.AssistantContent) and cur_msg.content:
-                speech = cur_msg.content.strip()
-
-                if (
-                    self.runtime_options.get(CONF_ALLOW_QUESTIONS, DEFAULT_ALLOW_QUESTIONS)
-                    and speech.endswith(("?", ";", "？"))
-                ):
-                    continue_conversation = True
-
-                intent_response.async_set_speech(speech)
-                has_speech = True
-                break
-
         if not has_speech:
             intent_response.async_set_speech("I don't have anything to say right now")
 
@@ -819,6 +635,11 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         if scheduled_request:
             user_input.text = user_input.text.removeprefix(RAGENT_SCHEDULED_REQUEST_PREFIX)
         try:
+            scheduled_context = None
+            if scheduled_request:
+                user_input.text, scheduled_context = ScheduledContext.restore(
+                    self.hass, self.subentry_id, user_input.agent_id, user_input.text,
+                )
             llm_context = user_input.as_llm_context(DOMAIN)
             with (
                 chat_session.async_get_chat_session(self.hass, user_input.conversation_id) as session,
@@ -840,7 +661,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     except HomeAssistantError as err:
                         _logger.error(f"Error getting LLM API: {err}")
                         intent_response = intent.IntentResponse(language=user_input.language)
-                        intent_response.async_set_error(intent.IntentResponseErrorCode.UNKNOWN, f"Error preparing LLM API.")
+                        intent_response.async_set_error(intent.IntentResponseErrorCode.UNKNOWN, self.entry.translations.error(TRANSLATION_ERROR_LLM_API))
                         return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
 
                     log_timing("timing: LLM API setup")
@@ -848,137 +669,76 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 # ensure this chat log has the LLM API instance
                 chat_log.llm_api = llm_api
                 area, floor = self._get_current_device_location(llm_context)
+                current_area = scheduled_context.area if scheduled_context else (area.name if area else "")
+                current_floor = scheduled_context.floor if scheduled_context else (floor.name if floor else "")
 
                 history_manager = HistoryManager(
                     runtime_options=self.runtime_options,
                 )
-                query_embedding = await self._async_embed_query(user_input)
-                embedding_dimension = len(query_embedding) if query_embedding else 0
-                log_timing(f"Step 1 embedded retrieval query with shape {embedding_dimension}")
-                if not query_embedding:
-                    intent_response = intent.IntentResponse(language=user_input.language)
-                    intent_response.async_set_error(intent.IntentResponseErrorCode.UNKNOWN, f"Failed to embed user input.")
-                    return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
-
-                continuity = await self._async_build_continuity_context(
-                    history_manager,
-                    chat_log,
-                    user_input.conversation_id,
-                    query_embedding,
+                retrieval_method = RetrievalHelper.retrieval_method(self.runtime_options)
+                memory_limit = 0 if scheduled_request else get_setting_value(CONF_NUM_MEMORIES_TO_EXTRACT, self.runtime_options)
+                needs_embedding = retrieval_method != RETRIEVAL_METHOD_LEXICAL or memory_limit > 0
+                retrieval_query = (
+                    scheduled_context.retrieval_query(user_input.text)
+                    if scheduled_context else user_input.text
                 )
-                request_key = str(user_input.conversation_id or user_input.agent_id or "default")
-                pending_request = self._pending_requests.get(request_key, "")
-                if pending_request and RetrievalHelper.is_clarification(user_input.text, pending_request):
-                    retrieval_query = RetrievalHelper.merge_pending_request(
-                        pending_request,
-                        user_input.text,
+                # A single request-scoped future is shared by device, tool and
+                # memory retrieval. Automatic mode starts it only on weak local
+                # matches (or when semantic memory recall is enabled).
+                query_embedding = QueryEmbedding(
+                    lambda: self._async_embed_retrieval_text(
+                        RetrievalHelper.build_retrieval_text(retrieval_query)
                     )
-                else:
-                    if pending_request:
-                        self._pending_requests.pop(request_key, None)
-                    retrieval_query = RetrievalHelper.resolve_followup_query(
-                        user_input.text,
+                ) if needs_embedding else []
+                continuity = ContinuityContext() if scheduled_request else await self._async_build_continuity_context(
+                    history_manager, chat_log,
+                )
+
+                # Recall memory alongside the full device/tool retrieval chain.
+                # TaskGroup also cancels and awaits recall if retrieval is interrupted.
+                async with asyncio.TaskGroup() as retrieval_tasks:
+                    memory_task = retrieval_tasks.create_task(
+                        self._async_retrieve_memories(query_embedding, memory_limit)
+                    )
+                    configured_device_limit = get_setting_value(CONF_NUM_DEVICES_TO_EXTRACT, self.runtime_options)
+                    effective_device_limit = RetrievalHelper.expanded_device_limit(
+                        configured_device_limit,
                         continuity,
                     )
-                if retrieval_query != user_input.text:
-                    resolved_embedding = await self._async_embed_retrieval_text(retrieval_query)
-                    if resolved_embedding:
-                        query_embedding = resolved_embedding
-
-                retrieve_memories_task = asyncio.create_task(self._async_retrieve_memories(
-                    query_embedding,
-                    n_memories=self.runtime_options.get(CONF_NUM_MEMORIES_TO_EXTRACT, DEFAULT_NUM_MEMORIES_TO_EXTRACT),
-                ))
-                configured_device_limit = self.runtime_options.get(
-                    CONF_NUM_DEVICES_TO_EXTRACT,
-                    DEFAULT_NUM_DEVICES_TO_EXTRACT,
-                )
-                effective_device_limit = RetrievalHelper.expanded_device_limit(
-                    configured_device_limit,
-                    continuity,
-                )
-                running_entries = self.hass.data.get(DOMAIN, {}).get(STARTUP_EMBEDDING_RUNNING_FLAG, set())
-                indexes_ready = self.entry_id not in running_entries
-                retrieved_devices = []
-                if indexes_ready:
+                    running_entries = self.hass.data.get(DOMAIN, {}).get(STARTUP_EMBEDDING_RUNNING_FLAG, set())
+                    indexes_ready = self.entry_id not in running_entries
                     retrieved_devices = await self._async_retrieve_devices(
                         query_embedding,
                         retrieval_query,
-                        n_devices=effective_device_limit,
+                        n_devices=effective_device_limit if indexes_ready else 0,
                         continuity=continuity,
-                        current_area=area.name if area else "",
-                        current_floor=floor.name if floor else "",
+                        current_area=current_area,
+                        current_floor=current_floor,
                     )
-                if not retrieved_devices:
-                    retrieve_memories_task.cancel()
-                    intent_response = intent.IntentResponse(language=user_input.language)
-                    intent_response.async_set_error(
-                        intent.IntentResponseErrorCode.UNKNOWN,
-                        "No devices were found for this request.",
+                    configured_tool_limit = get_setting_value(CONF_NUM_TOOLS_TO_EXTRACT, self.runtime_options)
+                    tool_retrieval_query = RetrievalHelper.build_tool_search_query(
+                        retrieval_query,
+                        "",
+                        retrieved_devices,
                     )
-                    return ConversationResult(
-                        response=intent_response,
-                        conversation_id=user_input.conversation_id,
-                    )
-                configured_tool_limit = self.runtime_options.get(
-                    CONF_NUM_TOOLS_TO_EXTRACT,
-                    DEFAULT_NUM_TOOLS_TO_EXTRACT,
-                )
-                effective_tool_limit = configured_tool_limit
-                tool_retrieval_query = RetrievalHelper.build_tool_search_query(
-                    retrieval_query,
-                    "",
-                    retrieved_devices,
-                )
-                tool_query_embedding = query_embedding
-                if llm_api and tool_retrieval_query != retrieval_query:
-                    canonical_tool_embedding = await self._async_embed_retrieval_text(
-                        tool_retrieval_query
-                    )
-                    if canonical_tool_embedding:
-                        tool_query_embedding = canonical_tool_embedding
-
-                if llm_api and indexes_ready:
-                    retrieved_tools, retrieved_memories = await asyncio.gather(
-                        self._async_retrieve_tools(
-                            tool_query_embedding,
+                    if llm_api and indexes_ready:
+                        retrieved_tools = await self._async_retrieve_tools(
+                            query_embedding,
                             tool_retrieval_query,
-                            n_tools=effective_tool_limit,
+                            n_tools=configured_tool_limit,
                             continuity=continuity,
                             devices=retrieved_devices,
-                        ),
-                        retrieve_memories_task,
-                    )
-                else:
-                    retrieved_tools = []
-                    retrieved_memories = await retrieve_memories_task
+                        )
+                    else:
+                        retrieved_tools = []
 
-                if llm_api and indexes_ready:
-                    (
-                        retrieved_tools,
-                        effective_tool_limit,
-                    ) = await self._async_expand_tools_if_needed(
-                        tool_query_embedding,
-                        tool_retrieval_query,
-                        retrieved_tools,
-                        retrieved_devices,
-                        configured_tool_limit,
-                        continuity=continuity,
-                    )
+                retrieved_memories = memory_task.result()
 
                 log_timing(
                     f"Step 2 retrieved {len(retrieved_devices)} devices, "
                     f"{len(retrieved_tools)} tools and "
                     f"{len(retrieved_memories)} memories"
                 )
-
-                if llm_api and not retrieved_tools:
-                    intent_response = intent.IntentResponse(language=user_input.language)
-                    intent_response.async_set_error(
-                        intent.IntentResponseErrorCode.UNKNOWN,
-                        "The tool index is not ready. Please try again shortly.",
-                    )
-                    return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
 
                 retrieved_tools = self._ensure_required_tools_exposed(retrieved_tools, llm_api)
                 retrieved_tools = self._exclude_prohibited_scheduled_request_tools(retrieved_tools, scheduled_request)
@@ -990,15 +750,15 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                         continue
 
                     device.state = st.state
-                    device.attributes = clean_device_attributes(st.attributes)
+                    device.attributes = Device.clean_attributes(st.attributes)
                     device_list.append(device)
 
                 candidate_context = self._candidate_context_from_devices(device_list)
                 if isinstance(llm_api, RAGentAugmentedAPIInstance):
                     llm_api.set_search_context(
                         latest_request=retrieval_query,
-                        area=area.name if area else "",
-                        floor=floor.name if floor else "",
+                        area=current_area,
+                        floor=current_floor,
                         candidates=candidate_context,
                     )
 
@@ -1007,19 +767,16 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     retrieved_memories,
                     area,
                     floor,
-                )
-                post_action_system_prompt = await self._async_render_system_prompt(
-                    [],
-                    retrieved_memories,
-                    area,
-                    floor,
+                    scheduled_request=scheduled_request,
+                    scheduled_context=scheduled_context,
                 )
                 log_timing("timing: system prompt rendering")
-                if not system_prompt_content or not post_action_system_prompt:
+                if not system_prompt_content:
                     intent_response = intent.IntentResponse(language=user_input.language)
-                    intent_response.async_set_error(intent.IntentResponseErrorCode.UNKNOWN, f"Template rendering failed.")
+                    intent_response.async_set_error(intent.IntentResponseErrorCode.UNKNOWN, self.entry.translations.error(TRANSLATION_ERROR_TEMPLATE))
                     return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
 
+                system_prompt_content += RetrievalHelper.continuity_prompt(continuity)
                 history_manager.build_prompt_history(
                     chat_log,
                     user_input,
@@ -1035,8 +792,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     history_manager,
                     candidate_context,
                     retrieval_query,
-                    request_key,
-                    post_action_system_prompt,
                     scheduled_request
                 )
                 log_timing("model and tool processing")
@@ -1044,17 +799,21 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         except Exception as err:
             _logger.error(f"Unexpected error in async_process: {err}")
             intent_response = intent.IntentResponse(language=user_input.language)
-            intent_response.async_set_error(intent.IntentResponseErrorCode.FAILED_TO_HANDLE, f"Sorry, an unexpected error occurred.")
+            intent_response.async_set_error(intent.IntentResponseErrorCode.FAILED_TO_HANDLE, self.entry.translations.error(TRANSLATION_ERROR_UNEXPECTED))
             return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
 
     @staticmethod
-    def build_base_prompt_template(selected_language: str, prompt_template: str):
-        """Build base prompt template from constants in specified language."""
-        prompt_template = prompt_template.replace("<persona_prompt>", get_placeholder_translation(PERSONA_PROMPTS, selected_language))
-        prompt_template = prompt_template.replace("<area_prompt>", get_placeholder_translation(AREAS_PROMPT, selected_language))
-        prompt_template = prompt_template.replace("<devices_prompt>", get_placeholder_translation(DEVICES_PROMPT, selected_language))
-        prompt_template = prompt_template.replace("<memories_context_prompt>", get_placeholder_translation(MEMORIES_CONTEXT_PROMPT, selected_language))
-        prompt_template = prompt_template.replace("<max_retries_prompt>", get_placeholder_translation(MAX_RETRIES_PROMPT, selected_language))
-        prompt_template = prompt_template.replace("<instruction_prompt>", get_placeholder_translation(INSTRUCTION_PROMPT, selected_language))
+    def build_base_prompt_template(selected_language: str, prompt_template: str, translations=None):
+        """Build a prompt template from the selected translation file."""
+        if translations is None:
+            from custom_components.ha_ragent.src.translation import RAGentTranslations
+            translations = RAGentTranslations(selected_language)
+        prompt_template = prompt_template.replace("<persona_prompt>", translations.prompt(TRANSLATION_PROMPT_PERSONA))
+        prompt_template = prompt_template.replace("<area_prompt>", translations.prompt(TRANSLATION_PROMPT_AREAS))
+        prompt_template = prompt_template.replace("<devices_prompt>", translations.prompt(TRANSLATION_PROMPT_DEVICES))
+        prompt_template = prompt_template.replace("<memories_context_prompt>", translations.prompt(TRANSLATION_PROMPT_MEMORIES))
+        prompt_template = prompt_template.replace("<max_retries_prompt>", translations.prompt(TRANSLATION_PROMPT_RETRIES))
+        prompt_template = prompt_template.replace("<instruction_prompt>", translations.prompt(TRANSLATION_PROMPT_INSTRUCTIONS))
+        prompt_template = prompt_template.replace("<search_fallback_prompt>", translations.prompt(TRANSLATION_PROMPT_SEARCH_FALLBACK))
 
         return prompt_template

@@ -27,10 +27,6 @@ from custom_components.ha_ragent.src.const import (
     CONF_EMBEDDING_BACKEND_TYPE,
     CONF_LLM_BACKEND_TYPE,
     
-    DEFAULT_VECTOR_DB_BACKEND_TYPE,
-    DEFAULT_EMBEDDING_BACKEND_TYPE,
-    DEFAULT_ALLOW_AUTO_EMBEDDING,
-    DEFAULT_LLM_BACKEND_TYPE,    
     RAGENT_LLM_API_ID,
     STARTUP_EMBEDDING_RUNNING_FLAG,
     RAGENT_SCHEDULED_ACTION_CANCELLERS,
@@ -38,11 +34,12 @@ from custom_components.ha_ragent.src.const import (
 )
 
 from custom_components.ha_ragent.src.utils import (
-    async_load_tool_descriptions,
     vector_db_to_class,
     embedding_backend_to_class,
     llm_backend_to_class,
+    get_setting_value,
 )
+from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 _logger = logging.getLogger(__name__)
 
@@ -149,7 +146,7 @@ async def _async_run_startup_embeddings(hass: HomeAssistant, entry: RAGentConfig
     auto_embedding_subentry_ids = [
         subentry_id
         for subentry_id, subentry in entry.subentries.items()
-        if subentry.data.get(CONF_ALLOW_AUTO_EMBEDDING, DEFAULT_ALLOW_AUTO_EMBEDDING)
+        if get_setting_value(CONF_ALLOW_AUTO_EMBEDDING, subentry.data)
     ]
 
     if not auto_embedding_subentry_ids:
@@ -190,7 +187,8 @@ async def _async_run_startup_embeddings(hass: HomeAssistant, entry: RAGentConfig
 async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry):
     """Set up HA Ragent from a config entry."""
     hass.data.setdefault(DOMAIN, {})
-    await async_load_tool_descriptions(hass)
+    selected_language = entry.data.get("rag_selected_language", "en")
+    entry.translations = await RAGentTranslations.async_create(hass, selected_language)
 
     _ensure_llm_api_registered(hass)
     _cancel_scheduled_actions(hass, entry.subentries)
@@ -202,9 +200,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry):
         for subentry_id, subentry in entry.subentries.items()
     }
     
-    vector_db_backend_type = entry.data.get(CONF_VECTOR_DB_BACKEND_TYPE, DEFAULT_VECTOR_DB_BACKEND_TYPE)
-    embedding_backend_type = entry.data.get(CONF_EMBEDDING_BACKEND_TYPE, DEFAULT_EMBEDDING_BACKEND_TYPE)
-    llm_backend_type = entry.data.get(CONF_LLM_BACKEND_TYPE, DEFAULT_LLM_BACKEND_TYPE)
+    vector_db_backend_type = get_setting_value(CONF_VECTOR_DB_BACKEND_TYPE, entry.data)
+    embedding_backend_type = get_setting_value(CONF_EMBEDDING_BACKEND_TYPE, entry.data)
+    llm_backend_type = get_setting_value(CONF_LLM_BACKEND_TYPE, entry.data)
 
     entry.vector_db_backend = _create_vector_db_client(hass, vector_db_backend_type, entry)
     entry.embedder_backend = _create_embedding_client(hass, embedding_backend_type, entry)    

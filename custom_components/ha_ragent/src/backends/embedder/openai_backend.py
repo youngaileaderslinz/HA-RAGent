@@ -5,10 +5,7 @@ from openai import AsyncOpenAI, InternalServerError
 
 
 
-try:
-    from homeassistant.core import HomeAssistant
-except ImportError:
-    from custom_components.ha_ragent.src.mock import MockHomeAssistant as HomeAssistant
+from homeassistant.core import HomeAssistant
 
 from custom_components.ha_ragent.src.const import (
     CONF_EMBEDDING_API_KEY,
@@ -18,7 +15,8 @@ from custom_components.ha_ragent.src.const import (
     CONF_EMBEDDING_MODEL,
     RAGENT_EMBEDDING_TRUNCATE_MAX_CHARS,
     RAGENT_EMBEDDING_TRUNCATE_RETRIES,
-    RAGENT_EMBEDDING_BATCH_SIZE
+    RAGENT_EMBEDDING_BATCH_SIZE,
+    CONNECTION_RETRIES,
 )
 from custom_components.ha_ragent.src.models.model_info import ModelInfo
 from custom_components.ha_ragent.src.models.base.embeddable_model import EmbeddableModel
@@ -40,6 +38,7 @@ class OpenAiEmbedder(ABaseEmbedder):
                     AsyncOpenAI,
                     base_url=self._openai_url,
                     api_key=self._api_key or "not-needed",
+                    max_retries=CONNECTION_RETRIES,
                 )
             )
         return self._client
@@ -73,6 +72,7 @@ class OpenAiEmbedder(ABaseEmbedder):
                     AsyncOpenAI,
                     base_url=base_url,
                     api_key=api_key or "not-needed",
+                    max_retries=CONNECTION_RETRIES,
                 )
             )
             await client.models.list()

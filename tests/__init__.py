@@ -1,5 +1,3 @@
-"""Test-package bootstrap for environments without Home Assistant installed."""
-
 import importlib.util
 import sys
 import types

@@ -3,23 +3,17 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
-try:
-    from homeassistant.components import conversation
-    from homeassistant.components.conversation import ConversationInput
-    from homeassistant.util import dt as dt_util
-except ImportError:
-    from custom_components.ha_ragent.src.mock import conversation, dt_util
-
-    ConversationInput = Any
+from homeassistant.components import conversation
+from homeassistant.components.conversation import ConversationInput
+from homeassistant.util import dt as dt_util
 
 from custom_components.ha_ragent.src.const import (
     CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
     CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
-    DEFAULT_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
-    DEFAULT_REMEMBER_CONVERSATION_TIME_MINUTES,
     RAGENT_SEMANTIC_SEARCH_TOOL_NAME,
 )
 from custom_components.ha_ragent.src.homeassistant.helpers.message_helper import MessageHelper
+from custom_components.ha_ragent.src.utils import get_setting_value
 from custom_components.ha_ragent.src.models.retrieval.target_group import TargetGroup
 from custom_components.ha_ragent.src.models.retrieval.turn_context import TurnContext
 
@@ -35,14 +29,8 @@ class HistoryManager:
 
     def _select_retained_turns(self, chat_log: conversation.ChatLog) -> list[list[conversation.Content]]:
         """Select complete conversation turns within the configured retention limits."""
-        remember_time_minutes = self._runtime_options.get(
-            CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
-            DEFAULT_REMEMBER_CONVERSATION_TIME_MINUTES,
-        )
-        remember_num_interactions = self._runtime_options.get(
-            CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
-            DEFAULT_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
-        )
+        remember_time_minutes = get_setting_value(CONF_REMEMBER_CONVERSATION_TIME_MINUTES, self._runtime_options)
+        remember_num_interactions = get_setting_value(CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS, self._runtime_options)
 
         if not remember_time_minutes and not remember_num_interactions:
             return []

@@ -2,11 +2,10 @@ from __future__ import annotations
 import logging
 from typing import List, Any, Optional, Dict, Literal
 
-from homeassistant.components import conversation
 from homeassistant.components.conversation.const import DOMAIN as CONVERSATION_DOMAIN
 from homeassistant.components.homeassistant.exposed_entities import async_should_expose
 from homeassistant.config_entries import ConfigSubentry
-from homeassistant.const import MATCH_ALL, CONF_LLM_HASS_API
+from homeassistant.const import MATCH_ALL
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import  device_registry, entity
 

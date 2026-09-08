@@ -4,10 +4,7 @@ import logging
 from openai import AsyncOpenAI, BadRequestError
 from typing import Any, AsyncGenerator, Dict, List
 
-try:
-    from homeassistant.core import HomeAssistant
-except ImportError:
-    from custom_components.ha_ragent.src.mock import MockHomeAssistant as HomeAssistant
+from homeassistant.core import HomeAssistant
 
 from custom_components.ha_ragent.src.backends.llm.base_backend import ALlmBaseBackend
 from custom_components.ha_ragent.src.const import (
@@ -19,6 +16,7 @@ from custom_components.ha_ragent.src.const import (
     CONF_LLM_SSL,
     CONF_MAX_TOKENS,
     CONF_TEMPERATURE,
+    CONNECTION_RETRIES,
     RAGENT_CHAT_TRUNCATE_MAX_CHARS,
     RAGENT_CHAT_TRUNCATE_RETRIES
 )
@@ -41,6 +39,7 @@ class OpenAiLlmBackend(ALlmBaseBackend):
                     AsyncOpenAI,
                     base_url=self._openai_url,
                     api_key=self._api_key or "not-needed",
+                    max_retries=CONNECTION_RETRIES,
                 )
             )
         return self._client
@@ -96,6 +95,7 @@ class OpenAiLlmBackend(ALlmBaseBackend):
                     AsyncOpenAI,
                     base_url=base_url,
                     api_key=api_key or "not-needed",
+                    max_retries=CONNECTION_RETRIES,
                 )
             )
             await client.models.list()
@@ -149,27 +149,25 @@ class OpenAiLlmBackend(ALlmBaseBackend):
             "temperature": config_subentry[CONF_TEMPERATURE],
             "max_tokens": config_subentry[CONF_MAX_TOKENS],
         }
+        thinking_enabled = bool(config_subentry[CONF_ENABLE_MODEL_THINKING])
+
+        request["extra_body"] = {
+            "parse_tool_calls": True,
+            "chat_template_kwargs": {
+                "enable_thinking": thinking_enabled,
+            },
+        }
 
         if tools:
             request["tools"] = self.convert_tools_to_model_format(tools)
             request["tool_choice"] = "auto"
-
-            # llama.cpp-specific request fields go through the extension body so the 
-            # OpenAI client still validates standard Chat Completions fields.
-            request["extra_body"] = {
-                "parse_tool_calls": True,
-                "chat_template_kwargs": {
-                    "enable_thinking": bool(
-                        config_subentry[CONF_ENABLE_MODEL_THINKING]
-                    ),
-                },
-            }
             required_tool_names, searched_tool_names = self.split_tool_names(tools)
             _logger.debug(f"Added {len(tools)} tools to OpenAI-compatible request: required_tools={required_tool_names}, searched_tools={searched_tool_names}")
 
         try:
             client = await self._async_get_client()
             max_chars = RAGENT_CHAT_TRUNCATE_MAX_CHARS
+            unexpected_reasoning_logged = False
             for attempt in range(RAGENT_CHAT_TRUNCATE_RETRIES + 1):
                 request["messages"] = (
                     prepared_messages
@@ -180,26 +178,28 @@ class OpenAiLlmBackend(ALlmBaseBackend):
                 try:
                     stream = await client.chat.completions.create(**request)
 
-                    async for chunk in stream:
-                        for choice in chunk.choices:
-                            delta = choice.delta
+                    async with stream:
+                        async for chunk in stream:
+                            for choice in chunk.choices:
+                                delta = choice.delta
 
-                            if delta.content:
-                                yield delta.content
+                                if delta.content:
+                                    yield delta.content
 
-                            reasoning_content = getattr(delta, "reasoning_content", None)
-                            if reasoning_content:
-                                _logger.debug(f"llama.cpp reasoning: {reasoning_content}")
+                                reasoning_content = getattr(delta, "reasoning_content", None)
+                                if reasoning_content and not thinking_enabled and not unexpected_reasoning_logged:
+                                    _logger.warning("Model returned reasoning although model thinking is disabled in the UI.")
+                                    unexpected_reasoning_logged = True
 
-                            for tool_call in delta.tool_calls or []:
-                                index = tool_call.index or 0
-                                function = tool_call.function
-                                pending = pending_tool_calls.setdefault(index, {"name": "", "arguments": ""})
+                                for tool_call in delta.tool_calls or []:
+                                    index = tool_call.index or 0
+                                    function = tool_call.function
+                                    pending = pending_tool_calls.setdefault(index, {"name": "", "arguments": ""})
 
-                                if function and function.name:
-                                    pending["name"] = function.name
-                                if function and function.arguments:
-                                    pending["arguments"] += function.arguments
+                                    if function and function.name:
+                                        pending["name"] = function.name
+                                    if function and function.arguments:
+                                        pending["arguments"] += function.arguments
                     break
                 except Exception as err:
                     if not self._is_context_length_error(err) or attempt == RAGENT_CHAT_TRUNCATE_RETRIES:

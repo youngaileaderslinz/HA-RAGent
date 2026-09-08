@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import json
-try:
-    from homeassistant.components import conversation
-except ImportError:
-    from custom_components.ha_ragent.src.mock import conversation
+from homeassistant.components import conversation
 
 from custom_components.ha_ragent.src.const import (
     RAGENT_SEMANTIC_SEARCH_TOOL_NAME,
@@ -23,6 +20,7 @@ from custom_components.ha_ragent.src.models.chat.chat_message import (
 class MessageHelper:
     _MAX_RESULT_ITEMS = 12
     _MAX_RESULT_TEXT = 2000
+    _MAX_RESULT_DEPTH = 4
 
     @staticmethod
     def _is_semantic_search(tool_name: str) -> bool:
@@ -36,12 +34,16 @@ class MessageHelper:
         retained_keys = (
             "name",
             "friendly_name",
+            "aliases",
             "state",
             "unit_of_measurement",
             "area",
             "floor",
+            "area_aliases",
+            "floor_aliases",
             "domain",
             "device_class",
+            "attributes",
         )
         compact: list[object] = []
         for candidate in candidates[:MessageHelper._MAX_RESULT_ITEMS]:
@@ -68,7 +70,6 @@ class MessageHelper:
             "canonical_action",
             "supported_domains",
             "retrieval_score",
-            "ranking_signals",
         )
         compact: list[object] = []
         for candidate in candidates[:MessageHelper._MAX_RESULT_ITEMS]:
@@ -85,9 +86,19 @@ class MessageHelper:
         return compact
 
     @staticmethod
-    def _compact_value(value: object) -> object:
-        if isinstance(value, list):
-            return value[:MessageHelper._MAX_RESULT_ITEMS]
+    def _compact_value(value: object, depth: int = 0) -> object:
+        if isinstance(value, (dict, list, tuple)) and depth >= MessageHelper._MAX_RESULT_DEPTH:
+            return "[truncated]"
+        if isinstance(value, dict):
+            return {
+                key: MessageHelper._compact_value(item, depth + 1)
+                for key, item in list(value.items())[:MessageHelper._MAX_RESULT_ITEMS]
+            }
+        if isinstance(value, (list, tuple)):
+            return [
+                MessageHelper._compact_value(item, depth + 1)
+                for item in value[:MessageHelper._MAX_RESULT_ITEMS]
+            ]
         if isinstance(value, str):
             return value[:MessageHelper._MAX_RESULT_TEXT]
         return value
@@ -126,12 +137,14 @@ class MessageHelper:
             for key in retained_keys
             if key in result
         }
-        if compact:
-            return compact
-        return {
-            key: MessageHelper._compact_value(value)
-            for key, value in list(result.items())[:MessageHelper._MAX_RESULT_ITEMS]
-        }
+        # Status fields must not hide custom payloads, scheduled times, memory
+        # IDs or details needed to correct a failed call.
+        for key, value in result.items():
+            if key not in compact:
+                if len(compact) >= MessageHelper._MAX_RESULT_ITEMS:
+                    break
+                compact[key] = MessageHelper._compact_value(value)
+        return compact
 
     @staticmethod
     def tool_result_succeeded(result: object) -> bool:

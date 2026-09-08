@@ -56,6 +56,7 @@ from custom_components.ha_ragent.src.const import (
     CONF_P_TOP,
     CONF_P_TYPICAL,
     CONF_NUM_DEVICES_TO_EXTRACT,
+    DEFAULT_PROMPT,
     
     CONF_VECTOR_DB_PORT,
     CONF_VECTOR_DB_SSL,
@@ -70,30 +71,6 @@ from custom_components.ha_ragent.src.const import (
     CONF_LLM_API_KEY,
     CONF_RETRIEVAL_METHOD,
 
-    DEFAULT_EMBEDDING_BACKEND_TYPE,
-    DEFAULT_LLM_BACKEND_TYPE,
-    DEFAULT_CONTEXT_LENGTH,
-    DEFAULT_MAX_TOKENS,
-    DEFAULT_MAX_TOOL_CALL_ITERATIONS,
-    DEFAULT_NUM_TOOLS_TO_EXTRACT,
-    DEFAULT_NUM_MEMORIES_TO_EXTRACT,
-    DEFAULT_MAX_MEMORY_ENTRIES,
-    DEFAULT_PROMPT,
-    DEFAULT_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
-    DEFAULT_REMEMBER_CONVERSATION_TIME_MINUTES,
-    DEFAULT_SELECTED_LANGUAGE,
-    DEFAULT_TEMPERATURE,
-    DEFAULT_K_TOP,
-    DEFAULT_P_MIN,
-    DEFAULT_P_TOP,
-    DEFAULT_P_TYPICAL,
-    DEFAULT_ENABLE_MODEL_THINKING,
-    DEFAULT_ALLOW_AUTO_EMBEDDING,
-    DEFAULT_ALLOW_QUESTIONS,
-    DEFAULT_VECTOR_DB_BACKEND_TYPE,
-    DEFAULT_VECTOR_DB_BACKEND_TYPE,
-    DEFAULT_VECTOR_DB_NAME,
-    DEFAULT_NUM_DEVICES_TO_EXTRACT,
     
     BACKEND_VECTOR_DB_TYPE_MONGODB,
     BACKEND_VECTOR_DB_TYPE_CHROMA,
@@ -105,9 +82,7 @@ from custom_components.ha_ragent.src.const import (
     SELECTED_LANGUAGE_OPTIONS,
 )
 
-from custom_components.ha_ragent.src.utils import (
-    get_value
-)
+from custom_components.ha_ragent.src.utils import get_value, get_setting_value
 
 from custom_components.ha_ragent.src.homeassistant.ragent import RAGent
 
@@ -125,7 +100,7 @@ def ui_schema_pick_backends(ventor_db_backend_type=None, embedding_backend_type=
         {
             vol.Required(
                 CONF_VECTOR_DB_BACKEND_TYPE,
-                default=get_value(ventor_db_backend_type, DEFAULT_VECTOR_DB_BACKEND_TYPE)
+                default=get_value(ventor_db_backend_type, get_setting_value(CONF_VECTOR_DB_BACKEND_TYPE, options))
             ): SelectSelector(SelectSelectorConfig(
                 options=BACKEND_VECTOR_DB_TYPE_OPTIONS,
                 translation_key=CONF_VECTOR_DB_BACKEND_TYPE,
@@ -134,7 +109,7 @@ def ui_schema_pick_backends(ventor_db_backend_type=None, embedding_backend_type=
             )),
             vol.Required(
                 CONF_EMBEDDING_BACKEND_TYPE,
-                default=get_value(embedding_backend_type, DEFAULT_EMBEDDING_BACKEND_TYPE)
+                default=get_value(embedding_backend_type, get_setting_value(CONF_EMBEDDING_BACKEND_TYPE, options))
             ): SelectSelector(SelectSelectorConfig(
                 options=BACKEND_EMBEDDING_TYPE_OPTIONS,
                 translation_key=CONF_EMBEDDING_BACKEND_TYPE,
@@ -143,7 +118,7 @@ def ui_schema_pick_backends(ventor_db_backend_type=None, embedding_backend_type=
             )),
             vol.Required(
                 CONF_LLM_BACKEND_TYPE,
-                default=get_value(llm_backend_type, DEFAULT_LLM_BACKEND_TYPE)
+                default=get_value(llm_backend_type, get_setting_value(CONF_LLM_BACKEND_TYPE, options))
             ): SelectSelector(SelectSelectorConfig(
                 options=BACKEND_LLM_TYPE_OPTIONS,
                 translation_key=CONF_LLM_BACKEND_TYPE,
@@ -152,7 +127,7 @@ def ui_schema_pick_backends(ventor_db_backend_type=None, embedding_backend_type=
             )),
             vol.Required(
                 CONF_SELECTED_LANGUAGE, 
-                default=get_value(selected_language, DEFAULT_SELECTED_LANGUAGE)
+                default=get_value(selected_language, get_setting_value(CONF_SELECTED_LANGUAGE, options))
             ): SelectSelector(SelectSelectorConfig(
                 options=SELECTED_LANGUAGE_OPTIONS,
                 translation_key=CONF_SELECTED_LANGUAGE,
@@ -226,7 +201,7 @@ def ui_schema_backend_connections(
     )
     
     schema.update({
-        vol.Required(CONF_VECTOR_DB_NAME, default=vector_db_name if vector_db_name else f"{DEFAULT_VECTOR_DB_NAME}_{uuid4()}"): str,
+        vol.Required(CONF_VECTOR_DB_NAME, default=vector_db_name if vector_db_name else f"ha_ragent_db_{uuid4()}"): str,
     })
 
     schema.update({
@@ -289,7 +264,10 @@ def ui_schema_config_options(
     subentry_type: str,
     excluded_tool_options: list[str] | None = None,
 ) -> dict:
-    default_prompt = RAGent.build_base_prompt_template(language, DEFAULT_PROMPT)
+    default_prompt = RAGent.build_base_prompt_template(
+        language,
+        get_setting_value(CONF_PROMPT, options) or DEFAULT_PROMPT,
+    )
     default_llm_api = getattr(llm, "LLM_API_ASSIST", "assist")
     selected_llm_api = options.get(CONF_LLM_HASS_API, default_llm_api)
 
@@ -334,88 +312,84 @@ def ui_schema_config_options(
         )),
         vol.Optional(
             CONF_ALLOW_AUTO_EMBEDDING,
-            description={"suggested_value": options.get(CONF_ALLOW_AUTO_EMBEDDING, DEFAULT_ALLOW_AUTO_EMBEDDING)},
-            default=options.get(CONF_ALLOW_AUTO_EMBEDDING, DEFAULT_ALLOW_AUTO_EMBEDDING),
+            description={"suggested_value": get_setting_value(CONF_ALLOW_AUTO_EMBEDDING, options)},
+            default=get_setting_value(CONF_ALLOW_AUTO_EMBEDDING, options),
         ): BooleanSelector(BooleanSelectorConfig()),
         vol.Optional(
             CONF_ALLOW_QUESTIONS,
-            description={"suggested_value": options.get(CONF_ALLOW_QUESTIONS, DEFAULT_ALLOW_QUESTIONS)},
-            default=options.get(CONF_ALLOW_QUESTIONS, DEFAULT_ALLOW_QUESTIONS),
+            description={"suggested_value": get_setting_value(CONF_ALLOW_QUESTIONS, options)},
+            default=get_setting_value(CONF_ALLOW_QUESTIONS, options),
         ): BooleanSelector(BooleanSelectorConfig()),
         vol.Optional(
             CONF_TEMPERATURE,
-            description={"suggested_value": options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE)},
-            default=options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE),
+            description={"suggested_value": get_setting_value(CONF_TEMPERATURE, options)},
+            default=get_setting_value(CONF_TEMPERATURE, options),
         ): NumberSelector(NumberSelectorConfig(min=0.0, max=2.0, step=0.05, mode=NumberSelectorMode.BOX)),
         vol.Required(
             CONF_MAX_TOKENS,
             description={"suggested_value": options.get(CONF_MAX_TOKENS)},
-            default=DEFAULT_MAX_TOKENS,
+            default=get_setting_value(CONF_MAX_TOKENS, options),
         ): NumberSelector(NumberSelectorConfig(min=1, max=8192, step=1)),
         vol.Required(
             CONF_CONTEXT_LENGTH,
             description={"suggested_value": options.get(CONF_CONTEXT_LENGTH)},
-            default=DEFAULT_CONTEXT_LENGTH,
+            default=get_setting_value(CONF_CONTEXT_LENGTH, options),
         ): NumberSelector(NumberSelectorConfig(min=512, max=1_048_576, step=512)),
         # vol.Required(
         #     CONF_K_TOP,
         #     description={"suggested_value": options.get(CONF_K_TOP)},
-        #     default=DEFAULT_K_TOP,
         # ): NumberSelector(NumberSelectorConfig(min=1, max=256, step=1)),
         # vol.Required(
         #     CONF_P_TOP,
         #     description={"suggested_value": options.get(CONF_P_TOP)},
-        #     default=DEFAULT_P_TOP,
         # ): NumberSelector(NumberSelectorConfig(min=0, max=1, step=0.05)),
         #  vol.Required(
         #     CONF_P_MIN,
         #     description={"suggested_value": options.get(CONF_P_MIN)},
-        #     default=DEFAULT_P_MIN,
         # ): NumberSelector(NumberSelectorConfig(min=0, max=1, step=0.05)),
         # vol.Required(
         #     CONF_P_TYPICAL,
         #     description={"suggested_value": options.get(CONF_P_TYPICAL)},
-        #     default=DEFAULT_P_TYPICAL,
         # ): NumberSelector(NumberSelectorConfig(min=0, max=1, step=0.05)),
         vol.Optional(
             CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
-            description={"suggested_value": options.get(CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS, DEFAULT_REMEMBER_CONVERSATION_NUM_INTERACTIONS)},
-            default=options.get(CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS, DEFAULT_REMEMBER_CONVERSATION_NUM_INTERACTIONS),
+            description={"suggested_value": get_setting_value(CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS, options)},
+            default=get_setting_value(CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=100, mode=NumberSelectorMode.BOX)),
         vol.Optional(
             CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
-            description={"suggested_value": options.get(CONF_REMEMBER_CONVERSATION_TIME_MINUTES, DEFAULT_REMEMBER_CONVERSATION_TIME_MINUTES)},
-            default=options.get(CONF_REMEMBER_CONVERSATION_TIME_MINUTES, DEFAULT_REMEMBER_CONVERSATION_TIME_MINUTES),
+            description={"suggested_value": get_setting_value(CONF_REMEMBER_CONVERSATION_TIME_MINUTES, options)},
+            default=get_setting_value(CONF_REMEMBER_CONVERSATION_TIME_MINUTES, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=1440, mode=NumberSelectorMode.BOX)),
         vol.Required(
             CONF_MAX_TOOL_CALL_ITERATIONS,
             description={"suggested_value": options.get(CONF_MAX_TOOL_CALL_ITERATIONS)},
-            default=DEFAULT_MAX_TOOL_CALL_ITERATIONS,
+            default=get_setting_value(CONF_MAX_TOOL_CALL_ITERATIONS, options),
         ): int,
         vol.Optional(
             CONF_ENABLE_MODEL_THINKING,
-            description={"suggested_value": options.get(CONF_ENABLE_MODEL_THINKING, DEFAULT_ENABLE_MODEL_THINKING)},
-            default=options.get(CONF_ENABLE_MODEL_THINKING, DEFAULT_ENABLE_MODEL_THINKING),
+            description={"suggested_value": get_setting_value(CONF_ENABLE_MODEL_THINKING, options)},
+            default=get_setting_value(CONF_ENABLE_MODEL_THINKING, options),
         ): BooleanSelector(BooleanSelectorConfig()),
         vol.Required(
             CONF_NUM_DEVICES_TO_EXTRACT,
             description={"suggested_value": options.get(CONF_NUM_DEVICES_TO_EXTRACT)},
-            default=DEFAULT_NUM_DEVICES_TO_EXTRACT,
+            default=get_setting_value(CONF_NUM_DEVICES_TO_EXTRACT, options),
         ): int,
         vol.Required(
             CONF_NUM_TOOLS_TO_EXTRACT,
             description={"suggested_value": options.get(CONF_NUM_TOOLS_TO_EXTRACT)},
-            default=DEFAULT_NUM_TOOLS_TO_EXTRACT,
+            default=get_setting_value(CONF_NUM_TOOLS_TO_EXTRACT, options),
         ): int,
         vol.Optional(
             CONF_NUM_MEMORIES_TO_EXTRACT,
-            description={"suggested_value": options.get(CONF_NUM_MEMORIES_TO_EXTRACT, DEFAULT_NUM_MEMORIES_TO_EXTRACT)},
-            default=options.get(CONF_NUM_MEMORIES_TO_EXTRACT, DEFAULT_NUM_MEMORIES_TO_EXTRACT),
+            description={"suggested_value": get_setting_value(CONF_NUM_MEMORIES_TO_EXTRACT, options)},
+            default=get_setting_value(CONF_NUM_MEMORIES_TO_EXTRACT, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=20, mode=NumberSelectorMode.BOX)),
         vol.Optional(
             CONF_MAX_MEMORY_ENTRIES,
-            description={"suggested_value": options.get(CONF_MAX_MEMORY_ENTRIES, DEFAULT_MAX_MEMORY_ENTRIES)},
-            default=options.get(CONF_MAX_MEMORY_ENTRIES, DEFAULT_MAX_MEMORY_ENTRIES),
+            description={"suggested_value": get_setting_value(CONF_MAX_MEMORY_ENTRIES, options)},
+            default=get_setting_value(CONF_MAX_MEMORY_ENTRIES, options),
         ): NumberSelector(NumberSelectorConfig(min=1, max=10000, mode=NumberSelectorMode.BOX)),
         vol.Optional(
             CONF_EXCLUDED_TOOLS,

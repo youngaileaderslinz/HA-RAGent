@@ -1,19 +1,14 @@
 import asyncio
 import logging
+import aiohttp
 from typing import Any, Dict, List
 
 from custom_components.ha_ragent.src.models.model_info import ModelInfo
 from custom_components.ha_ragent.src.models.base.embeddable_model import EmbeddableModel
 from custom_components.ha_ragent.src.models.base.embedding_record import EmbeddingRecord
 
-try:
-    from homeassistant.core import HomeAssistant
-    from homeassistant.helpers.aiohttp_client import async_get_clientsession
-except ImportError:
-    from custom_components.ha_ragent.src.mock import (
-        MockHomeAssistant as HomeAssistant,
-        async_get_clientsession,
-    )
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from custom_components.ha_ragent.src.const import (
     CONF_EMBEDDING_HOST,
@@ -22,10 +17,31 @@ from custom_components.ha_ragent.src.const import (
     CONF_EMBEDDING_MODEL,
     RAGENT_EMBEDDING_BATCH_SIZE,
     RAGENT_EMBEDDING_TRUNCATE_MAX_CHARS,
+    CONNECTION_RETRIES,
+    RETRY_BACKOFF_BASE_SECONDS,
+    RETRY_BACKOFF_MULTIPLIER,
 )
 from custom_components.ha_ragent.src.backends.embedder.base_backend import ABaseEmbedder
 
 _logger = logging.getLogger(__name__)
+
+def _is_retryable_error(error: Exception) -> bool:
+    if isinstance(error, (aiohttp.ClientSSLError, aiohttp.ServerFingerprintMismatch)):
+        return False
+    if isinstance(error, aiohttp.ClientResponseError):
+        return error.status in {408, 429, 500, 502, 503, 504}
+    return isinstance(error, (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError, ConnectionError, TimeoutError))
+
+async def async_request_json(session: aiohttp.ClientSession, method: str, url: str, **kwargs: Any) -> Any:
+    for attempt in range(CONNECTION_RETRIES + 1):
+        try:
+            async with session.request(method, url, **kwargs) as response:
+                response.raise_for_status()
+                return await response.json()
+        except Exception as error:
+            if attempt == CONNECTION_RETRIES or not _is_retryable_error(error):
+                raise
+            await asyncio.sleep(RETRY_BACKOFF_BASE_SECONDS * (RETRY_BACKOFF_MULTIPLIER ** attempt))
     
 class OllamaEmbedder(ABaseEmbedder):
     def __init__(self, hass: HomeAssistant, client_options: dict[str, Any]):
@@ -43,7 +59,8 @@ class OllamaEmbedder(ABaseEmbedder):
         try:
             session = async_get_clientsession(hass)
             
-            async with session.get(
+            await async_request_json(
+                session, "GET",
                 ABaseEmbedder.format_url(
                     hostname=user_input.get(CONF_EMBEDDING_HOST),
                     port=user_input.get(CONF_EMBEDDING_PORT),
@@ -51,20 +68,18 @@ class OllamaEmbedder(ABaseEmbedder):
                     path="/api/tags"
                 ),
                 timeout=ABaseEmbedder._default_timeout
-            ) as response:
-                return None if response.ok else f"HTTP Status {response.status}"
+            )
+            return None
         except Exception as ex:
             return str(ex)
     
     async def async_get_model_info(self, model_name: str) -> ModelInfo:
         session = async_get_clientsession(self._hass)
-        async with session.post(
-            self._info_url,
+        model_result = await async_request_json(
+            session, "POST", self._info_url,
             json={"model": model_name},
             timeout=ABaseEmbedder._default_timeout
-        ) as response:
-            response.raise_for_status()
-            model_result = await response.json()
+        )
 
         capabilities = model_result.get("capabilities", [])
         is_tool_model = "tools" in capabilities
@@ -85,12 +100,10 @@ class OllamaEmbedder(ABaseEmbedder):
     
     async def async_get_available_models(self) -> List[str]:
         session = async_get_clientsession(self._hass)
-        async with session.get(
-            self._tags_url,
+        models_result = await async_request_json(
+            session, "GET", self._tags_url,
             timeout=ABaseEmbedder._default_timeout,
-        ) as response:
-            response.raise_for_status()
-            models_result = await response.json()
+        )
 
         names = [x["name"] for x in models_result.get("models", [])]
         infos = await asyncio.gather(*(self.async_get_model_info(name) for name in names), return_exceptions=True)
@@ -111,10 +124,10 @@ class OllamaEmbedder(ABaseEmbedder):
             payload["input"] = [text[:RAGENT_EMBEDDING_TRUNCATE_MAX_CHARS] for text in inputs]
 
         session = async_get_clientsession(self._hass)
-        async with session.post(self._embed_url, json=payload, timeout=ABaseEmbedder._default_timeout) as response:
-            response.raise_for_status()
-            data = await response.json()
-            return data.get("embeddings", [])
+        data = await async_request_json(
+            session, "POST", self._embed_url, json=payload, timeout=ABaseEmbedder._chat_timeout,
+        )
+        return data.get("embeddings", [])
 
     async def async_embed_text(self, config_subentry: dict, text: str, **kwargs) -> list[float]:
         keep_alive = kwargs.get("keep_alive")

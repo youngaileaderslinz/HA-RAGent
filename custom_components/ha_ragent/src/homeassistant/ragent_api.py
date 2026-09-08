@@ -12,7 +12,7 @@ from custom_components.ha_ragent.src.const import (
     RAGENT_PREFIXED_TOOL_NAMES_BY_NAME,
     RAGENT_TOOL_NAMES_BY_PREFIXED_NAME,
 )
-from custom_components.ha_ragent.src.utils import get_tool_description
+from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 from custom_components.ha_ragent.src.homeassistant.tools.planned_action import RAGentPlannedActionTool
 from custom_components.ha_ragent.src.homeassistant.tools.cancel_all_planned_actions import RAGentCancelAllPlannedActionsTool
@@ -39,6 +39,10 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
         agent_id: str
     ) -> None:
         self.hass = hass
+        translations = getattr(hass.data.get(DOMAIN, {}).get(entry_id), "translations", None)
+        translations = translations or RAGentTranslations(llm_context.language or "en")
+        self._scheduling_area = ""
+        self._scheduling_floor = ""
         self._wrapped_api = wrapped_api
         self.prompt = getattr(wrapped_api, "prompt", "")
         self.custom_serializer = getattr(wrapped_api, "custom_serializer", None)
@@ -72,9 +76,9 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
             elif tool_name == RAGentForgetTool.name:
                 self.tools.append(forget_tool)
             else:
-                description = get_tool_description(llm_context.language, tool_name)
-                if description:
-                    tool.description = description
+                base_tool_name = tool_name.rsplit("__", 1)[-1]
+                if translations.has_tool(base_tool_name):
+                    tool.description = translations.tool(base_tool_name)
                 self.tools.append(tool)
 
         if RAGentAugmentedAPIInstance._check_if_tool_exists(RAGentSemanticSearchTool.name, wrapped_tools):
@@ -120,12 +124,19 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
 
     def set_search_scope(self, entry_id: str, subentry_id: str) -> None:
         """Bind scoped custom tools to the RAGent configuration handling this turn."""
+        entry = self.hass.data.get(DOMAIN, {}).get(entry_id)
+        translations = getattr(entry, "translations", None)
         for tool in self.tools:
+            if translations is not None and hasattr(tool, "translations"):
+                tool.translations = translations
+                tool.description = translations.tool(tool.name.rsplit("__", 1)[-1])
             if isinstance(tool, RAGentSemanticSearchTool):
                 tool.entry_id = entry_id
                 tool.subentry_id = subentry_id
             elif isinstance(tool, (RAGentRememberTool, RAGentForgetTool)):
                 tool.entry_id = entry_id
+                tool.subentry_id = subentry_id
+            elif isinstance(tool, (RAGentPlannedActionTool, RAGentListPlannedActionsTool, RAGentCancelAllPlannedActionsTool)):
                 tool.subentry_id = subentry_id
 
     def set_search_context(
@@ -137,6 +148,8 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
         candidates: list[dict[str, object]] | None = None,
     ) -> None:
         """Bind trusted request context to semantic-search tools."""
+        self._scheduling_area = area
+        self._scheduling_floor = floor
         for tool in self.tools:
             if isinstance(tool, RAGentSemanticSearchTool):
                 tool.set_search_context(
@@ -144,6 +157,15 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
                     area=area,
                     floor=floor,
                     candidates=candidates,
+                )
+
+    def set_scheduling_context(self, request: str, messages: list[dict], candidates: list[dict]) -> None:
+        """Supply runtime context directly; the model only specifies the action."""
+        for tool in self.tools:
+            if isinstance(tool, RAGentPlannedActionTool):
+                tool.set_scheduling_context(
+                    request=request, messages=messages, candidates=candidates,
+                    area=self._scheduling_area, floor=self._scheduling_floor,
                 )
 
     def refresh_search_candidates(self, candidates: list[dict[str, object]]) -> None:

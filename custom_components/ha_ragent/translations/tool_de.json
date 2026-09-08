@@ -1,8 +1,0 @@
-{
-    "HassRememberFact": "Erforderlich, wenn die neueste Anfrage ausdrücklich darum bittet, eine dauerhafte, nicht vertrauliche Tatsache für künftige Gespräche zu merken. Nie Anweisungen, Befehle, Geheimnisse oder temporäre Zustände speichern.",
-    "HassForgetFact": "Erforderlich, wenn die neueste Anfrage ausdrücklich darum bittet, eine gespeicherte Tatsache zu vergessen. Verwende ihre exakte memory_id aus den relevanten Langzeiterinnerungen.",
-    "HassSemanticSearch": "Sucht nach Geräten oder Tools, auch nach Begriffen, die nicht ausdrücklich in der Nutzeranfrage stehen. Beschreibe in search_query knapp die gesuchte Aktion oder Fähigkeit, das Ziel und nützlichen Kontext. Wähle den engsten scope.",
-    "HassPlannedAction": "Nur verwenden, wenn die neueste Anfrage ausdrücklich eine Aktion in 1 bis 1440 Minuten plant oder verzögert. Nie für jetzt, sofort oder Anfragen ohne Zeitangabe verwenden. description enthält die vollständige zukünftige Aktion; das Tool plant sie, statt sie auszuführen.",
-    "HassListPlannedActions": "Listet alle ausstehenden einmaligen Aktionen dieses Agenten auf, ohne sie zu verändern.",
-    "HassCancelAllPlannedActions": "Bricht alle ausstehenden einmaligen Aktionen dieses Agenten ab. Nur verwenden, wenn der Nutzer ausdrücklich alle abbrechen möchte."
-}

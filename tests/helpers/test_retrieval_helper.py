@@ -1,3 +1,6 @@
+import json
+import pytest
+
 from dataclasses import dataclass
 
 from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
@@ -80,11 +83,11 @@ def test_camel_case_tool_name_provides_action_keywords() -> None:
 
     assert tool.canonical_name_parts == ("hass", "turn", "off")
     assert tool.canonical_action_keywords == ("turn", "off")
-    assert tool.canonical_action == "off"
-    assert "switch off" in tool.canonical_action_aliases
+    assert tool.canonical_action == ""
+    assert "switch off" not in tool.canonical_search_parts
     assert "turn off" in tool.canonical_search_parts
     assert "action keywords: turn off" in tool.to_embedding_text()
-    assert "action aliases:" in tool.to_embedding_text()
+    assert "action aliases:" not in tool.to_embedding_text()
 
 
 def test_action_ranking_prefers_match_without_erasing_alternatives() -> None:
@@ -149,18 +152,18 @@ def test_domain_signal_ranks_matching_tool_first() -> None:
     assert result == [light_off, switch_off]
 
 
-def test_near_equivalent_searches_share_a_canonical_signature() -> None:
+def test_synonyms_are_not_assumed_equivalent_for_cache_keys() -> None:
     first = RetrievalHelper.canonical_search_signature("switch off kitchen lights")
     second = RetrievalHelper.canonical_search_signature("power off the kitchen light")
 
-    assert first == second
+    assert first != second
 
 
-def test_weak_power_rewrites_share_target_based_signature() -> None:
+def test_different_capabilities_have_distinct_cache_keys() -> None:
     first = RetrievalHelper.canonical_search_signature("heater bathroom switch toggle")
     second = RetrievalHelper.canonical_search_signature("heater bathroom on/off")
 
-    assert first == second == "power||bathroom heater"
+    assert first != second
 
 
 def test_tool_search_query_uses_action_and_resolved_device_domain() -> None:
@@ -178,10 +181,11 @@ def test_tool_search_query_uses_action_and_resolved_device_domain() -> None:
         [heater],
     )
 
-    assert "canonical action: on" in query
-    assert "switch on" in query
-    assert "supported domains: switch" in query
-    assert "lights bathroom area" not in query
+    assert "canonical action:" not in query
+    assert "switch on" not in query
+    assert "supported domains:" not in query
+    assert query.startswith("turn on the bathroom heater\n")
+    assert "Search intent: lights bathroom area switch" in query
 
 
 def test_action_aliases_do_not_add_false_switch_domain() -> None:
@@ -211,133 +215,39 @@ def test_action_aliases_do_not_add_false_switch_domain() -> None:
     ) == [light_tool, switch_tool]
 
 
-def test_explicit_followup_uses_recent_successful_target_context() -> None:
-    group = TargetGroup(
-        entities=("light.kitchen",),
-        areas=("Kitchen",),
-        floors=("Ground floor",),
-        domains=("light",),
-        tool="HassTurnOff",
-        action="HassTurnOff",
-    )
+@pytest.mark.parametrize("query", [
+    "do it again", "turn it on there", "same room", "in the bathroom",
+    "dort auch", "schalte sie aus", "all except the kitchen lamp",
+    "turn on bedroom light", "打开它",
+])
+def test_history_is_separate_data_and_never_rewrites_current_request(query):
+    group = TargetGroup(entities=("light.kitchen",), areas=("Kitchen",),
+                        action="HassTurnOff", tool="HassTurnOff")
     continuity = ContinuityContext(target_groups=[(group, 0.9)])
+    prompt = RetrievalHelper.continuity_prompt(continuity)
+    payload = json.loads(prompt.split(":\n", 1)[1])
 
-    resolved = RetrievalHelper.resolve_followup_query("do it again", continuity)
-
-    assert "entity=light.kitchen" in resolved
-    assert "area=Kitchen" in resolved
-    assert "floor=Ground floor" in resolved
-    assert "previous_action=HassTurnOff" in resolved
-    assert RetrievalHelper.requested_action(resolved) == "off"
-
-
-def test_current_followup_action_overrides_previous_action() -> None:
-    group = TargetGroup(
-        entities=("light.kitchen",),
-        areas=("Kitchen",),
-        action="HassTurnOff",
-    )
-    continuity = ContinuityContext(target_groups=[(group, 0.9)])
-
-    resolved = RetrievalHelper.resolve_followup_query("turn it on there", continuity)
-
-    assert "previous_action" not in resolved
-    assert RetrievalHelper.requested_action(resolved) == "on"
-
-
-def test_explicit_pronoun_resolves_last_successful_target_before_validation() -> None:
-    group = TargetGroup(
-        entities=("switch.bathroom_heater",),
-        areas=("Bathroom",),
-        domains=("switch",),
-        action="HassTurnOff",
-    )
-    continuity = ContinuityContext(target_groups=[(group, 0.9)])
-
-    resolved = RetrievalHelper.resolve_followup_query("turn it on", continuity)
-
-    assert "entity=switch.bathroom_heater" in resolved
-    assert "area=Bathroom" in resolved
-    assert RetrievalHelper.requested_action(resolved) == "on"
-
-
-def test_pending_request_merges_clarification_but_not_new_request() -> None:
-    pending = "turn on the bathroom light"
-
-    assert RetrievalHelper.is_clarification("the ceiling light", pending)
-    assert RetrievalHelper.merge_pending_request(pending, "the ceiling light") == (
-        "turn on the bathroom light\nUser clarification: the ceiling light"
-    )
-    assert not RetrievalHelper.is_clarification("what is tomorrow's weather", pending)
-
-
-def test_location_followup_does_not_repeat_previous_action() -> None:
-    group = TargetGroup(
-        entities=("sensor.kitchen_temperature",),
-        areas=("Kitchen",),
-        action="HassTurnOff",
-    )
-    continuity = ContinuityContext(target_groups=[(group, 0.9)])
-
-    resolved = RetrievalHelper.resolve_followup_query("what is the temperature there", continuity)
-
-    assert "area=Kitchen" in resolved
-    assert "previous_action" not in resolved
-    assert RetrievalHelper.requested_action(resolved) == ""
-
-
-def test_supported_followup_phrases_use_recent_context() -> None:
-    group = TargetGroup(entities=("light.kitchen",), areas=("Kitchen",))
-    continuity = ContinuityContext(target_groups=[(group, 0.9)])
-
-    for query in ("same room", "what is there", "do it again", "turn off the ones"):
-        resolved = RetrievalHelper.resolve_followup_query(query, continuity)
-        assert "entity=light.kitchen" in resolved
-        assert "area=Kitchen" in resolved
-
-
-def test_non_followup_does_not_inject_recent_context() -> None:
-    group = TargetGroup(entities=("light.kitchen",), action="HassTurnOff")
-    continuity = ContinuityContext(target_groups=[(group, 0.9)])
-
-    assert RetrievalHelper.resolve_followup_query("turn on bedroom light", continuity) == (
-        "turn on bedroom light"
+    assert payload[0]["entities"] == ["light.kitchen"]
+    assert payload[0]["action"] == "HassTurnOff"
+    assert "not a new request" in prompt
+    assert RetrievalHelper.build_retrieval_text(query) == query
+    assert RetrievalHelper.build_tool_search_query(query, "", []) == query
+    assert not RetrievalHelper.target_is_confident(
+        query, [Device("light.kitchen", "Kitchen lamp", "Kitchen", "")], continuity,
     )
 
 
-def test_elliptical_location_followup_inherits_action_and_target_type() -> None:
-    group = TargetGroup(
-        entities=("switch.kitchen_heater",),
-        areas=("Kitchen",),
-        domains=("switch",),
-        action="HassTurnOn",
-    )
-    continuity = ContinuityContext(target_groups=[(group, 0.9)])
-
-    resolved = RetrievalHelper.resolve_followup_query("in the bathroom", continuity)
-
-    assert "previous_action=HassTurnOn" in resolved
-    assert "target=heater" in resolved
-    assert "domain=switch" in resolved
-    assert "entity=switch.kitchen_heater" not in resolved
-    assert "area=Kitchen" not in resolved
-    assert RetrievalHelper.requested_action(resolved) == "on"
-    tool_query = RetrievalHelper.build_tool_search_query(
-        resolved,
-        "",
-        [Device(
-            id="switch.bathroom_heater",
-            friendly_name="Bathroom heater",
-            area_name="Bathroom",
-            floor_name="Ground floor",
-            domain=["switch"],
-        )],
-    )
-    assert "canonical action: on" in tool_query
-    assert "supported domains: switch" in tool_query
+def test_continuity_prompt_is_bounded_and_empty_without_successful_targets():
+    assert RetrievalHelper.continuity_prompt(ContinuityContext()) == ""
+    groups = [(TargetGroup(entities=tuple(f"light.{i}" for i in range(30))), 0.5)] * 10
+    payload = json.loads(RetrievalHelper.continuity_prompt(
+        ContinuityContext(target_groups=groups),
+    ).split(":\n", 1)[1])
+    assert len(payload) == 2
+    assert len(payload[0]["entities"]) == 12
 
 
-def test_explicit_request_resolves_one_full_intent_candidate() -> None:
+def test_literal_name_resolves_one_identity_candidate() -> None:
     devices = [
         Device(
             id="light.bathroom_ceiling",
@@ -356,14 +266,14 @@ def test_explicit_request_resolves_one_full_intent_candidate() -> None:
     ]
 
     status, names = RetrievalHelper.device_resolution(
-        "turn on the bathroom ceiling light",
+        "Bathroom ceiling light",
         devices,
     )
 
     assert status == "high"
     assert names == ("light.bathroom_ceiling",)
     assert RetrievalHelper.reduce_confident_devices(
-        "turn on the bathroom ceiling light",
+        "Bathroom ceiling light",
         devices,
     ) == [devices[0]]
 
@@ -562,7 +472,8 @@ def test_device_domain_mismatch_is_a_negative_soft_signal() -> None:
         floor_name="",
         domain=["light"],
     )
-    lock_tool = LlmTool(name="HassLock", description="Lock a lock", parameters={})
+    lock_tool = LlmTool(name="HassLock", description="Lock a lock",
+                        parameters={"properties": {"domain": {"enum": ["lock"]}}})
 
     signals = RetrievalHelper.tool_ranking_signals(
         lock_tool,
@@ -593,7 +504,7 @@ def test_tool_confidence_distinguishes_search_from_matching_action() -> None:
         [turn_on, search],
         "turn on the light",
         [light],
-    ) == "high"
+    ) == "medium"
 
 
 def test_trusted_location_ranks_current_area_before_retrieval() -> None:
@@ -729,7 +640,7 @@ def test_successful_target_group_is_preserved_for_weak_followup() -> None:
     )
 
     assert result == [previous]
-    assert RetrievalHelper.target_is_confident("adjust it", result, continuity)
+    assert not RetrievalHelper.target_is_confident("adjust it", result, continuity)
 
 
 def test_successful_target_group_expands_device_limit() -> None:
@@ -746,7 +657,8 @@ def test_successful_target_group_expands_device_limit() -> None:
 
 
 def test_canonical_tool_name_parts_and_family_are_embedded() -> None:
-    tool = LlmTool(name="HassTurnOn", description="Control a target")
+    tool = LlmTool(name="HassTurnOn", description="Control a target",
+                   metadata=ToolMetadata(family="power"))
 
     assert tool.canonical_name_parts == ("hass", "turn", "on")
     assert tool.family == "power"
@@ -765,16 +677,14 @@ def test_supported_tool_domains_are_indexed() -> None:
     assert "supported domains: light, switch" in tool.to_embedding_text()
 
 
-def test_multiple_requested_actions_keep_textual_order() -> None:
-    assert RetrievalHelper.requested_actions(
-        "turn on the kitchen light and turn off the bathroom fan"
-    ) == ("on", "off")
-    assert RetrievalHelper.requested_actions(
-        "turn on the kitchen light and turn on the bathroom light"
-    ) == ("on", "on")
-
-    assert RetrievalHelper.requested_actions("is the kitchen light on") == ()
-    assert RetrievalHelper.requested_actions("kitchen light on") == ("on",)
+def test_compound_and_informational_requests_are_preserved():
+    for query in (
+        "turn on the kitchen light and turn off the bathroom fan",
+        "is the kitchen light on",
+        "kitchen light on",
+        "Küchenlicht einschalten und Ventilator ausschalten",
+    ):
+        assert RetrievalHelper.build_tool_search_query(query, "", []) == query
 
 
 def test_unknown_tool_schema_is_searchable_and_remains_live() -> None:
@@ -796,3 +706,66 @@ def test_unknown_tool_schema_is_searchable_and_remains_live() -> None:
     assert "required mode" in tool.to_embedding_text()
     assert "choices quiet turbo" in tool.to_embedding_text()
     assert tool.to_tool_dict()["function"]["parameters"] is parameters
+
+
+def test_compound_request_preserves_custom_capabilities_in_embedding_query() -> None:
+    request = (
+        "turn on light strip and set the color to red and brightness to 40% "
+        "and also enable sleep mode"
+    )
+    query = RetrievalHelper.build_tool_search_query(request, "", [{"domain": ["light"]}])
+
+    assert query.startswith(request)
+    assert query == request
+
+
+def test_compound_retrieval_covers_schema_capabilities_among_power_tools() -> None:
+    powers = [
+        LlmTool(f"Vendor{index}TurnOn", "Turn on a light",
+                parameters={"properties": {"domain": {"enum": ["light"]}}})
+        for index in range(5)
+    ]
+    light_set = LlmTool("HassLightSet", "Set light brightness and color",
+                        parameters={"properties": {
+                            "brightness": {"type": "integer"},
+                            "color": {"type": "string"},
+                        }})
+    custom = LlmTool("VendorExecute", "Run a user-defined program",
+                     parameters={"properties": {"mode": {"enum": ["sleep", "turbo"]}}})
+    query = RetrievalHelper.build_tool_search_query(
+        "turn on light strip and set the color to red and brightness to 40% "
+        "and also enable sleep mode", "", [{"domain": ["light"]}],
+    )
+    result = RetrievalHelper.rank_tool_candidates(
+        [ScoredResult(tool, 0.99, index + 1) for index, tool in enumerate(powers)],
+        [*powers, light_set, custom], query, [{"domain": ["light"]}], 3,
+    )
+
+    assert len(result) == 3
+    assert any(tool in powers for tool in result)
+    assert light_set in result
+    assert custom in result
+
+
+def test_compound_action_candidates_do_not_claim_complete_intent_resolution() -> None:
+    turn_on = LlmTool("HassTurnOn", "Turn on a device")
+    turn_off = LlmTool("HassTurnOff", "Turn off a device")
+    query = RetrievalHelper.build_tool_search_query(
+        "turn on the light and turn off the fan", "", [],
+    )
+
+    assert RetrievalHelper.tool_ranking_signals(turn_off, query)["lexical_exact"] > 0
+    assert RetrievalHelper.tool_search_confidence([turn_on], query, []) != "high"
+    assert RetrievalHelper.tool_search_confidence([turn_on, turn_off], query, []) != "high"
+    assert set(t.name for t in RetrievalHelper.rank_tools_for_query([turn_on, turn_off], query)) == {"HassTurnOn", "HassTurnOff"}
+
+
+def test_high_scoring_power_tool_does_not_hide_other_candidates() -> None:
+    turn_on = LlmTool("HassTurnOn", "Turn on a light")
+    custom = LlmTool("BedtimeRoutine", "Start a user-defined routine")
+    result = RetrievalHelper.rank_tool_candidates(
+        [ScoredResult(turn_on, 1.0, 1)], [turn_on, custom],
+        "turn on the light and start bedtime routine", [], 4,
+    )
+
+    assert result == [turn_on, custom]

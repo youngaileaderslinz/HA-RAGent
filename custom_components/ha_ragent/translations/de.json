@@ -111,11 +111,11 @@
                     },
                     "data_description": {
                         "rag_prompt": "Der System-Prompt, der das Verhalten und die Persönlichkeit des Assistenten definiert",
-                        "rag_retrieval_method": "Legt fest, wie Geräte und Tools gefunden werden. Automatisch kombiniert Vektor-, Text- und Metadatenabgleich; Vektorsuche verwendet nur Embeddings; Textsuche verwendet Namen, Aliase und Metadaten.",
+                        "rag_retrieval_method": "Legt fest, wie Geräte und Tools gefunden werden.",
                         "rag_allow_auto_embedding": "Bindet exponierte Geräte und Tools für diesen KI-RAGent automatisch beim Start und nach Konfigurationsänderungen ein.",
                         "rag_allow_questions": "Erlaubt dem Assistenten, Rückfragen zu stellen und das Gespräch fortzusetzen.",
                         "rag_enable_model_thinking": "Deaktiviert das Denken des Modells, um die Antwortzeiten zu verkürzen.",
-                        "rag_temperature": "Sampling-Temperatur; höher = zufälliger, niedriger = deterministischer",
+                        "rag_temperature": "Sampling-Temperatur: höher = zufälliger, niedriger = deterministischer",
                         "rag_max_tokens": "Maximale Anzahl an Tokens, die das Modell pro Antwort erzeugen darf",
                         "rag_context_length": "Wie viele vorherige Nachrichten im Kontextfenster des Modells berücksichtigt werden",
                         "rag_max_tool_call_iterations": "Begrenzung, wie oft der Agent pro Anfrage externe Tools aufrufen darf",

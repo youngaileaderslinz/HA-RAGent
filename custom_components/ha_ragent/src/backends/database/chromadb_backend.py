@@ -3,10 +3,7 @@ import asyncio
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-try:
-    from homeassistant.core import HomeAssistant
-except ImportError:
-    from custom_components.ha_ragent.src.mock import MockHomeAssistant as HomeAssistant
+from homeassistant.core import HomeAssistant
 
 from chromadb import Client
 from chromadb.config import Settings

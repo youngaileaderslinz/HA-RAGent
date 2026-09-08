@@ -26,7 +26,7 @@ services:
               capabilities: [gpu]
 
   llamacpp:
-    image: ghcr.io/ggml-org/llama.cpp:server
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda12-b10818
     container_name: llamacpp
     restart: unless-stopped
     ports:
@@ -37,8 +37,7 @@ services:
       LLAMA_CACHE: /models/cache
     command:
       - --hf-repo
-      - ibm-granite/granite-4.1-3b-GGUF:Q4_K_M
-      - --embeddings
+      - Qwen/Qwen3-1.7B-GGUF:Q8_0
       - --parallel
       - "1"
       - --ubatch-size
@@ -51,7 +50,7 @@ services:
       - "8080"
 
   llamacpp_embed:
-    image: ghcr.io/ggml-org/llama.cpp:server
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda12-b10818
     container_name: llamacpp_embed
     restart: unless-stopped
     ports:
