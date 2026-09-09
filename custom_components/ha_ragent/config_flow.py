@@ -163,7 +163,6 @@ class RagentConfigFlow(ConfigFlow, domain=DOMAIN):
         title += " | " + embedding_backend_to_class(embedding_backend).get_name()
         title += " | " + llm_backend_to_class(llm_backend).get_name()
         title += " | Language: " + self.client_config.get(CONF_SELECTED_LANGUAGE, "en") 
-        _logger.debug(f"Creating provider with config: {self.client_config}")
 
         return self.async_create_entry(
             title=title,
