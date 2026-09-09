@@ -97,16 +97,18 @@ Use the `Add Integration` button in the bottom right to add a new integration ca
     - **Assist** allows the model to control devices and exposes Home Assistant tools
 - `System Prompt`
     - The Jinja template rendered and sent to the model as its system prompt
-- `Retrieval Method`
-    - **Automatic** (default) uses cached text and metadata matching, adding vector search when there is no unique, complete name or alias match
-    - **Vector search** uses embedding similarity only
-    - **Lexical search** uses names, aliases and metadata without semantic similarity
 - `Allow Auto Embedding`
     - Automatically rebuilds embeddings for exposed entities and tools during startup and after configuration changes
 - `Allow Follow-up Questions`
     - Lets the assistant ask a clarification question and keep the conversation open for the user's reply
 - `Enable Model Thinking`
     - Controls whether the model may use its thinking mode. Leave disabled for faster responses when supported.
+- `Retrieval Method` (Only affects device and tool retrieval, memory always uses vector search)
+    - **Automatic** (default) uses cached text and metadata matching, adding vector search when there is no unique, complete name or alias match
+    - **Vector search** uses embedding similarity only
+    - **Lexical search** uses names, aliases and metadata without semantic similarity
+- `Tools excluded from embedding`
+    - Excludes selected tool names from the vector index. Names are matched exactly and are case-sensitive
 - `Number of Devices`
     - Controls how many relevant entity candidates are retrieved and added to the prompt
 - `Number of Tools`
@@ -115,8 +117,6 @@ Use the `Add Integration` button in the bottom right to add a new integration ca
     - Controls how many semantically relevant, explicitly stored memories are added to each prompt. Set it to `0` to disable recall without deleting memories.
 - `Maximum Memory Entries`
     - Controls how many long-term memories are retained for this RAGent.
-- `Tools excluded from embedding`
-    - Excludes selected tool names from the vector index. Names are matched exactly and are case-sensitive
 - `Context Length` (Ollama only)
     - Sets Ollama's model context-window size
 - `Maximum Tokens`

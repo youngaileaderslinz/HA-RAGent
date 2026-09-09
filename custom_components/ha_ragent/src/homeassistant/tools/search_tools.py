@@ -457,7 +457,6 @@ class RAGentSemanticSearchTool(llm.Tool):
                         query_tool_limit = tool_limit
                         if query_confidence == "low" and retrieval_method != RETRIEVAL_METHOD_VECTOR:
                             query_tool_limit = max(tool_limit, RetrievalHelper.expanded_tool_limit(tool_limit))
-                        result_tool_limit = max(result_tool_limit, query_tool_limit)
                         seen_query_tool_names: set[str] = set()
                         for tool in retrieved_tools:
                             if not isinstance(tool, LlmTool) or tool.name in seen_query_tool_names:

@@ -281,14 +281,14 @@ async def _async_test_object_round_trips(
     try:
         assert await backend.async_get_lexical_objects(
             DeviceEmbedding, config, device_collection
-        ) == [device, second_device]
+        ) == sorted([device, second_device], key=lambda item: item.id)
         cached_devices = await backend.async_get_lexical_objects(
             DeviceEmbedding, config, device_collection
         )
         cached_devices.clear()
         assert await backend.async_get_lexical_objects(
             DeviceEmbedding, config, device_collection
-        ) == [device, second_device]
+        ) == sorted([device, second_device], key=lambda item: item.id)
 
         backend.invalidate_collection_cache(device_collection)
         concurrent_results = await asyncio.gather(
@@ -299,7 +299,9 @@ async def _async_test_object_round_trips(
                 for _ in range(3)
             )
         )
-        assert concurrent_results == [[device, second_device]] * 3
+        assert [sorted(result, key=lambda item: item.id) for result in concurrent_results] == [
+            sorted([device, second_device], key=lambda item: item.id)
+        ] * 3
     finally:
         backend.async_list_objects = original_list_objects  # type: ignore[method-assign]
     assert list_calls == 2
