@@ -257,7 +257,7 @@ DEFAULT_PROMPT = """<persona_prompt>
 {% if continuity_list %}
 <continuity_prompt>
 {% for continuity in continuity_list %}
-- {{ continuity | tojson }}
+- {{ {"entities": continuity.entities, "areas": continuity.areas, "floors": continuity.floors, "domains": continuity.domains, "device_classes": continuity.device_classes, "tool": continuity.tool, "action": continuity.action} | tojson }}
 {% endfor %}
 {% endif %}
 
@@ -288,8 +288,8 @@ DEFAULT_SETTINGS = {
     CONF_P_TOP: 0.9,
     CONF_P_TYPICAL: 1.0,
     CONF_PROMPT: DEFAULT_PROMPT,
-    CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS: 10,
-    CONF_REMEMBER_CONVERSATION_TIME_MINUTES: 30,
+    CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS: 8,
+    CONF_REMEMBER_CONVERSATION_TIME_MINUTES: 15,
     CONF_RETRIEVAL_METHOD: RETRIEVAL_METHOD_AUTOMATIC,
     CONF_SELECTED_LANGUAGE: "en",
     CONF_TEMPERATURE: 0.5,

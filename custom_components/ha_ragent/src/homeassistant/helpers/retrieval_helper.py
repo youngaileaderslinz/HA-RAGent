@@ -126,6 +126,7 @@ class RetrievalHelper:
                 "areas": list(group.areas[:4]),
                 "floors": list(group.floors[:4]),
                 "domains": list(group.domains[:4]),
+                "device_classes": list(group.device_classes[:4]),
                 "tool": group.tool,
                 "action": group.action,
             }

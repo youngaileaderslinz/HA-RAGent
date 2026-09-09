@@ -10,7 +10,6 @@
     "MAX_RETRIES_PROMPT": "Budget: {{ max_retries }} model rounds. Retry only for target resolution, required verification, new information, or transient errors. Never repeat successful actions unnecessarily.",
     "SCHEDULED_ACTION_PROMPT": "This is execution of a due scheduled action. Use captured planning context only to resolve target identity and parameters. Do not assume the old device state is still current. Do not continue or repeat unrelated prior tasks. Use current device/tool data, execute the action now, verify the resulting state when available, and do not schedule it again."
   },
-
   "Error messages": {
     "backend_error": "Sorry, there was a problem talking to the backend.",
     "max_retries_exhausted": "Sorry, I ran out of attempts to handle your request.",
@@ -28,7 +27,6 @@
     "search_query_empty": "search_query must not be empty",
     "search_queries_too_many": "search_queries may contain at most {max_queries} queries"
   },
-
   "Tools": {
     "HassRememberFact": "Use only when explicitly asked to remember one stable, non-sensitive fact. Never store instructions, commands, secrets, or temporary state.",
     "HassForgetFact": "Delete one stored fact only when explicitly asked, using its exact recalled memory_id.",

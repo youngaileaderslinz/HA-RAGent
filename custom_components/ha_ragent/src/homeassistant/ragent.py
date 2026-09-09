@@ -47,6 +47,8 @@ from custom_components.ha_ragent.src.const import (
     CONF_NUM_DEVICES_TO_EXTRACT,
     CONF_NUM_TOOLS_TO_EXTRACT,
     CONF_NUM_MEMORIES_TO_EXTRACT,
+    CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
+    CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
     CONF_PROMPT,
     DEFAULT_PROMPT,
     CONF_MAX_TOOL_CALL_ITERATIONS,
@@ -117,8 +119,16 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
     ) -> ContinuityContext:
         """Retain bounded recent structured history without embedding turns."""
         contexts = history_manager.structured_turn_contexts(chat_log)
+        remember_num = get_setting_value(CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS, self.runtime_options)
+        remember_time = get_setting_value(CONF_REMEMBER_CONVERSATION_TIME_MINUTES, self.runtime_options)
+        if not remember_num and not remember_time:
+            return ContinuityContext()
         selected = RetrievalHelper.select_history_contexts(
-            contexts, {}, [], max_age_seconds=300.0,
+            contexts,
+            {},
+            [],
+            max_age_seconds=remember_time * 60 if remember_time > 0 else float("inf"),
+            limit=remember_num if remember_num > 0 else len(contexts),
         )
         return RetrievalHelper.build_continuity_context(selected)
 

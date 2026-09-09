@@ -132,8 +132,9 @@ class MemoryManager:
         if entry is None:
             return []
         async with self._get_lock():
-            has_objects = entry.vector_db_backend.async_collection_has_objects()
-            if has_objects and not await has_objects(config, self.collection_name):
+            if not await entry.vector_db_backend.async_collection_has_objects(
+                config, self.collection_name
+            ):
                 return []
             if isinstance(query_embedding, QueryEmbedding):
                 query_embedding = await query_embedding.get()

@@ -169,9 +169,6 @@ def test_empty_memory_recall_skips_embedding_and_observes_later_writes(tmp_path)
     async def run():
         hass, db = make_backend(tmp_path)
         hass.data = {DOMAIN: {"entry": SimpleNamespace(subentries={"agent": SimpleNamespace(data={})}, vector_db_backend=db)}}
-        async def has_objects(_config, collection_name):
-            return bool(await db.async_list_objects(MemoryEmbedding, {}, collection_name))
-        db.async_collection_has_objects = lambda: has_objects
         manager = MemoryManager(hass, "entry", "agent")
         embed = AsyncMock(return_value=[1.0, 0.0])
         assert await manager.async_recall(QueryEmbedding(embed), 3) == []

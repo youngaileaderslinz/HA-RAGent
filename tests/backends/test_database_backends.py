@@ -279,15 +279,19 @@ async def _async_test_object_round_trips(
 
     backend.async_list_objects = count_list_objects  # type: ignore[method-assign]
     try:
-        assert await backend.async_get_lexical_objects(
-            DeviceEmbedding, config, device_collection
+        assert sorted(
+            await backend.async_get_lexical_objects(
+                DeviceEmbedding, config, device_collection
+            ), key=lambda item: item.id
         ) == sorted([device, second_device], key=lambda item: item.id)
         cached_devices = await backend.async_get_lexical_objects(
             DeviceEmbedding, config, device_collection
         )
         cached_devices.clear()
-        assert await backend.async_get_lexical_objects(
-            DeviceEmbedding, config, device_collection
+        assert sorted(
+            await backend.async_get_lexical_objects(
+                DeviceEmbedding, config, device_collection
+            ), key=lambda item: item.id
         ) == sorted([device, second_device], key=lambda item: item.id)
 
         backend.invalidate_collection_cache(device_collection)
@@ -339,9 +343,11 @@ async def _async_test_object_round_trips(
         DeviceEmbedding, config, device_collection
     ) == [second_device]
     backend.invalidate_collection_cache()
-    assert await backend.async_get_lexical_objects(
-        DeviceEmbedding, config, device_collection
-    ) == [device, second_device]
+    assert sorted(
+        await backend.async_get_lexical_objects(
+            DeviceEmbedding, config, device_collection
+        ), key=lambda item: item.id
+    ) == sorted([device, second_device], key=lambda item: item.id)
 
     await backend.async_reset_collection(
         config, device_collection, EMBEDDING_DIMENSION

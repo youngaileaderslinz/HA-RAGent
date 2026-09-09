@@ -10,7 +10,6 @@
     "MAX_RETRIES_PROMPT": "Budget: {{ max_retries }} Modellrunden. Wiederhole nur zur Zielauflösung, nötigen Verifizierung, bei neuen Informationen oder vorübergehenden Fehlern. Wiederhole erfolgreiche Aktionen niemals unnötig.",
     "SCHEDULED_ACTION_PROMPT": "Dies ist die Ausführung einer fälligen geplanten Aktion. Verwende den bei der Planung erfassten Kontext nur zur Auflösung von Zielidentität und Parametern. Nimm nicht an, dass der damalige Gerätezustand noch aktuell ist. Setze keine anderen früheren Aufgaben fort und wiederhole sie nicht. Verwende aktuelle Geräte-/Tool-Daten, führe die Aktion jetzt aus, verifiziere den resultierenden Zustand, sofern verfügbar, und plane sie nicht erneut."
   },
-
   "Error messages": {
     "backend_error": "Entschuldigung, bei der Verbindung zum Backend ist ein Fehler aufgetreten.",
     "max_retries_exhausted": "Entschuldigung, ich habe die maximale Anzahl an Versuchen erreicht.",
@@ -28,7 +27,6 @@
     "search_query_empty": "search_query darf nicht leer sein",
     "search_queries_too_many": "search_queries darf höchstens {max_queries} Abfragen enthalten"
   },
-
   "Tools": {
     "HassRememberFact": "Nur verwenden, wenn ausdrücklich darum gebeten wird, eine stabile, nicht sensible Tatsache zu speichern. Keine Anweisungen, Befehle, Geheimnisse oder temporären Zustände speichern.",
     "HassForgetFact": "Eine gespeicherte Tatsache nur auf ausdrückliche Anfrage und mit der exakten memory_id löschen.",
