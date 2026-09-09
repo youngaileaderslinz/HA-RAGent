@@ -22,7 +22,7 @@ from custom_components.ha_ragent.src.models.embedding.tool_metadata import (
     normalize_canonical_text,
 )
 
-from custom_components.ha_ragent.src.models.retrieval.lexical_index import lexical_index
+from custom_components.ha_ragent.src.models.retrieval.lexical_index import lexical_index, match_features, match_score
 from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
 from custom_components.ha_ragent.src.utils import get_setting_value
 
@@ -318,32 +318,14 @@ class RetrievalHelper:
     @staticmethod
     def _match_scores(query: str, values: Iterable[object]) -> tuple[float, float]:
         query_text = RetrievalHelper._normalize(query)
-        query_tokens = set(query_text.split())
-        query_ngrams = RetrievalHelper._character_ngrams(query_text)
+        size = min(3, max(1, len(query_text.replace(" ", ""))))
+        prepared_query = match_features(query, size)
         exact_score = 0.0
         fuzzy_score = 0.0
         for value in values:
-            normalized = RetrievalHelper._normalize(value)
-            if not normalized:
-                continue
-            value_tokens = set(normalized.split())
-            if normalized == query_text:
-                exact_score = max(exact_score, 1.0)
-            elif f" {normalized} " in f" {query_text} ":
-                exact_score = max(exact_score, 0.9)
-            elif value_tokens:
-                exact_score = max(
-                    exact_score,
-                    len(query_tokens & value_tokens) / len(value_tokens),
-                )
-
-            value_ngrams = RetrievalHelper._character_ngrams(normalized)
-            denominator = len(query_ngrams) + len(value_ngrams)
-            if denominator:
-                fuzzy_score = max(
-                    fuzzy_score,
-                    2.0 * len(query_ngrams & value_ngrams) / denominator,
-                )
+            exact, fuzzy = match_score(prepared_query, match_features(str(value or ""), size))
+            exact_score = max(exact_score, exact)
+            fuzzy_score = max(fuzzy_score, fuzzy)
         return exact_score, fuzzy_score
 
     @staticmethod
@@ -499,10 +481,12 @@ class RetrievalHelper:
             tuple(str(value) for value in text_parts(candidates[item_key]) if value)
             for item_key in lexical_keys
         )
-        lexical_scores = dict(zip(lexical_keys, lexical_index(documents).scores(query)))
+        index = lexical_index(documents)
+        lexical_scores = dict(zip(lexical_keys, index.scores(query)))
+        field_scores = index.match_scores(query)
         match_scores = {
-            item_key: RetrievalHelper._match_scores(query, parts)
-            for item_key, parts in zip(lexical_keys, documents)
+            item_key: field_scores.get(position, (0.0, 0.0))
+            for position, item_key in enumerate(lexical_keys)
         }
         lexical_ranking = RetrievalHelper._rank_positive_scores(lexical_scores, 0.01)
         exact_ranking = RetrievalHelper._rank_positive_scores(
@@ -645,7 +629,8 @@ class RetrievalHelper:
     @staticmethod
     def _tool_declared_domains(tool: Any) -> set[str]:
         properties = (getattr(tool, "parameters", None) or {}).get("properties") or {}
-        domains = RetrievalHelper._schema_values(properties.get("domain", {}))
+        schema_domains = getattr(tool, "schema_domains", None)
+        domains = set(schema_domains) if schema_domains is not None else RetrievalHelper._schema_values(properties.get("domain", {}))
         domains.update(RetrievalHelper._metadata_value(tool, "supported_domains", ()) or ())
         return domains
 
@@ -666,12 +651,13 @@ class RetrievalHelper:
         semantic_rank: int | None = None,
         semantic_score: float | None = None,
         continuity: float = 0.0,
+        lexical_match: tuple[float, float] | None = None,
     ) -> dict[str, float]:
         """Return independent, extensible signals used to rank a tool."""
         devices = list(devices)
         query = RetrievalHelper._tool_query_text(query)
         requested_domains = RetrievalHelper._device_domains(devices)
-        exact, fuzzy = RetrievalHelper._match_scores(
+        exact, fuzzy = lexical_match if lexical_match is not None else RetrievalHelper._match_scores(
             query,
             getattr(tool, "canonical_search_parts", ()) or (
                 getattr(tool, "name", ""),
@@ -752,7 +738,13 @@ class RetrievalHelper:
             )) if value)
             for tool in corpus_tools
         )
-        corpus_scores = dict(zip(corpus_names, lexical_index(documents).scores(query)))
+        index = lexical_index(documents)
+        corpus_scores = dict(zip(corpus_names, index.scores(query)))
+        field_scores = index.match_scores(query)
+        matches_by_name = {
+            name: field_scores.get(position, (0.0, 0.0))
+            for position, name in enumerate(corpus_names)
+        }
         scored: list[tuple[float, int, str, T]] = []
         for name, tool in candidate_by_name.items():
             continuity = continuity_score(tool) if continuity_score else 0.0
@@ -763,6 +755,7 @@ class RetrievalHelper:
                 semantic_rank=semantic_ranks.get(name),
                 semantic_score=semantic_scores.get(name),
                 continuity=continuity,
+                lexical_match=matches_by_name[name],
             )
             signals["lexical_corpus"] = corpus_scores[name]
             scored.append(
@@ -787,7 +780,7 @@ class RetrievalHelper:
                 str(getattr(tool, "description", "") or ""),
                 *getattr(tool, "canonical_schema_parts", ()),
             ))
-            matched_terms[name] = query_tokens & set(RetrievalHelper._normalize(text).split())
+            matched_terms[name] = query_tokens & match_features(text)[1]
         term_counts = Counter(term for terms in matched_terms.values() for term in terms)
         term_weights = {
             term: math.log(1.0 + len(scored) / count)
@@ -883,8 +876,12 @@ class RetrievalHelper:
         domains = RetrievalHelper._device_domains(devices)
         device_classes = RetrievalHelper._device_classes(devices)
         score = 0.0
-        allowed_domains = RetrievalHelper._schema_values(properties.get("domain", {}))
-        allowed_classes = RetrievalHelper._schema_values(properties.get("device_class", {}))
+        allowed_domains = getattr(tool, "schema_domains", None)
+        if allowed_domains is None:
+            allowed_domains = RetrievalHelper._schema_values(properties.get("domain", {}))
+        allowed_classes = getattr(tool, "schema_device_classes", None)
+        if allowed_classes is None:
+            allowed_classes = RetrievalHelper._schema_values(properties.get("device_class", {}))
         if allowed_domains:
             score += 2.0 if domains & allowed_domains else -2.0
         if allowed_classes:

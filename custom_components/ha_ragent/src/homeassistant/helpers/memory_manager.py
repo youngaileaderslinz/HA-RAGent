@@ -15,6 +15,7 @@ from custom_components.ha_ragent.src.const import (
 )
 from custom_components.ha_ragent.src.models.embedding.memory import Memory
 from custom_components.ha_ragent.src.models.embedding.memory_embedding import MemoryEmbedding
+from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
 from custom_components.ha_ragent.src.utils import get_setting_value
 
 _logger = logging.getLogger(__name__)
@@ -124,13 +125,20 @@ class MemoryManager:
             )
         return deleted > 0
 
-    async def async_recall(self, query_embedding: list[float], limit: int) -> list[Memory]:
+    async def async_recall(self, query_embedding: list[float] | QueryEmbedding, limit: int) -> list[Memory]:
         if limit <= 0:
             return []
         entry, config = self._get_entry_and_config()
         if entry is None:
             return []
         async with self._get_lock():
+            has_objects = entry.vector_db_backend.async_collection_has_objects()
+            if has_objects and not await has_objects(config, self.collection_name):
+                return []
+            if isinstance(query_embedding, QueryEmbedding):
+                query_embedding = await query_embedding.get()
+            if not query_embedding:
+                return []
             memories = await entry.vector_db_backend.async_retrieve_objects(
                 object_type=MemoryEmbedding,
                 config_subentry=config,

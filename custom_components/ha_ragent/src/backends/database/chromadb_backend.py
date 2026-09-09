@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from chromadb import Client
 from chromadb.config import Settings
 
-from custom_components.ha_ragent.src.backends.database.base_backend import ABaseDbBackend
+from custom_components.ha_ragent.src.backends.database.base_backend import ABaseDbBackend, invalidates_cache
 from custom_components.ha_ragent.src.models.embedding.device import Device
 from custom_components.ha_ragent.src.models.embedding.device_embedding import DeviceEmbedding
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
@@ -73,6 +73,13 @@ class ChromaDbBackend(ABaseDbBackend):
     def _collection_exists(self, client: Client, collection_name: str) -> bool:
         collections = [col.name for col in client.list_collections()]
         return collection_name in collections
+
+    def _collection_has_objects(self, collection_name: str) -> bool:
+        client = self._get_client()
+        return self._collection_exists(client, collection_name) and client.get_collection(name=collection_name).count() > 0
+
+    async def _async_collection_has_objects(self, config_subentry: dict, collection_name: str) -> bool:
+        return await self.hass.async_add_executor_job(self._collection_has_objects, collection_name)
 
     @staticmethod
     def _sanitize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -202,12 +209,14 @@ class ChromaDbBackend(ABaseDbBackend):
         except Exception as e:
              _logger.error(f"Error cleaning up database: {e}", exc_info=True)
 
+    @invalidates_cache
     async def async_cleanup_database(self) -> None:
         try:
             await self.hass.async_add_executor_job(self._cleanup_database)
         except Exception as e:
              _logger.error(f"Error cleaning up database: {e}", exc_info=True)
 
+    @invalidates_cache
     async def async_reset_collection(self, config_subentry: dict, collection_name: str, embedding_length: int) -> None:
         try:
             await self.hass.async_add_executor_job(self._reset_collection, collection_name)
@@ -221,12 +230,14 @@ class ChromaDbBackend(ABaseDbBackend):
             _logger.error(f"Error ensuring collection: {e}", exc_info=True)
             raise
 
+    @invalidates_cache
     async def async_cleanup_collection(self, config_subentry: dict, collection_name: str) -> None:
         try:
             await self.hass.async_add_executor_job(self._cleanup_collection, collection_name)
         except Exception as e:
             _logger.error(f"Error cleaning up collection: {e}", exc_info=True)
 
+    @invalidates_cache
     async def async_save_objects(self, config_subentry: dict, collection_name: str, device_embeddings: List[DeviceEmbedding | LlmToolEmbedding | MemoryEmbedding]) -> None:
         try:
             await self.hass.async_add_executor_job(self._save_device_embeddings, collection_name, device_embeddings)
@@ -234,6 +245,7 @@ class ChromaDbBackend(ABaseDbBackend):
              _logger.error(f"Error saving device embeddings: {e}", exc_info=True)
              raise
 
+    @invalidates_cache
     async def async_upsert_objects(self, config_subentry: dict, collection_name: str, id_field: str, object_embeddings: List[MemoryEmbedding]) -> None:
         try:
             await self.hass.async_add_executor_job(
@@ -270,11 +282,15 @@ class ChromaDbBackend(ABaseDbBackend):
             return await self.hass.async_add_executor_job(self._list_objects, object_type, collection_name)
         except Exception as e:
             _logger.error(f"Error listing objects: {e}", exc_info=True)
-            return []
+            raise
 
     async def async_increment_memory_retrieval_counts(self, config_subentry: dict, collection_name: str, memory_ids: List[str]) -> None:
-        await self.hass.async_add_executor_job(self._increment_memory_retrieval_counts, collection_name, memory_ids)
+        try:
+            await self.hass.async_add_executor_job(self._increment_memory_retrieval_counts, collection_name, memory_ids)
+        finally:
+            self.invalidate_collection_cache(collection_name, contents_changed=False)
 
+    @invalidates_cache
     async def async_delete_objects(self, config_subentry: dict, collection_name: str, id_field: str, object_ids: List[str]) -> int:
         try:
             return await self.hass.async_add_executor_job(self._delete_objects, collection_name, id_field, object_ids)

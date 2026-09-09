@@ -157,7 +157,8 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         if RetrievalHelper.retrieval_method(options) == RETRIEVAL_METHOD_VECTOR:
             return [result.item for result in scored_devices[:n_devices]]
 
-        ranked_devices = RetrievalHelper.rank_scored_candidates(
+        ranked_devices = await asyncio.to_thread(
+            RetrievalHelper.rank_scored_candidates,
             scored_devices,
             all_devices,
             query,
@@ -211,7 +212,8 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         if RetrievalHelper.retrieval_method(options) == RETRIEVAL_METHOD_VECTOR:
             return [result.item for result in scored_tools[:n_tools]]
 
-        ranked_tools = RetrievalHelper.rank_tool_candidates(
+        ranked_tools = await asyncio.to_thread(
+            RetrievalHelper.rank_tool_candidates,
             scored_tools,
             all_tools,
             query,
@@ -225,10 +227,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
     async def _async_retrieve_memories(self, query_embedding: List[float] | QueryEmbedding, n_memories: int) -> List[Memory]:
         """Retrieve relevant persistent memories for this agent."""
         if n_memories <= 0 or not query_embedding:
-            return []
-        if isinstance(query_embedding, QueryEmbedding):
-            query_embedding = await query_embedding.get()
-        if not query_embedding:
             return []
         try:
             return await MemoryManager(

@@ -1,12 +1,14 @@
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 from custom_components.ha_ragent.src.const import CANONICAL_NAME_SPLIT_PATTERN
-from custom_components.ha_ragent.src.models.retrieval.lexical_index import normalize
+from custom_components.ha_ragent.src.models.retrieval.lexical_index import canonical_normalize
 from custom_components.ha_ragent.src.models.base.serializeable_model import SerializableModel
 
 
+@lru_cache(maxsize=8192)
 def split_canonical_name(name: str) -> tuple[str, ...]:
     """Split a canonical name on underscores and camel-case transitions."""
     return tuple(
@@ -18,7 +20,7 @@ def split_canonical_name(name: str) -> tuple[str, ...]:
 
 def normalize_canonical_text(text: object) -> str:
     """Normalize free text for canonical capability matching."""
-    return normalize(re.sub(CANONICAL_NAME_SPLIT_PATTERN, " ", str(text or "")))
+    return canonical_normalize(str(text or ""))
 
 
 @dataclass

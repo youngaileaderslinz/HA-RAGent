@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict
 import json
 from dataclasses import dataclass
+from copy import deepcopy
 
 from custom_components.ha_ragent.src.models.base.serializeable_model import SerializableModel
 from custom_components.ha_ragent.src.models.base.embeddable_model import EmbeddableModel
@@ -86,13 +87,37 @@ class LlmTool(SerializableModel, EmbeddableModel):
     @property
     def canonical_schema_parts(self) -> tuple[str, ...]:
         """Return searchable live-schema metadata."""
-        return self._schema_search_parts(self.parameters or {})
+        return self._schema_features[1]
+
+    @property
+    def _schema_features(self) -> tuple:
+        """Reuse derived schema fields; detect nested edits as well as replacement."""
+        parameters = self.parameters or {}
+        cached = getattr(self, "_cached_schema_features", None)
+        if cached is None or cached[0] != parameters:
+            snapshot = deepcopy(parameters)
+            properties = snapshot.get("properties") or {}
+            cached = (
+                snapshot,
+                self._schema_search_parts(snapshot),
+                frozenset(self._schema_values(properties.get("domain", {}))),
+                frozenset(self._schema_values(properties.get("device_class", {}))),
+            )
+            self._cached_schema_features = cached
+        return cached
+
+    @property
+    def schema_domains(self) -> frozenset[str]:
+        return self._schema_features[2]
+
+    @property
+    def schema_device_classes(self) -> frozenset[str]:
+        return self._schema_features[3]
 
     @property
     def canonical_supported_domains(self) -> tuple[str, ...]:
         """Return explicit target domains declared by the tool schema."""
-        properties = (self.parameters or {}).get("properties") or {}
-        domains = self._schema_values(properties.get("domain", {}))
+        domains = set(self.schema_domains)
         if self.metadata:
             domains.update(self.metadata.supported_domains)
         return tuple(sorted(domains))

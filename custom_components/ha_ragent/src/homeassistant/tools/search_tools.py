@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 from typing import Any
 
 import voluptuous as vol
@@ -384,7 +385,8 @@ class RAGentSemanticSearchTool(llm.Tool):
                         if retrieval_method == RETRIEVAL_METHOD_VECTOR:
                             retrieved_devices = [result.item for result in scored_devices[:device_limit]]
                         else:
-                            retrieved_devices = RetrievalHelper.rank_scored_candidates(
+                            retrieved_devices = await asyncio.to_thread(
+                                RetrievalHelper.rank_scored_candidates,
                                 scored_devices,
                                 all_devices,
                                 device_query,
@@ -438,7 +440,8 @@ class RAGentSemanticSearchTool(llm.Tool):
                         if retrieval_method == RETRIEVAL_METHOD_VECTOR:
                             retrieved_tools = [result.item for result in scored_tools[:tool_limit]]
                         else:
-                            retrieved_tools = RetrievalHelper.rank_tool_candidates(
+                            retrieved_tools = await asyncio.to_thread(
+                                RetrievalHelper.rank_tool_candidates,
                                 scored_tools,
                                 all_tools,
                                 tool_query,

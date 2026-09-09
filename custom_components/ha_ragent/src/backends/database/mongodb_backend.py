@@ -9,7 +9,7 @@ from pymongo.asynchronous.collection import AsyncCollection
 
 from homeassistant.core import HomeAssistant
 
-from custom_components.ha_ragent.src.backends.database.base_backend import ABaseDbBackend
+from custom_components.ha_ragent.src.backends.database.base_backend import ABaseDbBackend, invalidates_cache
 from custom_components.ha_ragent.src.models.embedding.device import Device
 from custom_components.ha_ragent.src.models.embedding.device_embedding import DeviceEmbedding
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
@@ -51,6 +51,13 @@ class MongoDbBackend(ABaseDbBackend):
     
     def _get_connection(self) -> AsyncMongoClient:
         return AsyncMongoClient(self.url)
+
+    async def _async_collection_has_objects(self, config_subentry: dict, collection_name: str) -> bool:
+        conn = self._get_connection()
+        try:
+            return await self._get_collection(conn, collection_name).find_one({}, {"_id": 1}) is not None
+        finally:
+            await conn.close()
         
     def _get_database(self, connection: AsyncMongoClient) -> AsyncDatabase:
         return connection[self.db_name]
@@ -147,6 +154,7 @@ class MongoDbBackend(ABaseDbBackend):
             if connection:
                 await connection.close()
 
+    @invalidates_cache
     async def async_cleanup_database(self) -> None:
         conn = None
         try:
@@ -159,6 +167,7 @@ class MongoDbBackend(ABaseDbBackend):
             if conn:
                 await conn.close()
     
+    @invalidates_cache
     async def async_reset_collection(self, config_subentry: dict, collection_name: str, embedding_length: int) -> None:
         conn = None
         try:
@@ -187,6 +196,7 @@ class MongoDbBackend(ABaseDbBackend):
             if conn:
                 await conn.close()
             
+    @invalidates_cache
     async def async_cleanup_collection(self, config_subentry: dict, collection_name: str) -> None:
         conn = None
         try:
@@ -202,6 +212,7 @@ class MongoDbBackend(ABaseDbBackend):
             if conn:
                 await conn.close()
 
+    @invalidates_cache
     async def async_save_objects(self, config_subentry: dict, collection_name: str, device_embeddings: List[DeviceEmbedding | LlmToolEmbedding | MemoryEmbedding]) -> None:
         conn = None
         try:
@@ -216,6 +227,7 @@ class MongoDbBackend(ABaseDbBackend):
             if conn:
                 await conn.close()
 
+    @invalidates_cache
     async def async_upsert_objects(self, config_subentry: dict, collection_name: str, id_field: str, object_embeddings: List[MemoryEmbedding]) -> None:
         conn = None
         try:
@@ -285,7 +297,7 @@ class MongoDbBackend(ABaseDbBackend):
             return [object_type.parse_object(doc) for doc in results]
         except Exception as e:
             _logger.error(f"Error listing objects: {e}", exc_info=True)
-            return []
+            raise
         finally:
             if conn:
                 await conn.close()
@@ -303,9 +315,11 @@ class MongoDbBackend(ABaseDbBackend):
                     {"$inc": {"retrieval_count": 1}},
                 )
         finally:
+            self.invalidate_collection_cache(collection_name, contents_changed=False)
             if conn:
                 await conn.close()
 
+    @invalidates_cache
     async def async_delete_objects(self, config_subentry: dict, collection_name: str, id_field: str, object_ids: List[str]) -> int:
         conn = None
         try:
