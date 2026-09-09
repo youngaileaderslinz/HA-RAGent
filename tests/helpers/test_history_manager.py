@@ -180,7 +180,7 @@ def test_replace_system_prompt_removes_stale_candidate_context() -> None:
     assert manager.message_history[1].content == "turn it on"
 
 
-def test_persist_keeps_tool_protocol_out_of_prompt_but_in_chat_log() -> None:
+def test_persist_keeps_successful_tool_protocol_in_prompt_and_chat_log() -> None:
     manager = HistoryManager({
         CONF_REMEMBER_CONVERSATION_TIME_MINUTES: 10,
         CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS: 10,
@@ -214,6 +214,11 @@ def test_persist_keeps_tool_protocol_out_of_prompt_but_in_chat_log() -> None:
     manager.append_message(conversation.AssistantContent(agent_id="agent", content="Done"))
     manager.persist_chat_history(chat_log)
 
-    assert not any(isinstance(message, conversation.ToolResultContent) for message in prompt)
+    assert any(isinstance(message, conversation.ToolResultContent) for message in prompt)
+    assert any(
+        isinstance(message, conversation.AssistantContent)
+        and message.tool_calls
+        for message in prompt
+    )
     assert tool_call in chat_log.content
     assert tool_result in chat_log.content
