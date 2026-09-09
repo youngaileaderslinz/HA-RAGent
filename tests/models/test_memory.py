@@ -24,6 +24,9 @@ class FakeVectorDb:
     def __init__(self) -> None:
         self.objects: dict[str, list[MemoryEmbedding]] = {}
 
+    async def async_collection_has_objects(self, config: dict[str, Any], collection_name: str) -> bool:
+        return bool(self.objects.get(collection_name))
+
     async def async_ensure_collection_exists(self, config: dict[str, Any], collection_name: str, embedding_length: int) -> None:
         self.objects.setdefault(collection_name, [])
 

@@ -137,6 +137,36 @@ def test_failed_tool_calls_are_excluded_from_structured_history() -> None:
     assert isinstance(retained[0], conversation.UserContent)
 
 
+def test_successful_tool_calls_are_retained_in_prompt_history() -> None:
+    manager = HistoryManager({
+        CONF_REMEMBER_CONVERSATION_TIME_MINUTES: 10,
+        CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS: 10,
+    })
+    call = SimpleNamespace(
+        id="successful-call",
+        tool_name="HassTurnOn",
+        tool_args={"name": "light.bedroom"},
+    )
+    result = conversation.ToolResultContent(
+        agent_id="agent",
+        tool_call_id="successful-call",
+        tool_name="HassTurnOn",
+        tool_result={"success": ["light.bedroom"]},
+    )
+    chat_log = SimpleNamespace(content=[
+        conversation.UserContent(content="turn on the bedroom lamp"),
+        conversation.AssistantContent(agent_id="agent", content="", tool_calls=[call]),
+        result,
+        conversation.UserContent(content="current request"),
+    ])
+
+    retained = manager.filter_prompt_history(chat_log)
+
+    assert retained[0].content == "turn on the bedroom lamp"
+    assert retained[1].tool_calls == [call]
+    assert retained[2] is result
+
+
 def test_replace_system_prompt_removes_stale_candidate_context() -> None:
     manager = HistoryManager({})
     manager._message_history = [
@@ -150,7 +180,7 @@ def test_replace_system_prompt_removes_stale_candidate_context() -> None:
     assert manager.message_history[1].content == "turn it on"
 
 
-def test_persist_keeps_tool_protocol_out_of_prompt_but_in_chat_log() -> None:
+def test_persist_keeps_successful_tool_protocol_in_prompt_and_chat_log() -> None:
     manager = HistoryManager({
         CONF_REMEMBER_CONVERSATION_TIME_MINUTES: 10,
         CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS: 10,
@@ -184,6 +214,11 @@ def test_persist_keeps_tool_protocol_out_of_prompt_but_in_chat_log() -> None:
     manager.append_message(conversation.AssistantContent(agent_id="agent", content="Done"))
     manager.persist_chat_history(chat_log)
 
-    assert not any(isinstance(message, conversation.ToolResultContent) for message in prompt)
+    assert any(isinstance(message, conversation.ToolResultContent) for message in prompt)
+    assert any(
+        isinstance(message, conversation.AssistantContent)
+        and message.tool_calls
+        for message in prompt
+    )
     assert tool_call in chat_log.content
     assert tool_result in chat_log.content

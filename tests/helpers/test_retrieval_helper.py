@@ -242,6 +242,7 @@ def test_continuity_groups_are_bounded_and_empty_without_successful_targets():
     )
     assert len(continuity_groups) == 2
     assert len(continuity_groups[0]["entities"]) == 12
+    assert "device_classes" in continuity_groups[0]
 
 
 def test_literal_name_resolves_one_identity_candidate() -> None:

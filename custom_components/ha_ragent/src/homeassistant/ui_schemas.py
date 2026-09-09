@@ -422,11 +422,11 @@ def ui_schema_config_options(
         CONF_ALLOW_QUESTIONS,
         CONF_ENABLE_MODEL_THINKING,
         CONF_RETRIEVAL_METHOD,
+        CONF_EXCLUDED_TOOLS,
         CONF_NUM_DEVICES_TO_EXTRACT,
         CONF_NUM_TOOLS_TO_EXTRACT,
         CONF_NUM_MEMORIES_TO_EXTRACT,
         CONF_MAX_MEMORY_ENTRIES,
-        CONF_EXCLUDED_TOOLS,
         CONF_CONTEXT_LENGTH,
         CONF_MAX_TOKENS,
         # sampling parameters

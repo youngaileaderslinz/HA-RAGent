@@ -283,17 +283,40 @@ class HistoryManager:
             ]
 
         for turn in turns:
+            successful_call_ids: set[str] = set()
+            successful_tool_names: set[str] = set()
+            for message in turn:
+                if isinstance(message, conversation.ToolResultContent) and MessageHelper.tool_result_succeeded(
+                    getattr(message, "tool_result", None)
+                ):
+                    call_id = str(getattr(message, "tool_call_id", "") or "")
+                    if call_id:
+                        successful_call_ids.add(call_id)
+                    tool_name = str(getattr(message, "tool_name", "") or "")
+                    if tool_name:
+                        successful_tool_names.add(tool_name)
             for message in turn:
                 if isinstance(message, conversation.UserContent):
                     prompt_history.append(message)
                 elif isinstance(message, conversation.AssistantContent):
                     content = str(getattr(message, "content", "") or "")
-                    if content:
+                    tool_calls = [
+                        tool_call
+                        for tool_call in (getattr(message, "tool_calls", None) or [])
+                        if str(getattr(tool_call, "id", "") or "") in successful_call_ids
+                        or str(getattr(tool_call, "tool_name", "") or "") in successful_tool_names
+                    ]
+                    if content or tool_calls:
                         prompt_history.append(conversation.AssistantContent(
                             agent_id=getattr(message, "agent_id", None),
                             content=content,
-                            tool_calls=[],
+                            tool_calls=tool_calls,
                         ))
+                elif (
+                    isinstance(message, conversation.ToolResultContent)
+                    and MessageHelper.tool_result_succeeded(getattr(message, "tool_result", None))
+                ):
+                    prompt_history.append(message)
 
         return prompt_history
 

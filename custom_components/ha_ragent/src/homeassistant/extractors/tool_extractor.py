@@ -32,10 +32,13 @@ from custom_components.ha_ragent.src.homeassistant.ragent_config_entry import RA
 _logger = logging.getLogger(__name__)
 
 class ToolExtractor:
+    _timer_handlers: dict[int, tuple[Any, int]] = {}
+
     def __init__(self, hass: HomeAssistant, entry: RAGentConfigEntry) -> None:
         self._hass = hass
         self._entry = entry
         self._fake_timer_remove = None
+        self._timer_handler_key = id(hass)
 
     @staticmethod
     def _normalize_strings(values: Iterable[Any]) -> set[str]:
@@ -105,7 +108,15 @@ class ToolExtractor:
             pass
 
         try:
-            self._fake_timer_remove = async_register_timer_handler(self._hass, RAGENT_TIMER_DEVICE_ID, handle_timer_event)
+            shared = self._timer_handlers.get(self._timer_handler_key)
+            if shared is not None:
+                remove, count = shared
+                self._timer_handlers[self._timer_handler_key] = (remove, count + 1)
+                self._fake_timer_remove = True
+                return
+            remove = async_register_timer_handler(self._hass, RAGENT_TIMER_DEVICE_ID, handle_timer_event)
+            self._timer_handlers[self._timer_handler_key] = (remove, 1)
+            self._fake_timer_remove = True
             _logger.debug("Registered timer support for HA-RAGent")
         except Exception as err:
             _logger.warning(f"Failed to register timer device: {err}")
@@ -115,7 +126,17 @@ class ToolExtractor:
             return
         
         try:
-            self._fake_timer_remove()
+            shared = self._timer_handlers.get(self._timer_handler_key)
+            if shared is None:
+                self._fake_timer_remove = None
+                return
+            remove, count = shared
+            if count > 1:
+                self._timer_handlers[self._timer_handler_key] = (remove, count - 1)
+            else:
+                remove()
+                self._timer_handlers.pop(self._timer_handler_key, None)
+            self._fake_timer_remove = None
             _logger.debug("Unregistered timer support for HA-RAGent")
         except Exception as err:
             _logger.warning(f"Failed to unregister timer device: {err}")
