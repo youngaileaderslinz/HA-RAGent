@@ -96,6 +96,7 @@ TRANSLATION_ERROR_MEMORY_ID_INVALID = "memory_id_invalid"
 TRANSLATION_ERROR_MEMORY_NOT_FOUND = "memory_not_found"
 TRANSLATION_ERROR_SEARCH_QUERY_EMPTY = "search_query_empty"
 TRANSLATION_ERROR_SEARCH_QUERIES_TOO_MANY = "search_queries_too_many"
+TRANSLATION_ERROR_NO_SPEECH = "no_speech"
 
 
 #-----------------------------------------------

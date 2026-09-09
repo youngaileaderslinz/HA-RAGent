@@ -135,6 +135,12 @@ class OpenAiLlmBackend(ALlmBaseBackend):
     async def async_unload_model(self, config_subentry: dict) -> None:
         _logger.info("Unloading not supported for OpenAI Compatible LLM backend.")
 
+    async def async_close(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
+        _logger.info("Closed OpenAI-compatible LLM client.")
+
     async def async_get_available_models(self) -> List[str]:
         client = await self._async_get_client()
         result = await client.models.list()

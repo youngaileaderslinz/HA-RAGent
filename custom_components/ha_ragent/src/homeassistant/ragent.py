@@ -74,6 +74,7 @@ from custom_components.ha_ragent.src.const import (
     TRANSLATION_ERROR_BACKEND,
     TRANSLATION_ERROR_MAX_RETRIES,
     TRANSLATION_ERROR_LLM_API,
+    TRANSLATION_ERROR_NO_SPEECH,
     TRANSLATION_ERROR_TEMPLATE,
     TRANSLATION_ERROR_UNEXPECTED,
 )
@@ -636,7 +637,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             history_manager.persist_chat_history(chat_log)
             has_speech = True
         if not has_speech:
-            intent_response.async_set_speech("I don't have anything to say right now")
+            intent_response.async_set_speech(self.entry.translations.error(TRANSLATION_ERROR_NO_SPEECH))
 
         return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id, continue_conversation=continue_conversation)
         

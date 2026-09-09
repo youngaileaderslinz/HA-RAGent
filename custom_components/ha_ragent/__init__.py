@@ -222,6 +222,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: RAGentConfigEntry) -> b
         return False
 
     await entry.vector_db_backend.async_close()
+    await entry.embedder_backend.async_close()
+    await entry.llm_backend.async_close()
     hass.data[DOMAIN].pop(entry.entry_id)
     hass.data[DOMAIN].get("subentry_ids", {}).pop(entry.entry_id, None)
     return True

@@ -25,6 +25,7 @@
     "memory_id_invalid": "memory_id muss eine 16-stellige hexadezimale ID sein",
     "memory_not_found": "Erinnerung nicht gefunden",
     "search_query_empty": "search_query darf nicht leer sein",
+    "no_speech": "Ich habe gerade nichts zu sagen.",
     "search_queries_too_many": "search_queries darf höchstens {max_queries} Abfragen enthalten"
   },
   "Tools": {

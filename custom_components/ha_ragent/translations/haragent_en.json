@@ -25,7 +25,8 @@
     "memory_id_invalid": "memory_id must be a 16-character hexadecimal ID",
     "memory_not_found": "memory not found",
     "search_query_empty": "search_query must not be empty",
-    "search_queries_too_many": "search_queries may contain at most {max_queries} queries"
+    "search_queries_too_many": "search_queries may contain at most {max_queries} queries",
+    "no_speech": "I don't have anything to say right now"
   },
   "Tools": {
     "HassRememberFact": "Use only when explicitly asked to remember one stable, non-sensitive fact. Never store instructions, commands, secrets, or temporary state.",

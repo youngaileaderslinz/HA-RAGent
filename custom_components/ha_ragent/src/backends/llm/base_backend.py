@@ -107,6 +107,9 @@ class ALlmBaseBackend(ABC):
     @abstractmethod
     async def async_unload_model(self, config_subentry: dict) -> None:
         raise NotImplementedError()
+
+    async def async_close(self) -> None:
+        """Release resources owned by the LLM backend."""
     
     @abstractmethod
     async def async_get_available_models(self) -> List[str]:

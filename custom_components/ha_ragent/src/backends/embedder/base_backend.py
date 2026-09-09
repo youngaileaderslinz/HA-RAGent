@@ -98,6 +98,9 @@ class ABaseEmbedder(ABC):
     async def async_unload_model(self, config_subentry: dict) -> None:
         """Unload the model and free any resources associated with it."""
         raise NotImplementedError()
+
+    async def async_close(self) -> None:
+        """Release resources owned by the embedding backend."""
     
     @abstractmethod
     async def async_get_available_models(self) -> List[str]:
