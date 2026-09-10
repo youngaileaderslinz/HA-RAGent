@@ -104,7 +104,7 @@ Use the `Add Integration` button in the bottom right to add a new integration ca
 - `Enable Model Thinking`
     - Controls whether the model may use its thinking mode. Leave disabled for faster responses when supported.
 - `Retrieval Method` (Only affects device and tool retrieval, memory always uses vector search)
-    - **Automatic** (default) uses cached text and metadata matching, adding vector search when there is no unique, complete name or alias match
+    - **Automatic** (default) combines vector similarity with lexical names, aliases and metadata matching
     - **Vector search** uses embedding similarity only
     - **Lexical search** uses names, aliases and metadata without semantic similarity
 - `Tools excluded from embedding`

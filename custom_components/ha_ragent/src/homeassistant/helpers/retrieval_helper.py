@@ -43,22 +43,21 @@ class RetrievalHelper:
         backend: Any, object_type: type, options: dict, collection: str,
         embedding: list[float] | QueryEmbedding, limit: int, query: str = "",
     ) -> tuple[list, list]:
-        """Try local retrieval first and share a lazy vector on weak evidence."""
+        """Retrieve exactly the sources selected by the configured method."""
         if limit <= 0:
             return [], []
         method = RetrievalHelper.retrieval_method(options)
         lexical = []
-        try:
-            # This is also the complete metadata pool used for structured
-            # reranking and continuity pinning in vector mode.
-            lexical = await backend.async_get_lexical_objects(object_type, options, collection)
-        except Exception as err:
-            _logger.warning("Local candidate loading failed for %s: %s", collection, err)
+        if method != RETRIEVAL_METHOD_VECTOR:
+            try:
+                lexical = await backend.async_get_lexical_objects(
+                    object_type, options, collection,
+                )
+            except Exception as err:
+                _logger.warning("Lexical retrieval failed for %s: %s", collection, err)
         if method == RETRIEVAL_METHOD_LEXICAL:
             return [], lexical
         if isinstance(embedding, QueryEmbedding):
-            if method == RETRIEVAL_METHOD_AUTOMATIC and RetrievalHelper.local_candidates_confident(query, lexical):
-                return [], lexical
             try:
                 embedding = await embedding.get()
             except Exception as err:
