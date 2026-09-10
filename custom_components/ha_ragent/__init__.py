@@ -107,14 +107,6 @@ async def _async_update_listener(hass: HomeAssistant, entry: RAGentConfigEntry) 
         for subentry_id, subentry in entry.subentries.items()
     }
 
-    if entry.state == ConfigEntryState.NOT_LOADED:
-        _logger.debug(
-            "Setting up config entry after subentry change because it is not loaded: %s",
-            entry.entry_id,
-        )
-        await hass.config_entries.async_setup(entry.entry_id)
-        return
-
     if entry.state != ConfigEntryState.LOADED:
         _logger.debug(
             "Skipped config entry reload after subentry cleanup because entry is not loaded (%s) for %s",
@@ -191,6 +183,7 @@ async def _async_forward_platforms_after_embeddings(hass: HomeAssistant, entry: 
     """Make conversation entities available only after their indexes are ready."""
     await _async_run_startup_embeddings(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    hass.data.setdefault(DOMAIN, {}).setdefault("forwarded_platforms", set()).add(entry.entry_id)
 
 async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry):
     """Set up HA Ragent from a config entry."""
@@ -214,26 +207,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry):
     if hass.is_running:
         await _async_forward_platforms_after_embeddings(hass, entry)
     else:
-        hass.bus.async_listen_once(
+        async def _async_forward_after_start(_event) -> None:
+            if (
+                entry.entry_id not in hass.data.get(DOMAIN, {})
+                or entry.state != ConfigEntryState.LOADED
+            ):
+                _logger.debug("Skipping deferred platform setup for removed config entry %s", entry.entry_id)
+                return
+            await _async_forward_platforms_after_embeddings(hass, entry)
+
+        remove_start_listener = hass.bus.async_listen_once(
             EVENT_HOMEASSISTANT_STARTED,
-            lambda _event: hass.add_job(
-                _async_forward_platforms_after_embeddings(hass, entry)
-            ),
+            _async_forward_after_start,
         )
+        entry.async_on_unload(remove_start_listener)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     await _register_services(hass)
     return True
     
 async def async_unload_entry(hass: HomeAssistant, entry: RAGentConfigEntry) -> bool:
-    if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        return False
+    forwarded_platforms = hass.data.setdefault(DOMAIN, {}).setdefault("forwarded_platforms", set())
+    if entry.entry_id in forwarded_platforms:
+        if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+            return False
+        forwarded_platforms.discard(entry.entry_id)
 
     await entry.vector_db_backend.async_close()
     await entry.embedder_backend.async_close()
     await entry.llm_backend.async_close()
     hass.data[DOMAIN].pop(entry.entry_id)
     hass.data[DOMAIN].get("subentry_ids", {}).pop(entry.entry_id, None)
+    hass.data[DOMAIN].get("subentry_data", {}).pop(entry.entry_id, None)
     return True
 
 async def async_remove_entry(hass: HomeAssistant, entry: RAGentConfigEntry) -> None:

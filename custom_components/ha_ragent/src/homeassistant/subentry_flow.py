@@ -27,8 +27,6 @@ from custom_components.ha_ragent.src.const import (
     CONF_PROMPT,
     CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
     CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
-    CONF_SELECTED_LANGUAGE,
-
     DEFAULT_SETTINGS,
     CONF_EXCLUDED_TOOLS,
     CONF_NUM_MEMORIES_TO_EXTRACT,
@@ -36,7 +34,7 @@ from custom_components.ha_ragent.src.const import (
 )
 
 from custom_components.ha_ragent.src.utils import (
-    try_parse_int, get_setting_value
+    get_entry_language, try_parse_int, get_setting_value
 )
 
 from custom_components.ha_ragent.src.homeassistant.ui_schemas import (
@@ -125,8 +123,7 @@ class RagentSubentryFlowHandler(ConfigSubentryFlow):
 
         schema = ui_schema_config_options(
                 self.hass,
-                (entry.data.get(CONF_SELECTED_LANGUAGE)
-                 or entry.options.get(CONF_SELECTED_LANGUAGE, "en")),
+                get_entry_language(entry),
                 self.model_config,
                 entry.data[CONF_VECTOR_DB_BACKEND_TYPE],
                 entry.data[CONF_EMBEDDING_BACKEND_TYPE],
