@@ -75,7 +75,6 @@ SELECTED_LANGUAGE_OPTIONS = [
 TRANSLATION_PROMPT_PERSONA = "PERSONA_PROMPTS"
 TRANSLATION_PROMPT_AREAS = "AREAS_PROMPT"
 TRANSLATION_PROMPT_DEVICES = "DEVICES_PROMPT"
-TRANSLATION_PROMPT_CONTINUITY = "CONTINUITY_PROMPT"
 TRANSLATION_PROMPT_MEMORIES = "MEMORIES_CONTEXT_PROMPT"
 TRANSLATION_PROMPT_RETRIES = "MAX_RETRIES_PROMPT"
 TRANSLATION_PROMPT_SCHEDULED_ACTION = "SCHEDULED_ACTION_PROMPT"
@@ -252,13 +251,6 @@ DEFAULT_PROMPT = """<persona_prompt>
 <memories_context_prompt>
 {% for memory in memory_list %}
 - {{ {"memory_id": memory.id, "content": memory.content, "created_at": memory.created_at} | tojson }}
-{% endfor %}
-{% endif %}
-
-{% if continuity_list %}
-<continuity_prompt>
-{% for continuity in continuity_list %}
-- {{ {"entities": continuity.entities, "areas": continuity.areas, "floors": continuity.floors, "domains": continuity.domains, "device_classes": continuity.device_classes, "tool": continuity.tool, "action": continuity.action} | tojson }}
 {% endfor %}
 {% endif %}
 

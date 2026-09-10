@@ -66,7 +66,6 @@ from custom_components.ha_ragent.src.const import (
     TRANSLATION_PROMPT_PERSONA,
     TRANSLATION_PROMPT_AREAS,
     TRANSLATION_PROMPT_DEVICES,
-    TRANSLATION_PROMPT_CONTINUITY,
     TRANSLATION_PROMPT_MEMORIES,
     TRANSLATION_PROMPT_RETRIES,
     TRANSLATION_PROMPT_INSTRUCTIONS,
@@ -273,7 +272,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             rendered_prompt = self._prompt_template.async_render({
                 "device_list": devices,
                 "memory_list": memories,
-                "continuity_list": RetrievalHelper.continuity_groups(continuity or ContinuityContext()),
                 "area_list": sorted({device.area_name for device in devices if device.area_name}),
                 "area_name": scheduled_context.area if scheduled_context else (area.name if area else None),
                 "floor_name": scheduled_context.floor if scheduled_context else (floor.name if floor else None),
@@ -797,7 +795,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         prompt_template = prompt_template.replace("<persona_prompt>", translations.prompt(TRANSLATION_PROMPT_PERSONA))
         prompt_template = prompt_template.replace("<area_prompt>", translations.prompt(TRANSLATION_PROMPT_AREAS))
         prompt_template = prompt_template.replace("<devices_prompt>", translations.prompt(TRANSLATION_PROMPT_DEVICES))
-        prompt_template = prompt_template.replace("<continuity_prompt>", translations.prompt(TRANSLATION_PROMPT_CONTINUITY))
         prompt_template = prompt_template.replace("<memories_context_prompt>", translations.prompt(TRANSLATION_PROMPT_MEMORIES))
         prompt_template = prompt_template.replace("<max_retries_prompt>", translations.prompt(TRANSLATION_PROMPT_RETRIES))
         prompt_template = prompt_template.replace("<instruction_prompt>", translations.prompt(TRANSLATION_PROMPT_INSTRUCTIONS))
