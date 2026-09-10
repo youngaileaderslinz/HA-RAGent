@@ -125,7 +125,8 @@ class RagentSubentryFlowHandler(ConfigSubentryFlow):
 
         schema = ui_schema_config_options(
                 self.hass,
-                entry.options.get(CONF_SELECTED_LANGUAGE, "en"),
+                (entry.data.get(CONF_SELECTED_LANGUAGE)
+                 or entry.options.get(CONF_SELECTED_LANGUAGE, "en")),
                 self.model_config,
                 entry.data[CONF_VECTOR_DB_BACKEND_TYPE],
                 entry.data[CONF_EMBEDDING_BACKEND_TYPE],

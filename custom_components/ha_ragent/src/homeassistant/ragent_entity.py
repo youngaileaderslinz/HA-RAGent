@@ -11,10 +11,10 @@ from homeassistant.helpers import  device_registry, entity
 
 from custom_components.ha_ragent.src.const import (
     DOMAIN,
-    CONF_SELECTED_LANGUAGE,
     CONF_LLM_MODEL
 )
 from custom_components.ha_ragent.src.homeassistant.ragent_config_entry import RAGentConfigEntry
+from custom_components.ha_ragent.src.utils import get_entry_language
 
 _logger = logging.getLogger(__name__)
 
@@ -69,4 +69,4 @@ class RAGentEntity(entity.Entity):
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
         """Return a list of supported languages."""
-        return self.entry.options.get(CONF_SELECTED_LANGUAGE, MATCH_ALL)
+        return get_entry_language(self.entry) or MATCH_ALL

@@ -20,6 +20,7 @@ from custom_components.ha_ragent.src.const import (
     BACKEND_EMBEDDING_TYPE_OPENAI_COMPATIBLE,
     BACKEND_LLM_TYPE_OLLAMA, 
     BACKEND_LLM_TYPE_OPENAI_COMPATIBLE,
+    CONF_SELECTED_LANGUAGE,
     DEFAULT_SETTINGS
 )
 
@@ -39,6 +40,11 @@ def try_parse_int(value: str, default: int = 0) -> int:
 def get_setting_value(setting_key: str, settings: dict) -> Any:
     """Returns the value of a setting from the provided settings dictionary or the default value if not present."""
     return settings[setting_key] if setting_key in settings else DEFAULT_SETTINGS.get(setting_key)
+
+def get_entry_language(entry: Any) -> str:
+    """Return the entry language, preferring current data over legacy options."""
+    settings = {**(getattr(entry, "options", {}) or {}), **(getattr(entry, "data", {}) or {})}
+    return get_setting_value(CONF_SELECTED_LANGUAGE, settings)
 
 def vector_db_to_class(vector_db_type: str) -> ABaseDbBackend:
     """Maps a vector database type string to its corresponding backend class."""

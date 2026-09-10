@@ -19,7 +19,6 @@ from custom_components.ha_ragent.src.homeassistant.ragent_api import RAGentLLMAP
 from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
 
 from custom_components.ha_ragent.src.const import (
-    CONF_SELECTED_LANGUAGE,
     CONF_ALLOW_AUTO_EMBEDDING,
     DOMAIN,
     PLATFORMS,
@@ -38,6 +37,7 @@ from custom_components.ha_ragent.src.utils import (
     vector_db_to_class,
     embedding_backend_to_class,
     llm_backend_to_class,
+    get_entry_language,
     get_setting_value,
 )
 from custom_components.ha_ragent.src.translation import RAGentTranslations
@@ -106,6 +106,14 @@ async def _async_update_listener(hass: HomeAssistant, entry: RAGentConfigEntry) 
         subentry_id: dict(subentry.data)
         for subentry_id, subentry in entry.subentries.items()
     }
+
+    if entry.state == ConfigEntryState.NOT_LOADED:
+        _logger.debug(
+            "Setting up config entry after subentry change because it is not loaded: %s",
+            entry.entry_id,
+        )
+        await hass.config_entries.async_setup(entry.entry_id)
+        return
 
     if entry.state != ConfigEntryState.LOADED:
         _logger.debug(
@@ -198,7 +206,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry):
         for subentry_id, subentry in entry.subentries.items()
     }
 
-    entry.translations = await RAGentTranslations.async_create(hass, get_setting_value(CONF_SELECTED_LANGUAGE, entry.data))
+    entry.translations = await RAGentTranslations.async_create(hass, get_entry_language(entry))
     entry.vector_db_backend = _create_vector_db_client(hass, get_setting_value(CONF_VECTOR_DB_BACKEND_TYPE, entry.data), entry)
     entry.embedder_backend = _create_embedding_client(hass, get_setting_value(CONF_EMBEDDING_BACKEND_TYPE, entry.data), entry)    
     entry.llm_backend = _create_llm_client(hass, get_setting_value(CONF_LLM_BACKEND_TYPE, entry.data), entry)

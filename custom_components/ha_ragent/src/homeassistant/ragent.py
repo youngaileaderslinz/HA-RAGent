@@ -53,7 +53,6 @@ from custom_components.ha_ragent.src.const import (
     DEFAULT_PROMPT,
     CONF_MAX_TOOL_CALL_ITERATIONS,
     DOMAIN,
-    CONF_SELECTED_LANGUAGE,
     CONF_ALLOW_QUESTIONS,
     RAGENT_PREFIXED_REQUIRED_TOOL_NAMES,
     RAGENT_SCHEDULED_REQUEST_PREFIX,
@@ -78,7 +77,7 @@ from custom_components.ha_ragent.src.const import (
     TRANSLATION_ERROR_UNEXPECTED,
 )
 
-from custom_components.ha_ragent.src.utils import get_setting_value
+from custom_components.ha_ragent.src.utils import get_entry_language, get_setting_value
 
 _logger = logging.getLogger(__name__)
 
@@ -260,7 +259,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
     ) -> str | None:
         """Render the system prompt with retrieved device context."""
         raw_prompt = get_setting_value(CONF_PROMPT, self.runtime_options) or DEFAULT_PROMPT
-        language = get_setting_value(CONF_SELECTED_LANGUAGE, self.runtime_options)
+        language = get_entry_language(self.entry)
 
         try:
             template_key = (raw_prompt, language)
