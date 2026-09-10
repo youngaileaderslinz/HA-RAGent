@@ -76,6 +76,7 @@ from custom_components.ha_ragent.src.const import (
     TRANSLATION_ERROR_UNEXPECTED,
 )
 
+from custom_components.ha_ragent.src.debug import log_debug_payload
 from custom_components.ha_ragent.src.utils import get_entry_language, get_setting_value
 
 _logger = logging.getLogger(__name__)
@@ -119,8 +120,16 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         contexts = history_manager.structured_turn_contexts(chat_log)
         remember_num = get_setting_value(CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS, self.runtime_options)
         remember_time = get_setting_value(CONF_REMEMBER_CONVERSATION_TIME_MINUTES, self.runtime_options)
+        log_debug_payload(
+            _logger, "continuity.raw_history", contexts=contexts,
+            remember_interactions=remember_num, remember_minutes=remember_time,
+        )
         if not remember_num and not remember_time:
-            return ContinuityContext()
+            continuity = ContinuityContext()
+            log_debug_payload(
+                _logger, "continuity.disabled", continuity=continuity,
+            )
+            return continuity
         selected = RetrievalHelper.select_history_contexts(
             contexts,
             {},
@@ -454,6 +463,13 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     ) or call
                     for call in tool_calls_in_iteration
                 ]
+                log_debug_payload(
+                    _logger, "conversation.llm_response",
+                    iteration=idx + 1, raw_response=assistant_content,
+                    parsed_tool_calls=tool_calls_in_iteration,
+                    exposed_tool_names=sorted(exposed_tool_names),
+                    tool_metadata=tool_metadata_dict,
+                )
                 _logger.debug(f"RAGent timing: parse_tool_calls: {time.perf_counter() - helper_start:.3f}s")
 
                 helper_start = time.perf_counter()
@@ -655,6 +671,17 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                     tool_result=stored_tool_result,
                                 )
                                 history_manager.append_message(tool_result_msg)
+                                log_debug_payload(
+                                    _logger, "conversation.tool_result",
+                                    iteration=idx + 1, requested_call=tool_call,
+                                    execution_call=execution_call,
+                                    raw_result=tool_result,
+                                    parsed_result=parsed_tool_result,
+                                    stored_result=stored_tool_result,
+                                    execution_status=execution_status,
+                                    active_candidate_context=active_candidate_context,
+                                    exposed_tool_names=sorted(exposed_tool_names),
+                                )
                                 _logger.debug(f"RAGent timing: tool {tool_name}: {time.perf_counter() - tool_start:.3f}s")
                             else:
                                 _logger.warning(f"LLM API not available, skipping tool execution for tool: {tool_name}")
@@ -676,6 +703,12 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                             )
                             history_manager.append_message(tool_result_msg)
                             failed_signatures.add(call_signature)
+                            log_debug_payload(
+                                _logger, "conversation.tool_failure",
+                                iteration=idx + 1, requested_call=tool_call,
+                                error=repr(tool_err), failure_message=tool_result_msg,
+                                failed_signatures=failed_signatures,
+                            )
 
 
             except Exception as err:
@@ -713,6 +746,13 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         else:
             intent_response.async_set_speech(self.entry.translations.error(TRANSLATION_ERROR_NO_SPEECH))
 
+        log_debug_payload(
+            _logger, "conversation.final_result",
+            conversation_id=user_input.conversation_id,
+            final_model_speech=final_model_speech,
+            tool_calls=tool_calls_overall,
+            continue_conversation=continue_conversation,
+        )
         return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id, continue_conversation=continue_conversation)
         
 
@@ -780,8 +820,8 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     if scheduled_context else user_input.text
                 )
                 # A single request-scoped future is shared by device, tool and
-                # memory retrieval. Automatic mode starts it only on weak local
-                # matches (or when semantic memory recall is enabled).
+                # memory retrieval. Lexical-only mode avoids it unless memory
+                # recall, which is always vector-based, is enabled.
                 query_embedding = QueryEmbedding(
                     lambda: self._async_embed_retrieval_text(
                         RetrievalHelper.build_retrieval_text(retrieval_query)
@@ -789,6 +829,21 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 ) if needs_embedding else []
                 continuity = ContinuityContext() if scheduled_request else await self._async_build_continuity_context(
                     history_manager, chat_log,
+                )
+                log_debug_payload(
+                    _logger, "conversation.retrieval_plan",
+                    conversation_id=user_input.conversation_id,
+                    user_text=user_input.text, retrieval_query=retrieval_query,
+                    retrieval_method=retrieval_method,
+                    configured_device_limit=get_setting_value(
+                        CONF_NUM_DEVICES_TO_EXTRACT, self.runtime_options,
+                    ),
+                    configured_tool_limit=get_setting_value(
+                        CONF_NUM_TOOLS_TO_EXTRACT, self.runtime_options,
+                    ),
+                    memory_limit=memory_limit, current_area=current_area,
+                    current_floor=current_floor, scheduled_request=scheduled_request,
+                    continuity=continuity,
                 )
 
                 # Recall memory alongside the full device/tool retrieval chain.
@@ -817,6 +872,14 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                         retrieved_tools = []
 
                 retrieved_memories = memory_task.result()
+                log_debug_payload(
+                    _logger, "conversation.retrieval_result",
+                    conversation_id=user_input.conversation_id,
+                    retrieval_query=retrieval_query,
+                    tool_retrieval_query=tool_retrieval_query,
+                    devices=retrieved_devices, tools=retrieved_tools,
+                    memories=retrieved_memories, continuity=continuity,
+                )
 
                 log_timing(
                     f"Step 2 retrieved {len(retrieved_devices)} devices, "
@@ -838,6 +901,12 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     device_list.append(device)
 
                 candidate_context = self._candidate_context_from_devices(device_list)
+                log_debug_payload(
+                    _logger, "conversation.prompt_context",
+                    conversation_id=user_input.conversation_id,
+                    devices=device_list, memories=retrieved_memories,
+                    continuity=continuity, candidate_context=candidate_context,
+                )
                 if isinstance(llm_api, RAGentAugmentedAPIInstance):
                     llm_api.set_search_context(
                         latest_request=retrieval_query,

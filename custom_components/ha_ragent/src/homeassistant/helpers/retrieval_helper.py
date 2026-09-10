@@ -23,6 +23,7 @@ from custom_components.ha_ragent.src.models.embedding.tool_metadata import (
 
 from custom_components.ha_ragent.src.models.retrieval.lexical_index import lexical_index, match_features, match_score
 from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
+from custom_components.ha_ragent.src.debug import log_debug_payload
 from custom_components.ha_ragent.src.utils import get_setting_value
 
 T = TypeVar("T")
@@ -47,6 +48,12 @@ class RetrievalHelper:
         if limit <= 0:
             return [], []
         method = RetrievalHelper.retrieval_method(options)
+        log_debug_payload(
+            _logger, "retrieval.sources.request", collection=collection,
+            object_type=getattr(object_type, "__name__", str(object_type)),
+            method=method, query=query, limit=limit,
+            embedding_deferred=isinstance(embedding, QueryEmbedding),
+        )
         lexical = []
         if method != RETRIEVAL_METHOD_VECTOR:
             try:
@@ -56,22 +63,45 @@ class RetrievalHelper:
             except Exception as err:
                 _logger.warning("Lexical retrieval failed for %s: %s", collection, err)
         if method == RETRIEVAL_METHOD_LEXICAL:
+            log_debug_payload(
+                _logger, "retrieval.sources.result", collection=collection,
+                method=method, vector=[], lexical=lexical,
+            )
             return [], lexical
         if isinstance(embedding, QueryEmbedding):
             try:
                 embedding = await embedding.get()
             except Exception as err:
                 _logger.warning("Query embedding failed for %s: %s", collection, err)
+                log_debug_payload(
+                    _logger, "retrieval.sources.result", collection=collection,
+                    method=method, vector=[], lexical=lexical,
+                    failure={"stage": "embedding", "error": repr(err)},
+                )
                 return [], lexical
         if not embedding:
+            log_debug_payload(
+                _logger, "retrieval.sources.result", collection=collection,
+                method=method, vector=[], lexical=lexical,
+                failure={"stage": "embedding", "error": "empty embedding"},
+            )
             return [], lexical
         try:
             vector = await backend.async_retrieve_scored_objects(
                 object_type, options, collection, embedding, limit,
             )
+            log_debug_payload(
+                _logger, "retrieval.sources.result", collection=collection,
+                method=method, embedding=embedding, vector=vector, lexical=lexical,
+            )
             return vector, lexical
         except Exception as err:
             _logger.warning("Vector retrieval failed for %s: %s", collection, err)
+            log_debug_payload(
+                _logger, "retrieval.sources.result", collection=collection,
+                method=method, embedding=embedding, vector=[], lexical=lexical,
+                failure={"stage": "vector", "error": repr(err)},
+            )
             return [], lexical
 
     @staticmethod
@@ -265,7 +295,13 @@ class RetrievalHelper:
                 if previous is None or short_term_weight > previous[1]:
                     selected[context.key] = (context, short_term_weight)
 
-        return sorted(selected.values(), key=lambda item: item[1], reverse=True)[:limit]
+        result = sorted(selected.values(), key=lambda item: item[1], reverse=True)[:limit]
+        log_debug_payload(
+            _logger, "continuity.history_selection", contexts=contexts,
+            vectors=vectors, current_vector=current_vector,
+            max_age_seconds=max_age_seconds, limit=limit, now=now, selected=result,
+        )
+        return result
 
     @staticmethod
     def build_continuity_context(selected_contexts: Iterable[tuple[TurnContext, float]]) -> ContinuityContext:
@@ -298,6 +334,10 @@ class RetrievalHelper:
             for context, weight in recent_contexts
             for group in context.target_groups
         ]
+        log_debug_payload(
+            _logger, "continuity.built", selected_contexts=selected_contexts,
+            continuity=continuity,
+        )
         return continuity
 
     @staticmethod
@@ -464,6 +504,7 @@ class RetrievalHelper:
             return []
 
         vector_results = list(vector_results)
+        lexical_items = list(lexical_items)
         candidates: dict[str, T] = {
             key(result.item): result.item for result in vector_results
         }
@@ -573,7 +614,17 @@ class RetrievalHelper:
                 limit,
             )
 
-        return [candidates[item_key] for item_key in selected_keys]
+        result = [candidates[item_key] for item_key in selected_keys]
+        log_debug_payload(
+            _logger, "retrieval.device_ranking", query=query, limit=limit,
+            vector_results=vector_results, lexical_items=lexical_items,
+            candidates=candidates, vector_ranking=vector_ranking,
+            lexical_scores=lexical_scores, match_scores=match_scores,
+            metadata_scores=metadata_scores, continuity_scores=continuity_scores,
+            fused_scores=fused, ordered_keys=ordered_keys,
+            selected_keys=selected_keys, selected=result,
+        )
+        return result
 
     @staticmethod
     def target_is_confident(query: str, devices: Iterable[Any], continuity: ContinuityContext) -> bool:
@@ -741,6 +792,7 @@ class RetrievalHelper:
             return []
         devices = list(devices)
         vector_results = list(vector_results)
+        lexical_tools = list(lexical_tools)
         candidate_by_name = {
             str(getattr(tool, "name", "")): tool
             for tool in lexical_tools
@@ -769,6 +821,7 @@ class RetrievalHelper:
             for position, name in enumerate(corpus_names)
         }
         scored: list[tuple[float, int, str, T]] = []
+        signals_by_name: dict[str, dict[str, float]] = {}
         for name, tool in candidate_by_name.items():
             continuity = continuity_score(tool) if continuity_score else 0.0
             signals = RetrievalHelper.tool_ranking_signals(
@@ -782,6 +835,7 @@ class RetrievalHelper:
                 requested_capability=requested_capability,
             )
             signals["lexical_corpus"] = corpus_scores[name]
+            signals_by_name[name] = signals
             scored.append(
                 (
                     RetrievalHelper.tool_signal_score(signals),
@@ -791,7 +845,20 @@ class RetrievalHelper:
                 )
             )
         scored.sort(key=lambda item: (-item[0], item[1], item[2]))
-        return [tool for _, _, _, tool in scored[:limit]]
+        result = [tool for _, _, _, tool in scored[:limit]]
+        if _logger.isEnabledFor(logging.DEBUG):
+            log_debug_payload(
+                _logger, "retrieval.tool_ranking", query=query, limit=limit,
+                requested_capability=requested_capability, devices=devices,
+                vector_results=vector_results, lexical_tools=lexical_tools,
+                candidates=candidate_by_name, semantic_ranks=semantic_ranks,
+                semantic_scores=semantic_scores, corpus_scores=corpus_scores,
+                lexical_matches=matches_by_name, signals=signals_by_name,
+                scored=[{"score": score, "semantic_rank": rank, "name": name}
+                        for score, rank, name, _ in scored],
+                selected=result,
+            )
+        return result
 
     @staticmethod
     def tool_search_confidence(

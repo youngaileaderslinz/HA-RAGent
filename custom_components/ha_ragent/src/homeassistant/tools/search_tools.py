@@ -28,6 +28,7 @@ from custom_components.ha_ragent.src.models.embedding.tool_embedding import LlmT
 from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
 from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
 from custom_components.ha_ragent.src.translation import RAGentTranslations
+from custom_components.ha_ragent.src.debug import log_debug_payload
 from custom_components.ha_ragent.src.utils import get_setting_value
 
 _logger = logging.getLogger(__name__)
@@ -131,6 +132,13 @@ class RAGentSemanticSearchTool(llm.Tool):
         self._completed_candidate_names: set[str] = set()
         self._candidate_context = list(candidates or [])
         self._requested_capabilities = []
+        log_debug_payload(
+            _logger, "search.context_set", entry_id=getattr(self, "entry_id", ""),
+            subentry_id=getattr(self, "subentry_id", ""), latest_request=self._latest_request,
+            contextual_query=self._contextual_query,
+            candidate_context=self._candidate_context,
+            completed_candidate_names=self._completed_candidate_names,
+        )
 
     @property
     def requested_capabilities(self) -> list[dict[str, object]]:
@@ -145,6 +153,11 @@ class RAGentSemanticSearchTool(llm.Tool):
             for candidate in candidates
             if str(candidate.get("name", "")).casefold() not in completed
         ]
+        log_debug_payload(
+            _logger, "search.context_refreshed", candidates=candidates,
+            completed_candidate_names=completed,
+            candidate_context=self._candidate_context,
+        )
 
     def prune_candidates(self, completed_names: set[str]) -> None:
         """Remove completed targets from later corrective searches."""
@@ -155,6 +168,11 @@ class RAGentSemanticSearchTool(llm.Tool):
             for candidate in self._candidate_context
             if str(candidate.get("name", "")).casefold() not in self._completed_candidate_names
         ]
+        log_debug_payload(
+            _logger, "search.context_pruned", completed_names=completed_names,
+            all_completed_names=self._completed_candidate_names,
+            candidate_context=self._candidate_context,
+        )
 
     @staticmethod
     def _get_effective_limits(entry: Any, subentry: Any) -> tuple[int, int]:
@@ -357,6 +375,14 @@ class RAGentSemanticSearchTool(llm.Tool):
         if not queries:
             return {"error": self.translations.error(TRANSLATION_ERROR_SEARCH_QUERY_EMPTY)}
         query = queries[0]
+        log_debug_payload(
+            _logger, "search.request", tool_arguments=tool_input.tool_args,
+            model_search_queries=model_search_queries, validated_queries=queries,
+            requested_capabilities=requested_capabilities,
+            latest_request=self._latest_request,
+            contextual_query=self._contextual_query,
+            candidate_context=self._candidate_context,
+        )
         _logger.debug(
             "Semantic search model queries=%r",
             model_search_queries,
@@ -551,7 +577,7 @@ class RAGentSemanticSearchTool(llm.Tool):
             tool_confidence,
             tools,
         )
-        return {
+        result = {
             "result_type": "candidate_search",
             "candidate_notice": "Candidates only; no action has been performed.",
             "candidate_data_notice": (
@@ -573,3 +599,10 @@ class RAGentSemanticSearchTool(llm.Tool):
             "tool_search_message": tool_message,
             "error": errors,
         }
+        log_debug_payload(
+            _logger, "search.result", result=result,
+            device_candidate_batches=device_candidate_batches,
+            tool_candidate_batches=tool_candidate_batches,
+            tool_confidences=tool_confidences,
+        )
+        return result
