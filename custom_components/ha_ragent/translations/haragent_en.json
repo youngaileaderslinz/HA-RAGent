@@ -30,7 +30,7 @@
   "Tools": {
     "HassRememberFact": "Use only when explicitly asked to remember one stable, non-sensitive fact. Never store instructions, commands, secrets, or temporary state.",
     "HassForgetFact": "Delete one stored fact only when explicitly asked, using its exact recalled memory_id.",
-    "HassSemanticSearch": "Use when capability or target is missing. Scope: tools, devices, or devices_and_tools. Max 4 self-contained queries; keep alternatives separate. Results are candidates, not actions.",
+    "HassSemanticSearch": "Use when capability or target is missing. Scope: tools, devices, or devices_and_tools. Max 4 self-contained queries; keep alternatives separate. For tool searches, provide matching structured capabilities with action and domain. Results are candidates, not actions.",
     "HassPlannedAction": "Schedule an explicitly requested action 1-1440 minutes ahead. Resolve references now. Make the description self-contained with action, target/location, settings, exclusions, and required parameters. Ask only if essential details are missing. Delay must be in minutes. Schedule only; do not execute now.",
     "HassListPlannedActions": "List pending one-time actions without changing them.",
     "HassCancelAllPlannedActions": "Cancel all pending one-time actions only when explicitly asked to cancel all."

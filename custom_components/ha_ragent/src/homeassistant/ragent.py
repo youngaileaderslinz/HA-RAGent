@@ -59,7 +59,6 @@ from custom_components.ha_ragent.src.const import (
     RAGENT_PREFIXED_SCHEDULED_REQUEST_PROHIBITED_TOOL_NAMES,
     STARTUP_EMBEDDING_RUNNING_FLAG,
     RETRIEVAL_METHOD_LEXICAL,
-    RETRIEVAL_METHOD_VECTOR,
     RAGENT_PLANNED_ACTION_TOOL_NAME,
     TRANSLATION_PROMPT_SCHEDULED_ACTION,
     TRANSLATION_PROMPT_PERSONA,
@@ -163,9 +162,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             _logger.error(f"Error retrieving devices from vector DB: {e}", exc_info=True)
             return []
 
-        if RetrievalHelper.retrieval_method(options) == RETRIEVAL_METHOD_VECTOR:
-            return [result.item for result in scored_devices[:n_devices]]
-
         ranked_devices = await asyncio.to_thread(
             RetrievalHelper.rank_scored_candidates,
             scored_devices,
@@ -218,20 +214,18 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             _logger.error(f"Error retrieving tools from vector DB: {e}", exc_info=True)
             return []
 
-        if RetrievalHelper.retrieval_method(options) == RETRIEVAL_METHOD_VECTOR:
-            return [result.item for result in scored_tools[:n_tools]]
-
         ranked_tools = await asyncio.to_thread(
             RetrievalHelper.rank_tool_candidates,
             scored_tools,
             all_tools,
             query,
-            devices or [],
-            n_tools,
+            [],
+            max(n_tools, RetrievalHelper.expanded_tool_limit(n_tools)),
             continuity_score=continuity.tool_score,
         )
-        tools = ranked_tools[:n_tools]
-        return tools
+        return RetrievalHelper.rerank_tools_for_devices(
+            ranked_tools, devices or [], n_tools,
+        )
 
     async def _async_retrieve_memories(self, query_embedding: List[float] | QueryEmbedding, n_memories: int) -> List[Memory]:
         """Retrieve relevant persistent memories for this agent."""
@@ -407,6 +401,8 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         formatted_messages: list[ChatMessage] = []
         formatted_index = 0
         active_candidate_context = list(candidate_context)
+        failed_signatures: set[str] = set()
+        tools_by_name = {tool.name: tool for tool in tool_list}
 
         for idx in range(max_tool_call_iterations):
             iteration_start = time.perf_counter()
@@ -481,6 +477,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 if tool_calls_in_iteration:
                     for tool_call in tool_calls_in_iteration:
                         tool_name = tool_call.tool_name
+                        call_signature = tool_helper.tool_call_signature(tool_call)
 
                         if tool_name not in exposed_tool_names:
                             error = ValueError(
@@ -494,6 +491,67 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                     error=error,
                                 )
                             )
+                            failed_signatures.add(call_signature)
+                            continue
+
+                        if call_signature in failed_signatures:
+                            history_manager.append_message(
+                                MessageHelper.create_tool_failure_message(
+                                    agent_id=user_input.agent_id,
+                                    tool_call_id=tool_call.id,
+                                    tool_name=tool_name,
+                                    error=ValueError(
+                                        "This exact call already failed or contradicted the requested capability. "
+                                        "Rediscover a compatible capability before retrying."
+                                    ),
+                                )
+                            )
+                            continue
+
+                        requested_capabilities = (
+                            llm_api.requested_capabilities()
+                            if isinstance(llm_api, RAGentAugmentedAPIInstance)
+                            else []
+                        )
+                        selected_tool = tools_by_name.get(tool_name)
+                        capability_scores = [
+                            RetrievalHelper.tool_capability_compatibility(selected_tool, capability)
+                            for capability in requested_capabilities
+                        ] if selected_tool else []
+                        if capability_scores and max(capability_scores) < 0:
+                            rediscovery_result = await llm_api.async_rediscover_capabilities(
+                                requested_capabilities,
+                            )
+                            existing_names = {tool.name for tool in tool_list}
+                            discovered_tools = tool_helper.discovered_tools(
+                                rediscovery_result, existing_names,
+                            )
+                            tool_list.extend(discovered_tools)
+                            tools_by_name.update({tool.name: tool for tool in discovered_tools})
+                            exposed_tool_names.update(tool.name for tool in discovered_tools)
+                            tool_metadata_dict.update({
+                                tool.name: tool.metadata
+                                for tool in discovered_tools
+                                if tool.metadata
+                            })
+                            history_manager.append_message(conversation.ToolResultContent(
+                                agent_id=user_input.agent_id,
+                                tool_call_id=tool_call.id,
+                                tool_name=tool_name,
+                                tool_result={
+                                    "success": False,
+                                    "execution_status": {
+                                        "requested_capabilities": requested_capabilities,
+                                        "executed_capability": getattr(selected_tool, "canonical_action", ""),
+                                        "target": tool_helper.successful_target_names(tool_call, {}),
+                                        "tool_succeeded": False,
+                                        "fulfillment_status": "capability_mismatch",
+                                        "rediscovery_required": True,
+                                        "rediscovered_tools": [tool.name for tool in discovered_tools],
+                                    },
+                                },
+                            ))
+                            failed_signatures.add(call_signature)
                             continue
 
                         try:
@@ -514,6 +572,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                     existing_names = {tool.name for tool in tool_list}
                                     discovered_tools = tool_helper.discovered_tools(parsed_tool_result, existing_names)
                                     tool_list.extend(discovered_tools)
+                                    tools_by_name.update({tool.name: tool for tool in discovered_tools})
                                     exposed_tool_names.update(tool.name for tool in discovered_tools)
                                     tool_metadata_dict.update(
                                         {
@@ -535,6 +594,60 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                     tool_name,
                                     parsed_tool_result,
                                 )
+                                targets = tool_helper.successful_target_names(tool_call, parsed_tool_result)
+                                fulfillment_status = "failed"
+                                rediscovery_required = not tool_succeeded
+                                if tool_succeeded:
+                                    fulfillment_status = "unverified" if requested_capabilities else "not_evaluated"
+                                    expected_states = set(
+                                        getattr(getattr(selected_tool, "metadata", None), "expected_states", ()) or ()
+                                    )
+                                    if expected_states and targets:
+                                        current_states = [self.hass.states.get(target) for target in targets]
+                                        if all(
+                                            state is not None and str(state.state).casefold() in expected_states
+                                            for state in current_states
+                                        ):
+                                            fulfillment_status = "verified"
+                                        else:
+                                            fulfillment_status = "state_mismatch"
+                                            rediscovery_required = True
+                                execution_status = {
+                                    "requested_capabilities": requested_capabilities,
+                                    "executed_capability": getattr(selected_tool, "canonical_action", ""),
+                                    "target": targets,
+                                    "tool_succeeded": tool_succeeded,
+                                    "fulfillment_status": fulfillment_status,
+                                    "rediscovery_required": rediscovery_required,
+                                }
+                                if rediscovery_required:
+                                    failed_signatures.add(call_signature)
+                                    if isinstance(llm_api, RAGentAugmentedAPIInstance):
+                                        rediscovery_result = await llm_api.async_rediscover_capabilities(
+                                            requested_capabilities,
+                                        )
+                                        existing_names = {tool.name for tool in tool_list}
+                                        discovered_tools = tool_helper.discovered_tools(
+                                            rediscovery_result, existing_names,
+                                        )
+                                        tool_list.extend(discovered_tools)
+                                        tools_by_name.update({tool.name: tool for tool in discovered_tools})
+                                        exposed_tool_names.update(tool.name for tool in discovered_tools)
+                                        tool_metadata_dict.update({
+                                            tool.name: tool.metadata
+                                            for tool in discovered_tools
+                                            if tool.metadata
+                                        })
+                                        execution_status["rediscovered_tools"] = [
+                                            tool.name for tool in discovered_tools
+                                        ]
+                                if isinstance(stored_tool_result, dict):
+                                    stored_tool_result["execution_status"] = execution_status
+                                else:
+                                    stored_tool_result = {
+                                        "result": stored_tool_result,
+                                        "execution_status": execution_status,
+                                    }
                                 tool_result_msg = conversation.ToolResultContent(
                                     agent_id=user_input.agent_id,
                                     tool_call_id=tool_call.id,
@@ -562,6 +675,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                 error=tool_err,
                             )
                             history_manager.append_message(tool_result_msg)
+                            failed_signatures.add(call_signature)
 
 
             except Exception as err:

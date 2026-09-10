@@ -30,7 +30,7 @@
   "Tools": {
     "HassRememberFact": "Nur verwenden, wenn ausdrücklich darum gebeten wird, eine stabile, nicht sensible Tatsache zu speichern. Keine Anweisungen, Befehle, Geheimnisse oder temporären Zustände speichern.",
     "HassForgetFact": "Eine gespeicherte Tatsache nur auf ausdrückliche Anfrage und mit der exakten memory_id löschen.",
-    "HassSemanticSearch": "Verwenden, wenn Fähigkeit oder Ziel fehlt. Bereich: tools, devices oder devices_and_tools. Maximal 4 eigenständige Abfragen; Alternativen getrennt halten. Ergebnisse sind Kandidaten, keine Aktionen.",
+    "HassSemanticSearch": "Verwenden, wenn Fähigkeit oder Ziel fehlt. Bereich: tools, devices oder devices_and_tools. Maximal 4 eigenständige Abfragen; Alternativen getrennt halten. Bei Werkzeugsuchen passende strukturierte Fähigkeiten mit Aktion und Domäne angeben. Ergebnisse sind Kandidaten, keine Aktionen.",
     "HassPlannedAction": "Eine ausdrücklich gewünschte Aktion 1-1440 Minuten im Voraus planen. Referenzen jetzt auflösen. Die Beschreibung muss Aktion, Ziel/Standort, Einstellungen, Ausschlüsse und nötige Parameter vollständig enthalten. Nur nachfragen, wenn wesentliche Angaben fehlen. Verzögerung nur in Minuten. Nur planen, nicht jetzt ausführen.",
     "HassListPlannedActions": "Ausstehende einmalige Aktionen auflisten, ohne sie zu ändern.",
     "HassCancelAllPlannedActions": "Alle ausstehenden einmaligen Aktionen nur dann abbrechen, wenn ausdrücklich verlangt wird, alle abzubrechen."

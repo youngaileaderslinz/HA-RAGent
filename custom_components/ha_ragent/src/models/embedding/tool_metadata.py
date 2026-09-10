@@ -7,7 +7,6 @@ from custom_components.ha_ragent.src.const import CANONICAL_NAME_SPLIT_PATTERN
 from custom_components.ha_ragent.src.models.retrieval.lexical_index import canonical_normalize
 from custom_components.ha_ragent.src.models.base.serializeable_model import SerializableModel
 
-
 @lru_cache(maxsize=8192)
 def split_canonical_name(name: str) -> tuple[str, ...]:
     """Split a canonical name on underscores and camel-case transitions."""
@@ -32,6 +31,7 @@ class ToolMetadata(SerializableModel):
 
     canonical_action: str = ""
     supported_domains: tuple[str, ...] = ()
+    expected_states: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         """Return a dictionary representation of the tool metadata."""
@@ -39,6 +39,7 @@ class ToolMetadata(SerializableModel):
             "family": self.family,
             "canonical_action": self.canonical_action,
             "supported_domains": list(self.supported_domains),
+            "expected_states": list(self.expected_states),
             "is_domain_aware": self.is_domain_aware,
             "is_area_aware": self.is_area_aware,
             "is_device_class_aware": self.is_device_class_aware,  
@@ -51,6 +52,7 @@ class ToolMetadata(SerializableModel):
             family=data.get("family", None),
             canonical_action=data.get("canonical_action", ""),
             supported_domains=tuple(data.get("supported_domains") or ()),
+            expected_states=tuple(data.get("expected_states") or ()),
             is_domain_aware=data.get("is_domain_aware", False),
             is_area_aware=data.get("is_area_aware", False),
             is_device_class_aware=data.get("is_device_class_aware", False)

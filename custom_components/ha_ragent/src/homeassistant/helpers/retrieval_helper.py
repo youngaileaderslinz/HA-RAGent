@@ -4,7 +4,6 @@ import logging
 import math
 import time
 import unicodedata
-from collections import Counter
 from collections.abc import Callable, Iterable
 from typing import Any, TypeVar
 
@@ -49,11 +48,12 @@ class RetrievalHelper:
             return [], []
         method = RetrievalHelper.retrieval_method(options)
         lexical = []
-        if method != RETRIEVAL_METHOD_VECTOR:
-            try:
-                lexical = await backend.async_get_lexical_objects(object_type, options, collection)
-            except Exception as err:
-                _logger.warning("Lexical retrieval failed for %s: %s", collection, err)
+        try:
+            # This is also the complete metadata pool used for structured
+            # reranking and continuity pinning in vector mode.
+            lexical = await backend.async_get_lexical_objects(object_type, options, collection)
+        except Exception as err:
+            _logger.warning("Local candidate loading failed for %s: %s", collection, err)
         if method == RETRIEVAL_METHOD_LEXICAL:
             return [], lexical
         if isinstance(embedding, QueryEmbedding):
@@ -250,8 +250,10 @@ class RetrievalHelper:
                 vectors.get(context.key, []),
             ))
             relevance = similarity * decay
-            if context.has_canonical_context:
-                relevance += 0.1 * decay
+            if context.entities or context.target_groups:
+                relevance += 0.3 * decay
+            elif context.has_canonical_context:
+                relevance += 0.05 * decay
             if similarity >= 0.2:
                 selected[context.key] = (context, relevance)
 
@@ -633,7 +635,7 @@ class RetrievalHelper:
         schema_domains = getattr(tool, "schema_domains", None)
         domains = set(schema_domains) if schema_domains is not None else RetrievalHelper._schema_values(properties.get("domain", {}))
         domains.update(RetrievalHelper._metadata_value(tool, "supported_domains", ()) or ())
-        return domains
+        return {str(domain).casefold() for domain in domains if domain}
 
     @staticmethod
     def _tool_domain_signal(tool: Any, requested_domains: set[str]) -> float:
@@ -645,6 +647,45 @@ class RetrievalHelper:
         return 0.0
 
     @staticmethod
+    def normalize_requested_capability(capability: object) -> dict[str, object]:
+        """Normalize model-provided structured capability metadata."""
+        if not isinstance(capability, dict):
+            return {}
+        action = str(capability.get("action", "") or "").strip().casefold()
+        domains = capability.get("domains", capability.get("domain", ())) or ()
+        if isinstance(domains, str):
+            domains = (domains,)
+        return {
+            "action": action,
+            "domains": tuple(sorted({str(value).strip().casefold() for value in domains if value})),
+        }
+
+    @staticmethod
+    def tool_capability_compatibility(tool: Any, capability: object) -> float:
+        """Deterministically compare requested and declared tool capabilities.
+
+        A negative value is an explicit contradiction. Missing metadata remains
+        neutral so incomplete device or tool metadata cannot suppress recovery.
+        """
+        requested = RetrievalHelper.normalize_requested_capability(capability)
+        if not requested:
+            return 0.0
+        requested_action = str(requested.get("action", "") or "")
+        requested_domains = set(requested.get("domains", ()) or ())
+        tool_action = str(getattr(tool, "canonical_action", "") or "").casefold()
+        tool_domains = RetrievalHelper._tool_declared_domains(tool)
+        if requested_action and tool_action and requested_action != tool_action:
+            return -1.0
+        if requested_domains and tool_domains and not requested_domains & tool_domains:
+            return -1.0
+        score = 0.0
+        if requested_action and tool_action == requested_action:
+            score += 1.0
+        if requested_domains and tool_domains & requested_domains:
+            score += 0.5
+        return score
+
+    @staticmethod
     def tool_ranking_signals(
         tool: Any,
         query: str,
@@ -653,6 +694,7 @@ class RetrievalHelper:
         semantic_score: float | None = None,
         continuity: float = 0.0,
         lexical_match: tuple[float, float] | None = None,
+        requested_capability: object = None,
     ) -> dict[str, float]:
         """Return independent, extensible signals used to rank a tool."""
         devices = list(devices)
@@ -671,30 +713,10 @@ class RetrievalHelper:
             "semantic_similarity": max(0.0, min(1.0, semantic_score or 0.0)),
             "lexical_exact": exact,
             "lexical_fuzzy": fuzzy,
-            "lexical_action": float(bool(RetrievalHelper._matched_action_phrases(tool, query))),
+            "capability": RetrievalHelper.tool_capability_compatibility(tool, requested_capability),
             "domain": RetrievalHelper._tool_domain_signal(tool, requested_domains),
             "device_metadata": max(-1.0, min(1.0, compatibility / 2.0)),
             "continuity": max(0.0, continuity),
-        }
-
-    @staticmethod
-    def _matched_action_phrases(tool: Any, query: str) -> set[str]:
-        """Match ordered live capability names without interpreting user intent.
-
-        Keep complete phrases distinct: overlapping words do not make two
-        capabilities interchangeable. This is retrieval evidence only, including
-        when a capability occurs in a negated request.
-        """
-        phrases = (
-            getattr(tool, "canonical_action", ""),
-            " ".join(getattr(tool, "canonical_action_keywords", ()) or ()),
-        )
-        normalized_query = f" {RetrievalHelper._normalize(query)} "
-        return {
-            normalized
-            for phrase in phrases
-            if (normalized := RetrievalHelper._normalize(phrase))
-            and f" {normalized} " in normalized_query
         }
 
     @staticmethod
@@ -713,6 +735,7 @@ class RetrievalHelper:
         devices: Iterable[Any],
         limit: int,
         continuity_score: Callable[[T], float] | None = None,
+        requested_capability: object = None,
     ) -> list[T]:
         """Rank a broad tool pool without discarding uncertain candidates."""
         if limit <= 0:
@@ -757,6 +780,7 @@ class RetrievalHelper:
                 semantic_score=semantic_scores.get(name),
                 continuity=continuity,
                 lexical_match=matches_by_name[name],
+                requested_capability=requested_capability,
             )
             signals["lexical_corpus"] = corpus_scores[name]
             scored.append(
@@ -768,70 +792,22 @@ class RetrievalHelper:
                 )
             )
         scored.sort(key=lambda item: (-item[0], item[1], item[2]))
-        # Reward coverage of distinct request terms so several power tools do
-        # not crowd out a color setter or a user-defined mode tool. Derive this
-        # from live names, descriptions and schemas, never a tool-name allowlist.
-        query_tokens = set(RetrievalHelper._normalize(
-            RetrievalHelper._tool_query_text(query)
-        ).split())
-        matched_terms = {}
-        for _, _, name, tool in scored:
-            text = " ".join((
-                name,
-                str(getattr(tool, "description", "") or ""),
-                *getattr(tool, "canonical_schema_parts", ()),
-            ))
-            matched_terms[name] = query_tokens & match_features(text)[1]
-        term_counts = Counter(term for terms in matched_terms.values() for term in terms)
-        term_weights = {
-            term: math.log(1.0 + len(scored) / count)
-            for term, count in term_counts.items()
-        }
-        tool_weights = {
-            name: sum(term_weights[term] for term in terms)
-            for name, terms in matched_terms.items()
-        }
-        covered: set[str] = set()
-        matched_actions = {
-            name: RetrievalHelper._matched_action_phrases(tool, query)
-            for _, _, name, tool in scored
-        }
-        covered_actions: set[str] = set()
-        selected: list[T] = []
-        while scored and len(selected) < limit:
-            def marginal_score(index: int) -> float:
-                score, _, name, _ = scored[index]
-                action_weight = RETRIEVAL_TOOL_SIGNAL_WEIGHTS["lexical_action"]
-                # Reserve the phrase bonus for a capability not yet represented.
-                # Descriptions mentioning the opposite action cannot cover it.
-                action_bonus = action_weight if matched_actions[name] - covered_actions else 0.0
-                score -= action_weight if matched_actions[name] else 0.0
-                weight = tool_weights[name]
-                if not weight:
-                    return score + action_bonus
-                uncovered = sum(
-                    term_weights[term]
-                    for term in matched_terms[name] - covered
-                ) / weight
-                # Keep a residual relevance score for alternatives, but spend
-                # the limited slots on capabilities not represented yet.
-                return score - 0.8 * abs(score) * (1.0 - uncovered) + action_bonus
-
-            best = max(range(len(scored)), key=marginal_score)
-            _, _, name, tool = scored.pop(best)
-            selected.append(tool)
-            covered.update(matched_terms[name])
-            covered_actions.update(matched_actions[name])
-        return selected
+        return [tool for _, _, _, tool in scored[:limit]]
 
     @staticmethod
-    def tool_search_confidence(tools: Iterable[Any], query: str, devices: Iterable[Any]) -> str:
+    def tool_search_confidence(
+        tools: Iterable[Any], query: str, devices: Iterable[Any], requested_capability: object = None,
+    ) -> str:
         """Classify the top result without turning uncertainty into a hard failure."""
         tools = list(tools)
         if not tools:
             return "none"
         query = RetrievalHelper._tool_query_text(query)
-        top_signals = RetrievalHelper.tool_ranking_signals(tools[0], query, devices)
+        top_signals = RetrievalHelper.tool_ranking_signals(
+            tools[0], query, devices, requested_capability=requested_capability,
+        )
+        if top_signals["capability"] > 0:
+            return "high"
         # Lexical similarity and metadata are evidence of relevance, never
         # proof of an action, negation, group scope, or a complete compound task.
         if RetrievalHelper.local_candidates_confident(query, tools):
@@ -841,9 +817,13 @@ class RetrievalHelper:
         return "low"
 
     @staticmethod
-    def rank_tools_for_query(tools: Iterable[T], query: str, devices: Iterable[Any] = ()) -> list[T]:
+    def rank_tools_for_query(
+        tools: Iterable[T], query: str, devices: Iterable[Any] = (), requested_capability: object = None,
+    ) -> list[T]:
         tools = list(tools)
-        return RetrievalHelper.rank_tool_candidates([], tools, query, devices, len(tools))
+        return RetrievalHelper.rank_tool_candidates(
+            [], tools, query, devices, len(tools), requested_capability=requested_capability,
+        )
 
     @staticmethod
     def build_tool_candidate_pool(
@@ -884,9 +864,9 @@ class RetrievalHelper:
         if allowed_classes is None:
             allowed_classes = RetrievalHelper._schema_values(properties.get("device_class", {}))
         if allowed_domains:
-            score += 2.0 if domains & allowed_domains else -2.0
+            score += 2.0 if domains & allowed_domains else -0.25
         if allowed_classes:
-            score += 2.0 if device_classes & allowed_classes else -2.0
+            score += 2.0 if device_classes & allowed_classes else -0.25
 
         if RetrievalHelper._metadata_value(tool, "is_domain_aware"):
             score += 0.5
@@ -903,13 +883,22 @@ class RetrievalHelper:
 
     @staticmethod
     def rerank_tools_for_devices(tools: Iterable[T], devices: Iterable[Any], limit: int) -> list[T]:
-        """Softly prefer device-compatible tools without erasing alternatives."""
+        """Jointly rerank with a bounded positive device-compatibility boost."""
         devices = list(devices)
         tools = list(tools)
         ranked = sorted(
             enumerate(tools),
             key=lambda pair: (
-                -RetrievalHelper.tool_device_compatibility(pair[1], devices),
+                -(
+                    1.0 / (pair[0] + 1)
+                    + 0.3 * min(
+                        2.0,
+                        max(
+                            0.0,
+                            RetrievalHelper.tool_device_compatibility(pair[1], devices),
+                        ),
+                    )
+                ),
                 pair[0],
             ),
         )

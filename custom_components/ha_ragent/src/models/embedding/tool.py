@@ -25,12 +25,6 @@ class LlmTool(SerializableModel, EmbeddableModel):
         return self.split_canonical_name(self.name)
 
     @property
-    def canonical_action_keywords(self) -> tuple[str, ...]:
-        """Return the action-bearing canonical name parts."""
-        parts = self.split_canonical_name(self.name.rsplit("__", 1)[-1])
-        return parts[1:] if parts and parts[0] == "hass" else parts
-
-    @property
     def canonical_action(self) -> str:
         """Return an explicitly declared capability, never inferred from prose."""
         return self.metadata.canonical_action if self.metadata else ""
@@ -124,15 +118,14 @@ class LlmTool(SerializableModel, EmbeddableModel):
 
     @property
     def canonical_search_parts(self) -> tuple[str, ...]:
-        """Return phrase-oriented text used to retrieve this tool."""
+        """Return searchable identity, capability, domain, and schema metadata."""
         canonical_name = " ".join(self.canonical_name_parts)
-        action_keywords = " ".join(self.canonical_action_keywords)
         return tuple(
             value
             for value in (
                 self.name,
                 canonical_name,
-                action_keywords,
+                self.canonical_action,
                 *self.canonical_supported_domains,
                 self.family,
                 self.description,
@@ -183,11 +176,16 @@ class LlmTool(SerializableModel, EmbeddableModel):
             " ".join(self.canonical_name_parts),
         )
         self.append_if_exists(parts, "family", self.family)
-        self.append_if_exists(parts, "action keywords", " ".join(self.canonical_action_keywords))
+        self.append_if_exists(parts, "action", self.canonical_action)
         self.append_if_exists(
             parts,
             "supported domains",
             ", ".join(self.canonical_supported_domains),
+        )
+        self.append_if_exists(
+            parts,
+            "expected states",
+            ", ".join(self.metadata.expected_states if self.metadata else ()),
         )
         self.append_if_exists(parts, "Description", self.description)
         self.append_if_exists(parts, "schema", "; ".join(self.canonical_schema_parts))

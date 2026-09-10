@@ -37,7 +37,8 @@ class ContinuityContext:
     def tool_score(self, tool: object) -> float:
         """Return a continuity boost for a tool candidate."""
         name = str(getattr(tool, "name", "") or "")
-        return self._maximum(self.tools, [name]) + 0.5 * self._maximum(self.actions, [name])
+        action = str(getattr(tool, "canonical_action", "") or "")
+        return self._maximum(self.tools, [name]) + 0.5 * self._maximum(self.actions, [action])
 
     def successful_target_score(self, device: object) -> float:
         """Score membership in a selected, previously successful target group."""

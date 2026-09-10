@@ -191,7 +191,6 @@ class HistoryManager:
                         continue
                     if tool_name:
                         tools.add(tool_name)
-                        actions.add(tool_name)
                     self._collect_tool_result(
                         result,
                         entities,
@@ -201,6 +200,9 @@ class HistoryManager:
                         device_classes,
                         ambiguous_entities,
                     )
+                    execution_status = result.get("execution_status") if isinstance(result, dict) else None
+                    if isinstance(execution_status, dict):
+                        self._add_values(actions, execution_status.get("executed_capability"))
 
                     tool_call = self._take_matching_tool_call(
                         message,
@@ -214,7 +216,6 @@ class HistoryManager:
                     arguments = getattr(tool_call, "tool_args", None) or {}
                     if call_tool_name:
                         tools.add(call_tool_name)
-                        actions.add(call_tool_name)
                     if not isinstance(arguments, dict):
                         continue
 
@@ -241,7 +242,11 @@ class HistoryManager:
                             domains=tuple(sorted(group_domains)),
                             device_classes=tuple(sorted(group_classes)),
                             tool=call_tool_name,
-                            action=str(arguments.get("action", "") or call_tool_name),
+                            action=str(
+                                (execution_status or {}).get("executed_capability", "")
+                                or arguments.get("action", "")
+                                or call_tool_name
+                            ),
                         ))
 
             created_at = getattr(user_message, "created_at", None)

@@ -86,19 +86,69 @@ class ToolExtractor:
 
         return list(values), universal, has_field
 
-    def _extract_tool_metadata(self, tool_name: str, parameters: Any) -> ToolMetadata:
+    @staticmethod
+    def _schema_values(schema: object) -> set[str]:
+        """Extract explicit const/enum values from an OpenAPI schema."""
+        values: set[str] = set()
+        if isinstance(schema, dict):
+            constant = schema.get("const")
+            if isinstance(constant, (str, int, float)):
+                values.add(str(constant).casefold())
+            enum = schema.get("enum")
+            if isinstance(enum, list):
+                values.update(str(value).casefold() for value in enum)
+            for keyword in ("anyOf", "oneOf", "allOf"):
+                for nested in schema.get(keyword, []):
+                    values.update(ToolExtractor._schema_values(nested))
+        return values
+
+    @staticmethod
+    def _metadata_value(metadata: object, *names: str, default: Any = None) -> Any:
+        for name in names:
+            if isinstance(metadata, dict) and name in metadata:
+                return metadata[name]
+            value = getattr(metadata, name, None)
+            if value is not None:
+                return value
+        return default
+
+    def _extract_tool_metadata(self, tool: Any, parameters: Any) -> ToolMetadata:
+        """Build capability metadata from explicit tool metadata and schema only."""
         metadata = ToolMetadata()
-
-        if not isinstance(parameters, dict):
-            return metadata
-
-        properties = parameters.get("properties")
-        if not properties or not isinstance(properties, dict):
-            return metadata
+        properties = parameters.get("properties", {}) if isinstance(parameters, dict) else {}
+        if not isinstance(properties, dict):
+            properties = {}
 
         metadata.is_domain_aware = "domain" in properties
         metadata.is_area_aware = "area" in properties or "floor" in properties
         metadata.is_device_class_aware = "device_class" in properties
+
+        source = getattr(tool, "metadata", None)
+        action = self._metadata_value(source, "canonical_action", "action", "capability_id", default="")
+        if not action:
+            schema_actions = self._schema_values(properties.get("action", {}))
+            if len(schema_actions) == 1:
+                action = next(iter(schema_actions))
+        metadata.canonical_action = str(action or "").casefold()
+
+        domains = self._metadata_value(source, "supported_domains", "domains", "domain", default=())
+        if isinstance(domains, str):
+            domains = (domains,)
+        metadata.supported_domains = tuple(sorted({
+            *(str(value).casefold() for value in (domains or ())),
+            *self._schema_values(properties.get("domain", {})),
+        }))
+
+        expected_states = self._metadata_value(source, "expected_states", "expected_state", default=())
+        if isinstance(expected_states, str):
+            expected_states = (expected_states,)
+        if not expected_states:
+            expected_states = {
+                *self._schema_values(properties.get("expected_state", {})),
+                *self._schema_values(properties.get("expected_states", {})),
+            }
+        metadata.expected_states = tuple(sorted(str(value).casefold() for value in (expected_states or ())))
+        metadata.family = self._metadata_value(source, "family", default=None)
 
         return metadata
 
@@ -205,7 +255,7 @@ class ToolExtractor:
                         name=tool_name,
                         description=getattr(tool, "description", ""),
                         parameters=parameters,
-                        metadata=self._extract_tool_metadata(tool_name, parameters),
+                        metadata=self._extract_tool_metadata(tool, parameters),
                     )
                 )
                 seen_tool_names.add(tool_name)

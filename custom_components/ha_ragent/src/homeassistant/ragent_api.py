@@ -9,6 +9,7 @@ from custom_components.ha_ragent.src.const import (
     DOMAIN,
     RAGENT_LLM_API_ID,
     RAGENT_LLM_API_NAME,
+    RAGENT_SEMANTIC_SEARCH_TOOL_NAME,
     RAGENT_PREFIXED_TOOL_NAMES_BY_NAME,
     RAGENT_TOOL_NAMES_BY_PREFIXED_NAME,
 )
@@ -179,6 +180,39 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
         for tool in self.tools:
             if isinstance(tool, RAGentSemanticSearchTool):
                 tool.prune_candidates(completed_names)
+
+    def requested_capabilities(self) -> list[dict[str, object]]:
+        """Return structured operations requested through semantic search."""
+        for tool in self.tools:
+            if isinstance(tool, RAGentSemanticSearchTool):
+                return tool.requested_capabilities
+        return []
+
+    async def async_rediscover_capabilities(
+        self, capabilities: list[dict[str, object]],
+    ) -> dict[str, object]:
+        """Run corrective tool discovery from structured capability IDs."""
+        if not capabilities:
+            return {}
+        for tool in self.tools:
+            if not isinstance(tool, RAGentSemanticSearchTool):
+                continue
+            queries = [
+                " | ".join((
+                    f"action={capability.get('action', '')}",
+                    "domains=" + ",".join(capability.get("domains", ()) or ()),
+                ))
+                for capability in capabilities
+            ]
+            return await tool.async_call(llm.ToolInput(
+                tool_name=RAGENT_SEMANTIC_SEARCH_TOOL_NAME,
+                tool_args={
+                    "search_queries": queries,
+                    "capabilities": capabilities,
+                    "scope": "tools",
+                },
+            ))
+        return {}
 
     async def async_call_tool(self, tool_input: llm.ToolInput) -> Any:
         """Intercept calls to RAGent tools and delegate to the appropriate tool instance."""

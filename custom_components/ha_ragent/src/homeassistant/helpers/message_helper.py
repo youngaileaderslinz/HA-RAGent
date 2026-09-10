@@ -67,6 +67,9 @@ class MessageHelper:
         retained_keys = (
             "name",
             "description",
+            "action",
+            "domains",
+            "expected_states",
             "canonical_action",
             "supported_domains",
             "retrieval_score",

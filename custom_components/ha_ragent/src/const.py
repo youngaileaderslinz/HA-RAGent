@@ -125,7 +125,7 @@ RETRIEVAL_TOOL_SIGNAL_WEIGHTS = {
     "lexical_exact": 2.0,
     "lexical_fuzzy": 0.75,
     "lexical_corpus": 3.0,
-    "lexical_action": 4.0,
+    "capability": 4.0,
     "domain": 1.5,
     "device_metadata": 0.5,
     "continuity": 0.5,
