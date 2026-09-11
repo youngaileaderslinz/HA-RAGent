@@ -10,6 +10,7 @@ class TurnContext:
     entities: tuple[str, ...] = ()
     tools: tuple[str, ...] = ()
     areas: tuple[str, ...] = ()
+    floors: tuple[str, ...] = ()
     domains: tuple[str, ...] = ()
     device_classes: tuple[str, ...] = ()
     actions: tuple[str, ...] = ()
@@ -23,6 +24,7 @@ class TurnContext:
             *self.entities,
             *self.tools,
             *self.areas,
+            *self.floors,
             *self.domains,
             *self.device_classes,
             *self.actions,
@@ -44,4 +46,7 @@ class TurnContext:
 
     @property
     def has_canonical_context(self) -> bool:
-        return bool(self.entities or self.tools or self.areas or self.domains or self.device_classes)
+        return bool(
+            self.entities or self.tools or self.areas or self.floors
+            or self.domains or self.device_classes
+        )

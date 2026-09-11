@@ -160,9 +160,9 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             CONF_MAX_TOOLS_TO_EXTRACT, runtime_options,
         )))
         return (
-            min(requested_min_devices, max_devices),
+            requested_min_devices,
             max_devices,
-            min(requested_min_tools, max_tools),
+            requested_min_tools,
             max_tools,
         )
 
@@ -245,8 +245,10 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 "identity_metadata": device_identity_score,
                 "area_floor": device_location_score,
                 "domain_device_class": device_taxonomy_score,
+                "entity_continuity": continuity.entity_score,
+                "area_continuity": continuity.area_score,
+                "taxonomy_continuity": continuity.taxonomy_score,
             },
-            continuity_score=continuity.device_score,
             confirmed_score=continuity.successful_target_score,
         )
         return RetrievalHelper.select_device_candidates(

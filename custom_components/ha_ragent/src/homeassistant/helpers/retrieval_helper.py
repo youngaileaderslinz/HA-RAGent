@@ -675,6 +675,7 @@ class RetrievalHelper:
                 "entities",
                 "tools",
                 "areas",
+                "floors",
                 "domains",
                 "device_classes",
                 "actions",

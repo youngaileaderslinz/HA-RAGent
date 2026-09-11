@@ -71,6 +71,7 @@ class HistoryManager:
         entities: set[str],
         tools: set[str],
         areas: set[str],
+        floors: set[str],
         domains: set[str],
         device_classes: set[str],
         ambiguous_entities: set[str],
@@ -85,6 +86,7 @@ class HistoryManager:
                 entities,
                 tools,
                 areas,
+                floors,
                 domains,
                 device_classes,
                 ambiguous_entities,
@@ -100,6 +102,7 @@ class HistoryManager:
                 if isinstance(name, str):
                     candidate_ids.append(name)
                 cls._add_values(areas, device.get("area"))
+                cls._add_values(floors, device.get("floor"))
                 cls._add_values(domains, device.get("domain"))
                 cls._add_values(device_classes, device.get("device_class"))
             if len(candidate_ids) > 1:
@@ -179,6 +182,7 @@ class HistoryManager:
             entities: set[str] = set()
             tools: set[str] = set()
             areas: set[str] = set()
+            floors: set[str] = set()
             domains: set[str] = set()
             device_classes: set[str] = set()
             actions: set[str] = set()
@@ -213,6 +217,7 @@ class HistoryManager:
                         entities,
                         tools,
                         areas,
+                        floors,
                         domains,
                         device_classes,
                         ambiguous_entities,
@@ -247,7 +252,7 @@ class HistoryManager:
                     self._add_values(group_classes, arguments.get("device_class"))
                     entities.update(group_entities)
                     areas.update(group_areas)
-                    areas.update(group_floors)
+                    floors.update(group_floors)
                     domains.update(group_domains)
                     device_classes.update(group_classes)
                     self._add_values(actions, arguments.get("action"))
@@ -273,6 +278,7 @@ class HistoryManager:
                 *sorted(entities),
                 *sorted(tools),
                 *sorted(areas),
+                *sorted(floors),
                 *sorted(domains),
                 *sorted(device_classes),
             ))
@@ -282,6 +288,7 @@ class HistoryManager:
                 entities=tuple(sorted(entities)),
                 tools=tuple(sorted(tools)),
                 areas=tuple(sorted(areas)),
+                floors=tuple(sorted(floors)),
                 domains=tuple(sorted(domains)),
                 device_classes=tuple(sorted(device_classes)),
                 actions=tuple(sorted(actions)),
