@@ -24,6 +24,7 @@ from custom_components.ha_ragent.src.homeassistant.helpers.message_helper import
 from custom_components.ha_ragent.src.homeassistant.helpers.tool_helper import ToolHelper
 from custom_components.ha_ragent.src.homeassistant.helpers.memory_manager import MemoryManager
 from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
+from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
 from custom_components.ha_ragent.src.models.retrieval.scheduled_context import ScheduledContext
 from custom_components.ha_ragent.src.models.embedding.device_embedding import DeviceEmbedding
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
@@ -44,8 +45,10 @@ from custom_components.ha_ragent.src.models.embedding.device import Device
 from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 from custom_components.ha_ragent.src.const import (
-    CONF_NUM_DEVICES_TO_EXTRACT,
-    CONF_NUM_TOOLS_TO_EXTRACT,
+    CONF_MIN_DEVICES_TO_EXTRACT,
+    CONF_MAX_DEVICES_TO_EXTRACT,
+    CONF_MIN_TOOLS_TO_EXTRACT,
+    CONF_MAX_TOOLS_TO_EXTRACT,
     CONF_NUM_MEMORIES_TO_EXTRACT,
     CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
     CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
@@ -140,11 +143,27 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         return RetrievalHelper.build_continuity_context(selected)
 
     @staticmethod
-    def _configured_retrieval_limits(runtime_options: dict[str, object]) -> tuple[int, int]:
-        """Return the user-selected device and tool exposure limits."""
+    def _configured_retrieval_ranges(
+        runtime_options: dict[str, object],
+    ) -> tuple[int, int, int, int]:
+        """Return normalized device/tool minimum and maximum exposure limits."""
+        requested_min_devices = max(0, int(get_setting_value(
+            CONF_MIN_DEVICES_TO_EXTRACT, runtime_options,
+        )))
+        requested_min_tools = max(0, int(get_setting_value(
+            CONF_MIN_TOOLS_TO_EXTRACT, runtime_options,
+        )))
+        max_devices = max(0, int(get_setting_value(
+            CONF_MAX_DEVICES_TO_EXTRACT, runtime_options,
+        )))
+        max_tools = max(0, int(get_setting_value(
+            CONF_MAX_TOOLS_TO_EXTRACT, runtime_options,
+        )))
         return (
-            int(get_setting_value(CONF_NUM_DEVICES_TO_EXTRACT, runtime_options)),
-            int(get_setting_value(CONF_NUM_TOOLS_TO_EXTRACT, runtime_options)),
+            min(requested_min_devices, max_devices),
+            max_devices,
+            min(requested_min_tools, max_tools),
+            max_tools,
         )
 
     async def _async_retrieve_devices(
@@ -155,13 +174,15 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         continuity: ContinuityContext,
         current_area: str = "",
         current_floor: str = "",
+        max_devices: int | None = None,
     ) -> List[Device]:
         """Retrieve relevant devices from vector database based on query embedding."""
-        if n_devices <= 0:
+        exposure_limit = max(n_devices, max_devices or n_devices)
+        if exposure_limit <= 0:
             return []
         collection_name = f"devices_{self.subentry_id}"
         try:
-            candidate_limit = RetrievalHelper.adaptive_candidate_limit(n_devices)
+            candidate_limit = RetrievalHelper.adaptive_candidate_limit(exposure_limit)
             options = {**self.entry.options, **self.subentry.data}
             scored_devices, all_devices = await RetrievalHelper.async_retrieve_sources(
                 self.entry.vector_db_backend, DeviceEmbedding, options,
@@ -171,13 +192,8 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             _logger.error(f"Error retrieving devices from vector DB: {e}", exc_info=True)
             return []
 
-        ranked_devices = await asyncio.to_thread(
-            RetrievalHelper.rank_scored_candidates,
-            scored_devices,
-            all_devices,
-            query,
-            lambda device: device.id,
-            lambda device: (
+        def device_text_parts(device: Device) -> tuple[object, ...]:
+            return (
                 device.id,
                 device.friendly_name,
                 *(device.aliases or []),
@@ -188,17 +204,54 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 *(device.domain or []),
                 device.device_class,
                 *(device.device_labels or []),
-            ),
+            )
+
+        def device_identity_score(device: Device) -> float:
+            return 2.0 * RetrievalHelper.device_target_score(query, device)
+
+        def device_location_score(device: Device) -> float:
+            return RetrievalHelper.trusted_location_score(
+                device, current_area, current_floor,
+            )
+
+        def device_taxonomy_score(device: Device) -> float:
+            return RetrievalHelper.field_match_score(
+                query, (*(device.domain or ()), device.device_class),
+            )
+
+        def device_metadata_score(device: Device) -> float:
+            return device_identity_score(device) + 0.5 * device_location_score(device)
+
+        ranked_devices = await asyncio.to_thread(
+            RetrievalHelper.rank_scored_candidates,
+            scored_devices,
+            all_devices,
+            query,
+            lambda device: device.id,
+            device_text_parts,
             candidate_limit,
-            metadata_score=lambda device: (
-                2.0 * RetrievalHelper.device_target_score(query, device)
-                + 0.5 * RetrievalHelper.trusted_location_score(device, current_area, current_floor)
-            ),
+            metadata_score=device_metadata_score,
             continuity_score=continuity.device_score,
             preserve_score=continuity.successful_target_score,
             trim_confident=False,
         )
-        return RetrievalHelper.select_device_candidates(query, ranked_devices, n_devices)
+        confidence = RetrievalHelper.device_search_confidence(
+            ranked_devices,
+            scored_devices,
+            query=query,
+            key=lambda device: device.id,
+            text_parts=device_text_parts,
+            structured_scores={
+                "identity_metadata": device_identity_score,
+                "area_floor": device_location_score,
+                "domain_device_class": device_taxonomy_score,
+            },
+            continuity_score=continuity.device_score,
+            confirmed_score=continuity.successful_target_score,
+        )
+        return RetrievalHelper.select_device_candidates(
+            query, ranked_devices, n_devices, max_devices, confidence,
+        )
 
     async def _async_retrieve_tools(
         self,
@@ -207,13 +260,15 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         n_tools: int,
         continuity: ContinuityContext,
         devices: list[Device] | None = None,
+        max_tools: int | None = None,
     ) -> List[LlmTool]:
         """Retrieve relevant tools from vector database based on query embedding."""
-        if n_tools <= 0:
+        exposure_limit = max(n_tools, max_tools or n_tools)
+        if exposure_limit <= 0:
             return []
         collection_name = f"tools_{self.subentry_id}"
         try:
-            candidate_limit = RetrievalHelper.adaptive_candidate_limit(n_tools)
+            candidate_limit = RetrievalHelper.adaptive_candidate_limit(exposure_limit)
             options = {**self.entry.options, **self.subentry.data}
             scored_tools, all_tools = await RetrievalHelper.async_retrieve_sources(
                 self.entry.vector_db_backend, LlmToolEmbedding, options,
@@ -229,12 +284,31 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             all_tools,
             query,
             [],
-            max(n_tools, RetrievalHelper.expanded_tool_limit(n_tools)),
+            max(exposure_limit, RetrievalHelper.expanded_tool_limit(exposure_limit)),
             continuity_score=continuity.tool_score,
         )
-        return RetrievalHelper.rerank_tools_for_devices(
-            ranked_tools, devices or [], n_tools,
+        ranked_tools = RetrievalHelper.rerank_tools_for_devices(
+            ranked_tools, devices or [], len(ranked_tools),
         )
+        if max_tools is None:
+            return ranked_tools[:n_tools]
+        confidence = RetrievalHelper.tool_search_confidence_details(
+            ranked_tools, query, devices or [],
+            vector_results=scored_tools,
+            continuity_score=continuity.tool_score,
+        )
+        limit = RetrievalHelper.confidence_limit(confidence.level, n_tools, max_tools)
+        log_debug_payload(
+            _logger, "retrieval.tool_exposure",
+            confidence=confidence.level,
+            confidence_reason=confidence.reason,
+            top_score=confidence.top_score,
+            second_score=confidence.second_score,
+            margin=confidence.margin,
+            ratio=confidence.ratio,
+            selected_candidate_count=min(limit, len(ranked_tools)),
+        )
+        return ranked_tools[:limit]
 
     async def _async_retrieve_memories(self, query_embedding: List[float] | QueryEmbedding, n_memories: int) -> List[Memory]:
         """Retrieve relevant persistent memories for this agent."""
@@ -311,7 +385,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             name=tool_name,
             description=getattr(api_tool, "description", ""),
             parameters=parameters,
-            metadata={},
+            metadata=ToolExtractor.extract_tool_metadata(api_tool, parameters),
         )
 
     def _ensure_required_tools_exposed(self, tool_list: List[LlmTool], llm_api: llm.APIInstance | None) -> List[LlmTool]:
@@ -613,13 +687,26 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                 targets = tool_helper.successful_target_names(tool_call, parsed_tool_result)
                                 fulfillment_status = "failed"
                                 rediscovery_required = not tool_succeeded
+                                observed_states: dict[str, str | None] = {}
                                 if tool_succeeded:
-                                    fulfillment_status = "unverified" if requested_capabilities else "not_evaluated"
+                                    has_declared_action = bool(
+                                        getattr(selected_tool, "canonical_action", "")
+                                    )
+                                    fulfillment_status = (
+                                        "unverified"
+                                        if requested_capabilities or has_declared_action
+                                        else "not_evaluated"
+                                    )
                                     expected_states = set(
                                         getattr(getattr(selected_tool, "metadata", None), "expected_states", ()) or ()
                                     )
-                                    if expected_states and targets:
+                                    if targets:
                                         current_states = [self.hass.states.get(target) for target in targets]
+                                        observed_states = {
+                                            target: state.state if state is not None else None
+                                            for target, state in zip(targets, current_states)
+                                        }
+                                    if expected_states and targets:
                                         if all(
                                             state is not None and str(state.state).casefold() in expected_states
                                             for state in current_states
@@ -634,6 +721,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                     "target": targets,
                                     "tool_succeeded": tool_succeeded,
                                     "fulfillment_status": fulfillment_status,
+                                    "observed_states": observed_states,
                                     "rediscovery_required": rediscovery_required,
                                 }
                                 if rediscovery_required:
@@ -835,43 +923,53 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     conversation_id=user_input.conversation_id,
                     user_text=user_input.text, retrieval_query=retrieval_query,
                     retrieval_method=retrieval_method,
-                    configured_device_limit=get_setting_value(
-                        CONF_NUM_DEVICES_TO_EXTRACT, self.runtime_options,
+                    configured_device_range=(
+                        get_setting_value(CONF_MIN_DEVICES_TO_EXTRACT, self.runtime_options),
+                        get_setting_value(CONF_MAX_DEVICES_TO_EXTRACT, self.runtime_options),
                     ),
-                    configured_tool_limit=get_setting_value(
-                        CONF_NUM_TOOLS_TO_EXTRACT, self.runtime_options,
+                    configured_tool_range=(
+                        get_setting_value(CONF_MIN_TOOLS_TO_EXTRACT, self.runtime_options),
+                        get_setting_value(CONF_MAX_TOOLS_TO_EXTRACT, self.runtime_options),
                     ),
                     memory_limit=memory_limit, current_area=current_area,
                     current_floor=current_floor, scheduled_request=scheduled_request,
                     continuity=continuity,
                 )
 
-                # Recall memory alongside the full device/tool retrieval chain.
-                # TaskGroup also cancels and awaits recall if retrieval is interrupted.
+                # Rank devices, tools, and memories independently. A bad device
+                # shortlist must never suppress the correct capability.
                 async with asyncio.TaskGroup() as retrieval_tasks:
                     memory_task = retrieval_tasks.create_task(self._async_retrieve_memories(query_embedding, memory_limit))
-                    configured_device_limit, configured_tool_limit = self._configured_retrieval_limits(self.runtime_options)
-                    retrieved_devices = await self._async_retrieve_devices(
+                    min_devices, max_devices, min_tools, max_tools = self._configured_retrieval_ranges(
+                        self.runtime_options
+                    )
+                    tool_retrieval_query = RetrievalHelper.build_tool_search_query(
+                        retrieval_query, "", []
+                    )
+                    device_task = retrieval_tasks.create_task(self._async_retrieve_devices(
                         query_embedding,
                         retrieval_query,
-                        n_devices=configured_device_limit,
+                        n_devices=min_devices,
                         continuity=continuity,
                         current_area=current_area,
                         current_floor=current_floor,
-                    )
-                    tool_retrieval_query = RetrievalHelper.build_tool_search_query(retrieval_query, "", retrieved_devices)
+                        max_devices=max_devices,
+                    ))
                     if llm_api:
-                        retrieved_tools = await self._async_retrieve_tools(
+                        tool_task = retrieval_tasks.create_task(self._async_retrieve_tools(
                             query_embedding,
                             tool_retrieval_query,
-                            n_tools=configured_tool_limit,
+                            n_tools=min_tools,
                             continuity=continuity,
-                            devices=retrieved_devices,
-                        )
+                            devices=[],
+                            max_tools=max_tools,
+                        ))
                     else:
-                        retrieved_tools = []
+                        tool_task = None
 
                 retrieved_memories = memory_task.result()
+                retrieved_devices = device_task.result()
+                retrieved_tools = tool_task.result() if tool_task else []
                 log_debug_payload(
                     _logger, "conversation.retrieval_result",
                     conversation_id=user_input.conversation_id,

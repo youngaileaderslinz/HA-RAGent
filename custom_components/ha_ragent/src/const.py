@@ -207,8 +207,10 @@ LLM_BACKENDS_WITH_API_KEY = [ BACKEND_LLM_TYPE_OPENAI_COMPATIBLE ]
 #-----------------------------------------------
 # Prompt configuration constants
 #----------------------------------------------
-CONF_NUM_DEVICES_TO_EXTRACT = "rag_num_devices_to_extract"
-CONF_NUM_TOOLS_TO_EXTRACT = "rag_num_tools_to_extract"
+CONF_MIN_DEVICES_TO_EXTRACT = "rag_min_devices_to_extract"
+CONF_MAX_DEVICES_TO_EXTRACT = "rag_max_devices_to_extract"
+CONF_MIN_TOOLS_TO_EXTRACT = "rag_min_tools_to_extract"
+CONF_MAX_TOOLS_TO_EXTRACT = "rag_max_tools_to_extract"
 CONF_NUM_MEMORIES_TO_EXTRACT = "rag_num_memories_to_extract"
 CONF_MAX_MEMORY_ENTRIES = "rag_max_memory_entries"
 CONF_EXCLUDED_TOOLS = "rag_excluded_tools"
@@ -274,9 +276,11 @@ DEFAULT_SETTINGS = {
     CONF_MAX_MEMORY_ENTRIES: 100,
     CONF_MAX_TOKENS: 1000,
     CONF_MAX_TOOL_CALL_ITERATIONS: 4,
-    CONF_NUM_DEVICES_TO_EXTRACT: 4,
+    CONF_MIN_DEVICES_TO_EXTRACT: 2,
+    CONF_MAX_DEVICES_TO_EXTRACT: 6,
     CONF_NUM_MEMORIES_TO_EXTRACT: 4,
-    CONF_NUM_TOOLS_TO_EXTRACT: 4,
+    CONF_MIN_TOOLS_TO_EXTRACT: 2,
+    CONF_MAX_TOOLS_TO_EXTRACT: 8,
     CONF_P_MIN: 0.1,
     CONF_P_TOP: 0.9,
     CONF_P_TYPICAL: 1.0,

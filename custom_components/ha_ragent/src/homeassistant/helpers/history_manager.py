@@ -78,6 +78,17 @@ class HistoryManager:
         if not isinstance(result, dict):
             return
         cls._add_values(entities, result.get("success"))
+        nested_result = result.get("result")
+        if isinstance(nested_result, dict):
+            cls._collect_tool_result(
+                nested_result,
+                entities,
+                tools,
+                areas,
+                domains,
+                device_classes,
+                ambiguous_entities,
+            )
         devices = result.get("devices")
         if isinstance(devices, list):
             candidate_ids: list[str] = []
@@ -132,6 +143,12 @@ class HistoryManager:
         reported_entities: set[str] = set()
         success_value = result.get("success")
         cls._add_values(reported_entities, success_value)
+        nested_result = result.get("result")
+        if isinstance(nested_result, dict):
+            nested_success = nested_result.get("success")
+            cls._add_values(reported_entities, nested_success)
+            if isinstance(nested_success, (str, list, tuple, set)):
+                return reported_entities
         if isinstance(success_value, (str, list, tuple, set)):
             return reported_entities
         return argument_entities | reported_entities
@@ -245,7 +262,6 @@ class HistoryManager:
                             action=str(
                                 (execution_status or {}).get("executed_capability", "")
                                 or arguments.get("action", "")
-                                or call_tool_name
                             ),
                         ))
 

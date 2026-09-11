@@ -11,8 +11,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import llm
 
 from custom_components.ha_ragent.src.const import (
-    CONF_NUM_DEVICES_TO_EXTRACT,
-    CONF_NUM_TOOLS_TO_EXTRACT,
+    CONF_MIN_DEVICES_TO_EXTRACT,
+    CONF_MAX_DEVICES_TO_EXTRACT,
+    CONF_MIN_TOOLS_TO_EXTRACT,
+    CONF_MAX_TOOLS_TO_EXTRACT,
     DOMAIN,
     RAGENT_MAX_SEARCH_QUERY_CHARS,
     RAGENT_MAX_SEARCH_QUERIES,
@@ -175,14 +177,21 @@ class RAGentSemanticSearchTool(llm.Tool):
         )
 
     @staticmethod
-    def _get_effective_limits(entry: Any, subentry: Any) -> tuple[int, int]:
-        """Use the same configured limits as normal retrieval."""
+    def _get_effective_ranges(entry: Any, subentry: Any) -> tuple[int, int, int, int]:
+        """Return normalized minimum and maximum exposure limits."""
         entry_options = getattr(entry, "options", {}) or {}
         subentry_data = getattr(subentry, "data", {}) or {}
         runtime_options = {**entry_options, **subentry_data}
-        device_limit = int(get_setting_value(CONF_NUM_DEVICES_TO_EXTRACT, runtime_options))
-        tool_limit = int(get_setting_value(CONF_NUM_TOOLS_TO_EXTRACT, runtime_options))
-        return device_limit, tool_limit
+        requested_min_devices = max(0, int(get_setting_value(CONF_MIN_DEVICES_TO_EXTRACT, runtime_options)))
+        requested_min_tools = max(0, int(get_setting_value(CONF_MIN_TOOLS_TO_EXTRACT, runtime_options)))
+        max_devices = max(0, int(get_setting_value(CONF_MAX_DEVICES_TO_EXTRACT, runtime_options)))
+        max_tools = max(0, int(get_setting_value(CONF_MAX_TOOLS_TO_EXTRACT, runtime_options)))
+        return (
+            min(requested_min_devices, max_devices),
+            max_devices,
+            min(requested_min_tools, max_tools),
+            max_tools,
+        )
 
     def _model_search_queries(self, tool_input: llm.ToolInput) -> list[str]:
         """Return the distinct focused search intents supplied by the model."""
@@ -274,8 +283,8 @@ class RAGentSemanticSearchTool(llm.Tool):
         subentry = entry.subentries.get(self.subentry_id)
         if not subentry or subentry.data.get(CONF_LLM_HASS_API) == "none":
             return
-        device_limit, tool_limit = self._get_effective_limits(entry, subentry)
-        yield entry, self.subentry_id, subentry, device_limit, tool_limit
+        limits = self._get_effective_ranges(entry, subentry)
+        yield entry, self.subentry_id, subentry, *limits
 
     async def _embed_query_for_subentry(self, entry: Any, subentry: Any, query: str) -> list[float]:
         """Embed a search query for a specific subentry."""
@@ -412,8 +421,11 @@ class RAGentSemanticSearchTool(llm.Tool):
         ]
         tool_confidence = "not_requested"
 
-        for entry, subentry_id, subentry, device_limit, tool_limit in self._iter_searchable_entries():
-            result_tool_limit = max(result_tool_limit, tool_limit)
+        for searchable_entry in self._iter_searchable_entries():
+            entry, subentry_id, subentry, min_devices, max_devices, min_tools, max_tools = searchable_entry
+            device_limit = max_devices
+            tool_limit = max_tools
+            result_tool_limit = max(result_tool_limit, max_tools)
             for query_index, model_query in enumerate(model_search_queries or [""]):
                 try:
                     requested_capability = (
@@ -422,15 +434,14 @@ class RAGentSemanticSearchTool(llm.Tool):
                         else (requested_capabilities[0] if len(requested_capabilities) == 1 else {})
                     )
                     options = {**(getattr(entry, "options", {}) or {}), **subentry.data}
-                    compatible_devices: list[Device | dict[str, object]] = list(self._candidate_context)
                     device_query = self._device_search_query(model_query, queries[query_index], focused=focused)
                     if search_devices:
                         device_queries.append(device_query)
-                    tool_query = self._tool_search_query(model_query, compatible_devices, focused=focused)
+                    tool_query = self._tool_search_query(model_query, [], focused=focused)
                     device_embedding = QueryEmbedding(
                         lambda query=device_query: self._embed_query_for_subentry(entry, subentry, query)
                     )
-                    tool_embedding = QueryEmbedding(
+                    tool_embedding = device_embedding if tool_query == device_query else QueryEmbedding(
                         lambda query=tool_query: self._embed_query_for_subentry(entry, subentry, query)
                     )
                     if search_devices and device_limit > 0:
@@ -440,13 +451,8 @@ class RAGentSemanticSearchTool(llm.Tool):
                             entry.vector_db_backend, DeviceEmbedding, options,
                             collection_name, device_embedding, candidate_limit, query=device_query,
                         )
-                        retrieved_devices = await asyncio.to_thread(
-                            RetrievalHelper.rank_scored_candidates,
-                            scored_devices,
-                            all_devices,
-                            device_query,
-                            lambda device: device.id,
-                            lambda device: (
+                        def device_text_parts(device: Device) -> tuple[object, ...]:
+                            return (
                                 device.id,
                                 device.friendly_name,
                                 *(device.aliases or []),
@@ -457,19 +463,64 @@ class RAGentSemanticSearchTool(llm.Tool):
                                 *(device.domain or []),
                                 device.device_class,
                                 *(device.device_labels or []),
-                            ),
-                            candidate_limit,
-                            metadata_score=lambda device: 2.0 * RetrievalHelper.device_target_score(
+                            )
+
+                        def device_identity_score(device: Device) -> float:
+                            return 2.0 * RetrievalHelper.device_target_score(
+                                device_query, device,
+                            )
+
+                        def device_taxonomy_score(device: Device) -> float:
+                            return RetrievalHelper.field_match_score(
                                 device_query,
-                                device,
-                            ),
+                                (*(device.domain or ()), device.device_class),
+                            )
+
+                        requested_domains = set(
+                            RetrievalHelper.normalize_requested_capability(
+                                requested_capability,
+                            ).get("domains", ())
+                        )
+
+                        def requested_domain_score(device: Device) -> float:
+                            return float(bool(
+                                requested_domains
+                                & {str(value).casefold() for value in (device.domain or ())}
+                            ))
+
+                        def device_metadata_score(device: Device) -> float:
+                            return device_identity_score(device)
+
+                        retrieved_devices = await asyncio.to_thread(
+                            RetrievalHelper.rank_scored_candidates,
+                            scored_devices,
+                            all_devices,
+                            device_query,
+                            lambda device: device.id,
+                            device_text_parts,
+                            candidate_limit,
+                            metadata_score=device_metadata_score,
                             trim_confident=False,
                         )
-                        retrieved_devices = RetrievalHelper.select_device_candidates(
-                            device_query, retrieved_devices, device_limit,
+                        device_confidence = RetrievalHelper.device_search_confidence(
+                            retrieved_devices,
+                            scored_devices,
+                            query=device_query,
+                            key=lambda device: device.id,
+                            text_parts=device_text_parts,
+                            structured_scores={
+                                "identity_metadata": device_identity_score,
+                                "domain_device_class": device_taxonomy_score,
+                                "requested_domain": requested_domain_score,
+                            },
                         )
-                        if retrieved_devices:
-                            compatible_devices = retrieved_devices
+                        retrieved_devices = RetrievalHelper.select_device_candidates(
+                            device_query,
+                            retrieved_devices,
+                            min_devices,
+                            max_devices,
+                            device_confidence,
+                        )
                         device_candidate_batches[query_index].extend(
                             self._device_candidate(device)
                             for device in retrieved_devices
@@ -501,21 +552,33 @@ class RAGentSemanticSearchTool(llm.Tool):
                             max(tool_limit, RetrievalHelper.expanded_tool_limit(tool_limit)),
                             requested_capability=requested_capability,
                         )
-                        retrieved_tools = RetrievalHelper.rerank_tools_for_devices(
-                            retrieved_tools,
-                            compatible_devices,
-                            len(retrieved_tools),
-                        )
-                        query_confidence = RetrievalHelper.tool_search_confidence(
-                            retrieved_tools[:tool_limit],
+                        confidence = RetrievalHelper.tool_search_confidence_details(
+                            retrieved_tools[:max_tools],
                             tool_query,
-                            compatible_devices,
+                            [],
                             requested_capability,
+                            scored_tools,
                         )
+                        query_confidence = confidence.level
                         tool_confidences.append(query_confidence)
-                        query_tool_limit = tool_limit
-                        if query_confidence in {"none", "low", "medium"}:
-                            query_tool_limit = max(tool_limit, RetrievalHelper.expanded_tool_limit(tool_limit))
+                        query_tool_limit = RetrievalHelper.confidence_limit(
+                            query_confidence, min_tools, max_tools,
+                        )
+                        log_debug_payload(
+                            _logger, "search.tool_exposure",
+                            query_index=query_index,
+                            query=tool_query,
+                            requested_capability=requested_capability,
+                            confidence=query_confidence,
+                            confidence_reason=confidence.reason,
+                            top_score=confidence.top_score,
+                            second_score=confidence.second_score,
+                            margin=confidence.margin,
+                            ratio=confidence.ratio,
+                            selected_candidate_count=min(
+                                query_tool_limit, len(retrieved_tools),
+                            ),
+                        )
                         seen_query_tool_names: set[str] = set()
                         for tool in retrieved_tools:
                             if not isinstance(tool, LlmTool) or tool.name in seen_query_tool_names:
@@ -524,7 +587,7 @@ class RAGentSemanticSearchTool(llm.Tool):
                             ranking_signals = RetrievalHelper.tool_ranking_signals(
                                 tool,
                                 tool_query,
-                                compatible_devices,
+                                [],
                                 semantic_rank=semantic_ranks.get(tool.name),
                                 semantic_score=semantic_scores.get(tool.name),
                                 requested_capability=requested_capability,

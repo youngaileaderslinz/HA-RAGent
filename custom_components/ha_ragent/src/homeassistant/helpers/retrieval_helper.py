@@ -5,6 +5,7 @@ import math
 import time
 import unicodedata
 from collections.abc import Callable, Iterable
+from dataclasses import asdict, dataclass
 from typing import Any, TypeVar
 
 from custom_components.ha_ragent.src.const import (
@@ -28,6 +29,44 @@ from custom_components.ha_ragent.src.utils import get_setting_value
 
 T = TypeVar("T")
 _logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ConfidenceProfile:
+    """Distribution thresholds kept separate for devices and tools."""
+
+    high_margin: float
+    high_ratio: float
+    medium_margin: float
+    medium_ratio: float
+    near_tie_margin: float
+
+
+@dataclass(frozen=True)
+class ConfidenceAssessment:
+    """Explainable confidence derived from a local candidate distribution."""
+
+    level: str
+    top_score: float = 0.0
+    second_score: float = 0.0
+    margin: float = 0.0
+    ratio: float = 0.0
+    agreeing_signals: tuple[str, ...] = ()
+    disagreeing_signals: tuple[str, ...] = ()
+    reason: str = "no candidates"
+    candidate_scores: tuple[tuple[str, float], ...] = ()
+    candidate_support: tuple[tuple[str, tuple[str, ...]], ...] = ()
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+# These profiles are deliberately separate and dimensionless. Scores are
+# normalized against each request's local distribution. The emitted diagnostics
+# make these initial values calibratable from real deployments without tying
+# confidence to backend-specific raw score scales.
+DEVICE_CONFIDENCE_PROFILE = ConfidenceProfile(0.30, 1.55, 0.10, 1.18, 0.06)
+TOOL_CONFIDENCE_PROFILE = ConfidenceProfile(0.24, 1.40, 0.08, 1.14, 0.05)
 
 class RetrievalHelper:
     """Stateless helpers for building and reranking retrieval queries."""
@@ -131,6 +170,166 @@ class RetrievalHelper:
         return " ".join(unicodedata.normalize("NFC", str(query or "")).casefold().split())
 
     @staticmethod
+    def confidence_limit(level: str, minimum: int, maximum: int) -> int:
+        """Map high/medium/low confidence gradually onto an exposure range."""
+        minimum = max(0, int(minimum))
+        maximum = max(minimum, int(maximum))
+        if level == "high":
+            return minimum
+        if level == "medium":
+            return minimum + ((maximum - minimum + 1) // 2)
+        return maximum
+
+    @staticmethod
+    def _normalize_confidence_signal(values: dict[str, float]) -> dict[str, float]:
+        """Normalize one signal against its local candidate distribution."""
+        finite = {
+            key: max(0.0, float(value))
+            for key, value in values.items()
+            if math.isfinite(float(value))
+        }
+        maximum = max(finite.values(), default=0.0)
+        if maximum <= 0:
+            return {}
+        return {key: value / maximum for key, value in finite.items()}
+
+    @staticmethod
+    def assess_distribution_confidence(
+        ordered_keys: Iterable[str],
+        signal_scores: dict[str, dict[str, float]],
+        *,
+        profile: ConfidenceProfile,
+        weak_signals: set[str] | None = None,
+        confirmed_keys: set[str] | None = None,
+        kind: str = "candidate",
+    ) -> ConfidenceAssessment:
+        """Classify confidence from separation and independent signal agreement."""
+        ordered_keys = list(dict.fromkeys(ordered_keys))
+        if not ordered_keys:
+            return ConfidenceAssessment(level="none")
+
+        weak_signals = weak_signals or set()
+        confirmed_keys = confirmed_keys or set()
+        normalized = {
+            name: values
+            for name, raw_values in signal_scores.items()
+            if (values := RetrievalHelper._normalize_confidence_signal(raw_values))
+        }
+        weights = {
+            name: (0.2 if name in weak_signals else 1.0)
+            for name in normalized
+        }
+        totals = {key: 0.0 for key in ordered_keys}
+        total_weight = sum(weights.values()) or 1.0
+        for name, values in normalized.items():
+            for key in ordered_keys:
+                totals[key] += weights[name] * values.get(key, 0.0)
+        totals = {key: value / total_weight for key, value in totals.items()}
+
+        top_key = ordered_keys[0]
+        top_score = totals.get(top_key, 0.0)
+        runner_scores = sorted(
+            (totals.get(key, 0.0) for key in ordered_keys[1:]), reverse=True,
+        )
+        second_score = runner_scores[0] if runner_scores else 0.0
+        margin = max(0.0, top_score - second_score)
+        ratio = top_score / second_score if second_score > 1e-9 else (
+            float("inf") if top_score > 0 else 0.0
+        )
+
+        agreeing: list[str] = []
+        disagreeing: list[str] = []
+        for name, values in normalized.items():
+            if name in weak_signals:
+                continue
+            ranked = sorted(values.items(), key=lambda item: (-item[1], item[0]))
+            if not ranked:
+                continue
+            source_margin = ranked[0][1] - (ranked[1][1] if len(ranked) > 1 else 0.0)
+            if source_margin <= profile.near_tie_margin:
+                continue
+            if ranked[0][0] == top_key:
+                agreeing.append(name)
+            else:
+                disagreeing.append(name)
+
+        confirmed_top = top_key in confirmed_keys and not any(
+            key in confirmed_keys for key in ordered_keys[1:]
+        )
+        if confirmed_top:
+            level = "high"
+            reason = "unique confirmed continuity target"
+        elif len(ordered_keys) == 1:
+            if len(agreeing) >= 2:
+                level = "high"
+                reason = "the only candidate is independently supported by multiple signals"
+            else:
+                level = "low"
+                reason = "the only candidate lacks independent corroboration"
+        elif margin <= profile.near_tie_margin or ratio < profile.medium_ratio:
+            level = "low"
+            reason = "top candidates are near-tied"
+        elif disagreeing and len(disagreeing) >= len(agreeing):
+            level = "low"
+            reason = "strong ranking signals disagree"
+        elif (
+            margin >= profile.high_margin
+            and ratio >= profile.high_ratio
+            and len(agreeing) >= 2
+        ) or (len(agreeing) >= 3 and margin >= profile.medium_margin):
+            level = "high"
+            reason = "clear winner supported by independent signals"
+        elif (
+            margin >= profile.medium_margin
+            and ratio >= profile.medium_ratio
+            and agreeing
+        ):
+            level = "medium"
+            reason = "moderately separated winner"
+        else:
+            level = "low"
+            reason = "winner depends on insufficient or weak evidence"
+
+        assessment = ConfidenceAssessment(
+            level=level,
+            top_score=round(top_score, 6),
+            second_score=round(second_score, 6),
+            margin=round(margin, 6),
+            ratio=round(ratio, 6) if math.isfinite(ratio) else ratio,
+            agreeing_signals=tuple(sorted(agreeing)),
+            disagreeing_signals=tuple(sorted(disagreeing)),
+            reason=reason,
+            candidate_scores=tuple(
+                (key, round(totals.get(key, 0.0), 6)) for key in ordered_keys
+            ),
+            candidate_support=tuple(
+                (
+                    key,
+                    tuple(sorted(
+                        name
+                        for name, values in normalized.items()
+                        if name not in weak_signals and values.get(key, 0.0) >= 0.5
+                    )),
+                )
+                for key in ordered_keys
+            ),
+        )
+        log_debug_payload(
+            _logger, f"retrieval.{kind}_confidence",
+            top_candidate=top_key,
+            top_score=assessment.top_score,
+            second_score=assessment.second_score,
+            margin=assessment.margin,
+            ratio=assessment.ratio,
+            confidence=assessment.level,
+            confidence_reason=assessment.reason,
+            agreeing_signals=assessment.agreeing_signals,
+            disagreeing_signals=assessment.disagreeing_signals,
+            normalized_signals=normalized,
+        )
+        return assessment
+
+    @staticmethod
     def build_tool_search_query(
         trusted_query: str,
         fallback_query: str,
@@ -224,17 +423,178 @@ class RetrievalHelper:
         ]
 
     @staticmethod
-    def select_device_candidates(query: str, devices: Iterable[T], limit: int) -> list[T]:
-        """Apply ambiguity-aware exposure after broad device retrieval."""
-        if limit <= 0:
+    def device_search_confidence(
+        devices: Iterable[T],
+        vector_results: Iterable[ScoredResult[T]] = (),
+        *,
+        query: str = "",
+        key: Callable[[T], str] = lambda item: str(getattr(item, "id", "")),
+        text_parts: Callable[[T], Iterable[object]] | None = None,
+        metadata_score: Callable[[T], float] | None = None,
+        structured_scores: dict[str, Callable[[T], float]] | None = None,
+        continuity_score: Callable[[T], float] | None = None,
+        confirmed_score: Callable[[T], float] | None = None,
+    ) -> ConfidenceAssessment:
+        """Measure per-target confidence from its local candidate distribution."""
+        devices = list(devices)
+        keys = [key(device) for device in devices]
+        vector = {key(result.item): result.score for result in vector_results}
+        signals: dict[str, dict[str, float]] = {"vector": vector}
+        if metadata_score:
+            signals["metadata"] = {
+                key(device): metadata_score(device) for device in devices
+            }
+        for name, score in (structured_scores or {}).items():
+            signals[name] = {key(device): score(device) for device in devices}
+        if continuity_score:
+            signals["continuity"] = {
+                key(device): continuity_score(device) for device in devices
+            }
+        confirmed_keys: set[str] = set()
+        if confirmed_score:
+            confirmed = {key(device): confirmed_score(device) for device in devices}
+            signals["confirmed_continuity"] = confirmed
+            confirmed_keys = {item_key for item_key, score in confirmed.items() if score > 0}
+        if text_parts:
+            signals["lexical"] = {
+                key(device): RetrievalHelper.field_match_score(query, text_parts(device))
+                for device in devices
+            }
+        return RetrievalHelper.assess_distribution_confidence(
+            keys,
+            signals,
+            profile=DEVICE_CONFIDENCE_PROFILE,
+            weak_signals={"lexical"},
+            confirmed_keys=confirmed_keys,
+            kind="device",
+        )
+
+    @staticmethod
+    def select_device_candidates(
+        query: str,
+        devices: Iterable[T],
+        min_limit: int,
+        max_limit: int | None = None,
+        confidence: ConfidenceAssessment | str | None = None,
+    ) -> list[T]:
+        """Expose the plausible ambiguity cluster within the configured ceiling."""
+        if min_limit <= 0 and (max_limit is None or max_limit <= 0):
             return []
         devices = list(devices)
-        status, _ = RetrievalHelper.device_resolution(query, devices)
-        if status == "high":
-            return RetrievalHelper.reduce_confident_devices(query, devices)[:1]
-        if status == "ambiguous":
-            return devices[:max(2, limit)]
-        return devices[:limit]
+        min_limit = max(0, min_limit)
+        ceiling = min_limit if max_limit is None else max(0, int(max_limit))
+        if ceiling <= 0 or not devices:
+            return []
+        if not isinstance(confidence, ConfidenceAssessment) or not confidence.candidate_scores:
+            # Runtime retrieval supplies score diagnostics. Keep third-party
+            # compatibility callers bounded when those diagnostics are absent.
+            return devices[:ceiling]
+
+        scores = dict(confidence.candidate_scores)
+        support = dict(confidence.candidate_support)
+        top_key = confidence.candidate_scores[0][0]
+        top_score = scores.get(top_key, 0.0)
+        margin_threshold = DEVICE_CONFIDENCE_PROFILE.medium_margin
+        ratio_threshold = DEVICE_CONFIDENCE_PROFILE.medium_ratio
+        near_tie_threshold = DEVICE_CONFIDENCE_PROFILE.near_tie_margin
+        selected: list[T] = []
+        decisions: list[dict[str, object]] = []
+        previous_score = top_score
+
+        for index, device in enumerate(devices):
+            candidate_key = str(
+                RetrievalHelper._device_value(device, "id", "")
+                or RetrievalHelper._device_value(device, "name", "")
+            )
+            score = scores.get(candidate_key, 0.0)
+            candidate_margin = max(0.0, top_score - score)
+            candidate_ratio = top_score / score if score > 1e-9 else (
+                float("inf") if top_score > 0 else 1.0
+            )
+            step_drop = max(0.0, previous_score - score)
+            supporting_signals = support.get(candidate_key, ())
+            near_tied = (
+                candidate_margin <= near_tie_threshold
+                or candidate_ratio < ratio_threshold
+            )
+            within_cluster = (
+                candidate_margin <= margin_threshold
+                and candidate_ratio <= ratio_threshold
+            )
+            independently_supported = len(supporting_signals) >= 2
+
+            if index == 0:
+                include = True
+                reason = "top-ranked candidate anchors the ambiguity cluster"
+            elif not within_cluster:
+                include = False
+                reason = "excluded at meaningful top-score drop-off"
+            elif not near_tied and not independently_supported:
+                include = False
+                reason = "excluded because ranking evidence lacks corroboration"
+            else:
+                include = True
+                reason = (
+                    "included because it is near-tied with the top candidate"
+                    if near_tied
+                    else "included because independent structured signals support it"
+                )
+
+            if include and len(selected) < ceiling:
+                selected.append(device)
+            elif include:
+                include = False
+                reason = "excluded by configured maximum ceiling"
+            decisions.append({
+                "candidate": candidate_key,
+                "included": include,
+                "reason": reason,
+                "score": round(score, 6),
+                "top_margin": round(candidate_margin, 6),
+                "top_ratio": (
+                    round(candidate_ratio, 6)
+                    if math.isfinite(candidate_ratio) else candidate_ratio
+                ),
+                "step_drop": round(step_drop, 6),
+                "supporting_signals": supporting_signals,
+            })
+            previous_score = score
+            if index > 0 and not within_cluster:
+                for excluded in devices[index + 1:]:
+                    excluded_key = str(
+                        RetrievalHelper._device_value(excluded, "id", "")
+                        or RetrievalHelper._device_value(excluded, "name", "")
+                    )
+                    decisions.append({
+                        "candidate": excluded_key,
+                        "included": False,
+                        "reason": "excluded after earlier meaningful score drop-off",
+                        "score": round(scores.get(excluded_key, 0.0), 6),
+                        "supporting_signals": support.get(excluded_key, ()),
+                    })
+                break
+
+        log_debug_payload(
+            _logger, "retrieval.device_ambiguity_cluster",
+            confidence=confidence.level,
+            confidence_reason=confidence.reason,
+            top_score=confidence.top_score,
+            second_score=confidence.second_score,
+            margin=confidence.margin,
+            ratio=confidence.ratio,
+            configured_minimum=min_limit,
+            configured_maximum=ceiling,
+            score_dropoff_margin_threshold=margin_threshold,
+            score_dropoff_ratio_threshold=ratio_threshold,
+            near_tie_margin_threshold=near_tie_threshold,
+            selected_candidate_count=len(selected),
+            selected_candidates=[
+                str(RetrievalHelper._device_value(device, "id", ""))
+                for device in selected
+            ],
+            candidate_decisions=decisions,
+        )
+        return selected
 
     @staticmethod
     def build_retrieval_text(current_request: str) -> str:
@@ -286,10 +646,11 @@ class RetrievalHelper:
             if similarity >= 0.2:
                 selected[context.key] = (context, relevance)
 
-            # Keep the last two retained turns, including clarification questions
+            # Keep the configured number of recent retained turns, including
+            # clarification questions
             # with no successful tool result. The existing LLM needs their text
             # to resolve an unfinished request without a language parser.
-            if index >= len(contexts) - 2:
+            if index >= len(contexts) - limit:
                 short_term_weight = 0.15 * decay
                 previous = selected.get(context.key)
                 if previous is None or short_term_weight > previous[1]:
@@ -693,7 +1054,7 @@ class RetrievalHelper:
             return 0.0
         declared_domains = RetrievalHelper._tool_declared_domains(tool)
         if declared_domains:
-            return 1.0 if declared_domains & requested_domains else -0.35
+            return 1.0 if declared_domains & requested_domains else 0.0
         return 0.0
 
     @staticmethod
@@ -845,7 +1206,38 @@ class RetrievalHelper:
                 )
             )
         scored.sort(key=lambda item: (-item[0], item[1], item[2]))
-        result = [tool for _, _, _, tool in scored[:limit]]
+        if requested_capability and any(
+            signals["capability"] >= 0 for signals in signals_by_name.values()
+        ):
+            scored = [
+                item for item in scored
+                if signals_by_name[item[2]]["capability"] >= 0
+            ]
+        # Near-identical tools must not monopolize a small result window. Keep
+        # the best member of each declared/observable capability first, then
+        # use duplicates only to fill remaining slots.
+        diverse: list[tuple[float, int, str, T]] = []
+        duplicates: list[tuple[float, int, str, T]] = []
+        seen_signatures: set[tuple[object, ...]] = set()
+        for item in scored:
+            tool = item[3]
+            signature = (
+                str(getattr(tool, "canonical_action", "") or "").casefold(),
+                tuple(getattr(tool, "canonical_supported_domains", ()) or ()),
+                RetrievalHelper._normalize(getattr(tool, "description", "")),
+                tuple(getattr(tool, "canonical_schema_parts", ()) or ()),
+            )
+            if not any(signature):
+                signature = (*signature, str(getattr(tool, "name", "")))
+            if signature in seen_signatures:
+                duplicates.append(item)
+            else:
+                seen_signatures.add(signature)
+                diverse.append(item)
+        selected = [*diverse[:limit]]
+        if len(selected) < limit:
+            selected.extend(duplicates[:limit - len(selected)])
+        result = [tool for _, _, _, tool in selected]
         if _logger.isEnabledFor(logging.DEBUG):
             log_debug_payload(
                 _logger, "retrieval.tool_ranking", query=query, limit=limit,
@@ -861,26 +1253,85 @@ class RetrievalHelper:
         return result
 
     @staticmethod
-    def tool_search_confidence(
-        tools: Iterable[Any], query: str, devices: Iterable[Any], requested_capability: object = None,
-    ) -> str:
-        """Classify the top result without turning uncertainty into a hard failure."""
+    def tool_search_confidence_details(
+        tools: Iterable[Any],
+        query: str,
+        devices: Iterable[Any],
+        requested_capability: object = None,
+        vector_results: Iterable[ScoredResult[Any]] = (),
+        continuity_score: Callable[[Any], float] | None = None,
+    ) -> ConfidenceAssessment:
+        """Measure per-capability confidence from separation and schema evidence."""
         tools = list(tools)
         if not tools:
-            return "none"
+            return ConfidenceAssessment(level="none")
         query = RetrievalHelper._tool_query_text(query)
-        top_signals = RetrievalHelper.tool_ranking_signals(
-            tools[0], query, devices, requested_capability=requested_capability,
+        devices = list(devices)
+        names = [str(getattr(tool, "name", "")) for tool in tools]
+        semantic = {
+            str(getattr(result.item, "name", "")): result.score
+            for result in vector_results
+        }
+        requested = RetrievalHelper.normalize_requested_capability(requested_capability)
+        requested_action = str(requested.get("action", "") or "")
+        requested_domains = set(requested.get("domains", ()) or ())
+        signals: dict[str, dict[str, float]] = {
+            "vector": semantic,
+            "action_schema": {
+                str(getattr(tool, "name", "")): float(
+                    bool(requested_action)
+                    and str(getattr(tool, "canonical_action", "") or "").casefold() == requested_action
+                )
+                for tool in tools
+            },
+            "domain_schema": {
+                str(getattr(tool, "name", "")): float(
+                    bool(requested_domains)
+                    and bool(RetrievalHelper._tool_declared_domains(tool) & requested_domains)
+                )
+                for tool in tools
+            },
+            "device_compatibility": {
+                str(getattr(tool, "name", "")): max(
+                    0.0, RetrievalHelper.tool_device_compatibility(tool, devices),
+                )
+                for tool in tools
+            },
+            "lexical": {
+                str(getattr(tool, "name", "")): RetrievalHelper.field_match_score(
+                    query, getattr(tool, "canonical_search_parts", ()) or (),
+                )
+                for tool in tools
+            },
+        }
+        if continuity_score:
+            signals["continuity"] = {
+                str(getattr(tool, "name", "")): continuity_score(tool)
+                for tool in tools
+            }
+        return RetrievalHelper.assess_distribution_confidence(
+            names,
+            signals,
+            profile=TOOL_CONFIDENCE_PROFILE,
+            weak_signals={"lexical"},
+            kind="tool",
         )
-        if top_signals["capability"] > 0:
-            return "high"
-        # Lexical similarity and metadata are evidence of relevance, never
-        # proof of an action, negation, group scope, or a complete compound task.
-        if RetrievalHelper.local_candidates_confident(query, tools):
-            return "high"
-        if top_signals["lexical_exact"] >= 0.5 or top_signals["lexical_fuzzy"] >= 0.5:
-            return "medium"
-        return "low"
+
+    @staticmethod
+    def tool_search_confidence(
+        tools: Iterable[Any], query: str, devices: Iterable[Any], requested_capability: object = None,
+        vector_results: Iterable[ScoredResult[Any]] = (),
+        continuity_score: Callable[[Any], float] | None = None,
+    ) -> str:
+        """Return the explainable distribution-confidence level."""
+        return RetrievalHelper.tool_search_confidence_details(
+            tools,
+            query,
+            devices,
+            requested_capability,
+            vector_results,
+            continuity_score,
+        ).level
 
     @staticmethod
     def rank_tools_for_query(
@@ -930,13 +1381,20 @@ class RetrievalHelper:
         if allowed_classes is None:
             allowed_classes = RetrievalHelper._schema_values(properties.get("device_class", {}))
         if allowed_domains:
-            score += 2.0 if domains & allowed_domains else -0.25
+            score += 2.0 if domains & allowed_domains else 0.0
         if allowed_classes:
-            score += 2.0 if device_classes & allowed_classes else -0.25
+            score += 2.0 if device_classes & allowed_classes else 0.0
 
-        if RetrievalHelper._metadata_value(tool, "is_domain_aware"):
+        if (
+            RetrievalHelper._metadata_value(tool, "is_domain_aware")
+            and (not allowed_domains or domains & allowed_domains)
+        ):
             score += 0.5
-        if RetrievalHelper._metadata_value(tool, "is_device_class_aware") and device_classes:
+        if (
+            RetrievalHelper._metadata_value(tool, "is_device_class_aware")
+            and device_classes
+            and (not allowed_classes or device_classes & allowed_classes)
+        ):
             score += 0.5
         has_area = any(
             RetrievalHelper._device_value(device, "area_name")

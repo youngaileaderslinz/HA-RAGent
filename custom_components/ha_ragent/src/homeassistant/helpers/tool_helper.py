@@ -321,6 +321,12 @@ class ToolHelper:
             return [success]
         if isinstance(success, (list, tuple, set)):
             return [str(value) for value in success if value]
+        nested_result = result.get("result") if isinstance(result, dict) else None
+        nested_success = nested_result.get("success") if isinstance(nested_result, dict) else None
+        if isinstance(nested_success, str):
+            return [nested_success]
+        if isinstance(nested_success, (list, tuple, set)):
+            return [str(value) for value in nested_success if value]
 
         names = tool_call.tool_args.get("name") if isinstance(tool_call.tool_args, dict) else None
         if isinstance(names, str):

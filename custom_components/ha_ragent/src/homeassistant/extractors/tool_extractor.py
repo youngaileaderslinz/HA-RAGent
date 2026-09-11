@@ -112,7 +112,8 @@ class ToolExtractor:
                 return value
         return default
 
-    def _extract_tool_metadata(self, tool: Any, parameters: Any) -> ToolMetadata:
+    @classmethod
+    def extract_tool_metadata(cls, tool: Any, parameters: Any) -> ToolMetadata:
         """Build capability metadata from explicit tool metadata and schema only."""
         metadata = ToolMetadata()
         properties = parameters.get("properties", {}) if isinstance(parameters, dict) else {}
@@ -124,33 +125,37 @@ class ToolExtractor:
         metadata.is_device_class_aware = "device_class" in properties
 
         source = getattr(tool, "metadata", None)
-        action = self._metadata_value(source, "canonical_action", "action", "capability_id", default="")
+        action = cls._metadata_value(source, "canonical_action", "action", "capability_id", default="")
         if not action:
-            schema_actions = self._schema_values(properties.get("action", {}))
+            schema_actions = cls._schema_values(properties.get("action", {}))
             if len(schema_actions) == 1:
                 action = next(iter(schema_actions))
         metadata.canonical_action = str(action or "").casefold()
 
-        domains = self._metadata_value(source, "supported_domains", "domains", "domain", default=())
+        domains = cls._metadata_value(source, "supported_domains", "domains", "domain", default=())
         if isinstance(domains, str):
             domains = (domains,)
         metadata.supported_domains = tuple(sorted({
             *(str(value).casefold() for value in (domains or ())),
-            *self._schema_values(properties.get("domain", {})),
+            *cls._schema_values(properties.get("domain", {})),
         }))
 
-        expected_states = self._metadata_value(source, "expected_states", "expected_state", default=())
+        expected_states = cls._metadata_value(source, "expected_states", "expected_state", default=())
         if isinstance(expected_states, str):
             expected_states = (expected_states,)
         if not expected_states:
             expected_states = {
-                *self._schema_values(properties.get("expected_state", {})),
-                *self._schema_values(properties.get("expected_states", {})),
+                *cls._schema_values(properties.get("expected_state", {})),
+                *cls._schema_values(properties.get("expected_states", {})),
             }
         metadata.expected_states = tuple(sorted(str(value).casefold() for value in (expected_states or ())))
-        metadata.family = self._metadata_value(source, "family", default=None)
+        metadata.family = cls._metadata_value(source, "family", default=None)
 
         return metadata
+
+    def _extract_tool_metadata(self, tool: Any, parameters: Any) -> ToolMetadata:
+        """Compatibility wrapper for existing callers."""
+        return self.extract_tool_metadata(tool, parameters)
 
     def _register_fake_timer_device(self) -> None:
         @callback
