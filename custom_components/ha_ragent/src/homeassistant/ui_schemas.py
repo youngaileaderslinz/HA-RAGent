@@ -52,10 +52,6 @@ from custom_components.ha_ragent.src.const import (
     CONF_ALLOW_AUTO_EMBEDDING,
     CONF_ALLOW_QUESTIONS,
     CONF_TEMPERATURE,
-    CONF_K_TOP,
-    CONF_P_MIN,
-    CONF_P_TOP,
-    CONF_P_TYPICAL,
     CONF_MIN_DEVICES_TO_EXTRACT,
     CONF_MAX_DEVICES_TO_EXTRACT,
     DEFAULT_PROMPT,
@@ -346,22 +342,6 @@ def ui_schema_config_options(
             description={"suggested_value": options.get(CONF_CONTEXT_LENGTH)},
             default=get_setting_value(CONF_CONTEXT_LENGTH, options),
         ): NumberSelector(NumberSelectorConfig(min=512, max=1_048_576, step=512)),
-        # vol.Required(
-        #     CONF_K_TOP,
-        #     description={"suggested_value": options.get(CONF_K_TOP)},
-        # ): NumberSelector(NumberSelectorConfig(min=1, max=256, step=1)),
-        # vol.Required(
-        #     CONF_P_TOP,
-        #     description={"suggested_value": options.get(CONF_P_TOP)},
-        # ): NumberSelector(NumberSelectorConfig(min=0, max=1, step=0.05)),
-        #  vol.Required(
-        #     CONF_P_MIN,
-        #     description={"suggested_value": options.get(CONF_P_MIN)},
-        # ): NumberSelector(NumberSelectorConfig(min=0, max=1, step=0.05)),
-        # vol.Required(
-        #     CONF_P_TYPICAL,
-        #     description={"suggested_value": options.get(CONF_P_TYPICAL)},
-        # ): NumberSelector(NumberSelectorConfig(min=0, max=1, step=0.05)),
         vol.Optional(
             CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
             description={"suggested_value": get_setting_value(CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS, options)},
@@ -445,10 +425,6 @@ def ui_schema_config_options(
         CONF_MAX_TOKENS,
         # sampling parameters
         CONF_TEMPERATURE,
-        CONF_P_TOP,
-        CONF_P_MIN,
-        CONF_P_TYPICAL,
-        CONF_K_TOP,
         # tool and memory parameters
         CONF_MAX_TOOL_CALL_ITERATIONS,
         CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
