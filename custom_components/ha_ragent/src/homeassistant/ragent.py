@@ -61,6 +61,12 @@ from custom_components.ha_ragent.src.const import (
     TOOL_SELECTION_ABSOLUTE_FLOOR,
     TOOL_SELECTION_RELATIVE_FLOOR,
     TOOL_SELECTION_GAP_THRESHOLD,
+    TOOL_BUDGET_DISTRIBUTION_WEIGHT,
+    TOOL_BUDGET_TOP_PAIR_WEIGHT,
+    TOOL_BUDGET_COVERAGE_WEIGHT,
+    TOOL_BUDGET_SOFTMAX_TEMPERATURE,
+    TOOL_BUDGET_TOP_PAIR_SEPARATION,
+    TOOL_BUDGET_UNCERTAINTY_CURVE,
     RAGENT_SCHEDULED_REQUEST_PREFIX,
     RAGENT_PREFIXED_SCHEDULED_REQUEST_PROHIBITED_TOOL_NAMES,
     STARTUP_EMBEDDING_RUNNING_FLAG,
@@ -354,12 +360,40 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             absolute_floor=TOOL_SELECTION_ABSOLUTE_FLOOR,
             relative_floor=TOOL_SELECTION_RELATIVE_FLOOR,
             gap_threshold=TOOL_SELECTION_GAP_THRESHOLD,
-            preserve_signals={"device_coverage", "strong_semantic_lexical"},
+            preserve_signals={"strong_semantic_lexical"},
         ))
-        selected_tools = [
+        support = dict(confidence.candidate_support)
+        preserved_names = {
+            name for name in selected_names
+            if "strong_semantic_lexical" in support.get(name, ())
+        }
+        plausible_scores = [
+            score for name, score in confidence.candidate_scores
+            if name in selected_names
+        ]
+        exposure_budget = RetrievalHelper.exposure_budget(
+            plausible_scores, n_tools, max_tools,
+            distribution_weight=TOOL_BUDGET_DISTRIBUTION_WEIGHT,
+            top_pair_weight=TOOL_BUDGET_TOP_PAIR_WEIGHT,
+            coverage_weight=TOOL_BUDGET_COVERAGE_WEIGHT,
+            softmax_temperature=TOOL_BUDGET_SOFTMAX_TEMPERATURE,
+            top_pair_separation=TOOL_BUDGET_TOP_PAIR_SEPARATION,
+            uncertainty_curve=TOOL_BUDGET_UNCERTAINTY_CURVE,
+        )
+        target_count = min(
+            max_tools,
+            len(selected_names),
+            max(n_tools, round(exposure_budget), len(preserved_names)),
+        )
+        preserved_tools = [
             tool for tool in ranked_tools
-            if tool.name in selected_names
-        ][:max_tools]
+            if tool.name in preserved_names
+        ]
+        selected_tools = [
+            *preserved_tools,
+            *(tool for tool in ranked_tools
+              if tool.name in selected_names and tool.name not in preserved_names),
+        ][:target_count]
         # Confidence pruning is allowed to reduce the optional set, but it
         # must not violate the configured minimum. Fill from the existing
         # ranked candidates; do not start another search or include required
@@ -383,6 +417,8 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             margin=confidence.margin,
             ratio=confidence.ratio,
             selected_candidate_count=len(selected_tools),
+            exposure_budget=round(exposure_budget, 4),
+            preserved_tools=[tool.name for tool in preserved_tools],
             minimum_fill_count=max(0, len(selected_tools) - len(selected_names)),
             configured_minimum=n_tools,
             configured_maximum=max_tools,

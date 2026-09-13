@@ -31,6 +31,13 @@ from custom_components.ha_ragent.src.const import (
     DEVICE_REDUNDANCY_PENALTY,
     DEVICE_DIVERSITY_RESCUE_RELATIVE_FLOOR,
     DEVICE_DIVERSITY_RESCUE_IDENTITY_RELATIVE_FLOOR,
+    DEVICE_EXPLICIT_IDENTITY_RELATIVE_FLOOR,
+    EXPOSURE_BUDGET_DISTRIBUTION_WEIGHT,
+    EXPOSURE_BUDGET_TOP_PAIR_WEIGHT,
+    EXPOSURE_BUDGET_COVERAGE_WEIGHT,
+    EXPOSURE_BUDGET_SOFTMAX_TEMPERATURE,
+    EXPOSURE_BUDGET_TOP_PAIR_SEPARATION,
+    EXPOSURE_BUDGET_UNCERTAINTY_CURVE,
     TOOL_STRONG_SEMANTIC_MIN,
     TOOL_STRONG_LEXICAL_MIN,
     TOOL_DEVICE_RELEVANCE_BASE_WEIGHT,
@@ -221,6 +228,54 @@ class RetrievalHelper:
         if level == "medium":
             return minimum + ((maximum - minimum + 1) // 2)
         return maximum
+
+    @staticmethod
+    def exposure_budget(
+        scores: Iterable[float],
+        minimum: int,
+        maximum: int,
+        coverage_uncertainty: float = 0.0,
+        distribution_weight: float = EXPOSURE_BUDGET_DISTRIBUTION_WEIGHT,
+        top_pair_weight: float = EXPOSURE_BUDGET_TOP_PAIR_WEIGHT,
+        coverage_weight: float = EXPOSURE_BUDGET_COVERAGE_WEIGHT,
+        softmax_temperature: float = EXPOSURE_BUDGET_SOFTMAX_TEMPERATURE,
+        top_pair_separation: float = EXPOSURE_BUDGET_TOP_PAIR_SEPARATION,
+        uncertainty_curve: float = EXPOSURE_BUDGET_UNCERTAINTY_CURVE,
+    ) -> float:
+        """Return a continuous exposure budget from plausible score shape."""
+        scores = sorted(
+            (max(0.0, float(score)) for score in scores if math.isfinite(float(score))),
+            reverse=True,
+        )
+        minimum = max(0, int(minimum))
+        maximum = max(minimum, int(maximum))
+        if not scores or minimum >= maximum:
+            return float(minimum)
+        peak = scores[0]
+        exponentials = [
+            math.exp((score - peak) / softmax_temperature)
+            for score in scores
+        ]
+        total = sum(exponentials)
+        probabilities = [value / total for value in exponentials] if total else []
+        distribution_uncertainty = (
+            -sum(probability * math.log(probability) for probability in probabilities if probability > 0)
+            / math.log(len(probabilities))
+            if len(probabilities) > 1 else 0.0
+        )
+        if len(scores) < 2 or peak <= 0:
+            top_pair_uncertainty = 0.0 if len(scores) == 1 else 1.0
+        else:
+            separation = (peak - scores[1]) / peak
+            top_pair_uncertainty = 1.0 - min(
+                1.0, separation / top_pair_separation,
+            )
+        uncertainty = min(1.0, max(0.0,
+            distribution_weight * distribution_uncertainty
+            + top_pair_weight * top_pair_uncertainty
+            + coverage_weight * max(0.0, min(1.0, coverage_uncertainty))
+        ))
+        return minimum + uncertainty ** uncertainty_curve * (maximum - minimum)
 
     @staticmethod
     def prune_confidence_band(
@@ -619,8 +674,8 @@ class RetrievalHelper:
             return []
         if not isinstance(confidence, ConfidenceAssessment) or not confidence.candidate_scores:
             # Runtime retrieval supplies score diagnostics. Keep third-party
-            # compatibility callers bounded when those diagnostics are absent.
-            return devices[:ceiling]
+            # compatibility callers precise when those diagnostics are absent.
+            return devices[:min(ceiling, max(1, min_limit))]
 
         # Confidence thresholds use current-turn evidence. Final ordering may
         # include a small, bounded continuity boost, but that prior must never
@@ -727,6 +782,8 @@ class RetrievalHelper:
             for candidate_key, _score in confidence.candidate_scores
             if "identity_metadata" in support.get(candidate_key, ())
             and candidate_key in preferred_area_candidates
+            and identity_scores.get(candidate_key, 0.0)
+            >= best_identity_score * DEVICE_EXPLICIT_IDENTITY_RELATIVE_FLOOR
         }
         eligible_keys: set[str] = set()
         previous_score = top_score
@@ -844,11 +901,11 @@ class RetrievalHelper:
                 rescued_keys.add(candidate_key)
 
         candidate_keys = eligible_keys | rescued_keys
-        target_count = min(
-            ceiling,
-            len(candidate_keys),
-            RetrievalHelper.confidence_limit(confidence.level, min_limit, ceiling),
+        plausible_scores = [scores[key] for key in candidate_keys if key in scores]
+        exposure_budget = RetrievalHelper.exposure_budget(
+            plausible_scores, min_limit, ceiling,
         )
+        target_count = min(ceiling, len(candidate_keys), max(min_limit, round(exposure_budget)))
 
         # Greedily order plausible candidates by relevance minus overlap with
         # already selected targets. This prevents near-duplicate entities from
@@ -1040,6 +1097,8 @@ class RetrievalHelper:
             redundancy_penalty=DEVICE_REDUNDANCY_PENALTY,
             diversity_rescue_relative_floor=DEVICE_DIVERSITY_RESCUE_RELATIVE_FLOOR,
             diversity_rescue_identity_relative_floor=DEVICE_DIVERSITY_RESCUE_IDENTITY_RELATIVE_FLOOR,
+            explicit_identity_relative_floor=DEVICE_EXPLICIT_IDENTITY_RELATIVE_FLOOR,
+            exposure_budget=round(exposure_budget, 4),
             explicit_identity_candidates=sorted(explicit_identity_keys),
             normal_confidence_candidates=sorted(eligible_keys),
             diversity_rescue_candidates=sorted(rescued_keys),

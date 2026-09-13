@@ -20,6 +20,12 @@ from custom_components.ha_ragent.src.const import (
     RAGENT_MAX_SEARCH_QUERIES,
     RAGENT_SEMANTIC_SEARCH_TOOL_NAME,
     RAGENT_PREFIXED_REQUIRED_TOOL_NAMES,
+    TOOL_BUDGET_DISTRIBUTION_WEIGHT,
+    TOOL_BUDGET_TOP_PAIR_WEIGHT,
+    TOOL_BUDGET_COVERAGE_WEIGHT,
+    TOOL_BUDGET_SOFTMAX_TEMPERATURE,
+    TOOL_BUDGET_TOP_PAIR_SEPARATION,
+    TOOL_BUDGET_UNCERTAINTY_CURVE,
     RETRIEVAL_METHOD_LEXICAL,
     TRANSLATION_ERROR_SEARCH_QUERY_EMPTY,
     TRANSLATION_ERROR_SEARCH_QUERIES_TOO_MANY,
@@ -607,8 +613,23 @@ class RAGentSemanticSearchTool(llm.Tool):
                         )
                         query_confidence = confidence.level
                         tool_confidences.append(query_confidence)
-                        query_tool_limit = RetrievalHelper.confidence_limit(
-                            query_confidence, min_tools, max_tools,
+                        exposure_budget = RetrievalHelper.exposure_budget(
+                            (
+                                score for _name, score in confidence.candidate_scores
+                            ),
+                            min_tools,
+                            max_tools,
+                            distribution_weight=TOOL_BUDGET_DISTRIBUTION_WEIGHT,
+                            top_pair_weight=TOOL_BUDGET_TOP_PAIR_WEIGHT,
+                            coverage_weight=TOOL_BUDGET_COVERAGE_WEIGHT,
+                            softmax_temperature=TOOL_BUDGET_SOFTMAX_TEMPERATURE,
+                            top_pair_separation=TOOL_BUDGET_TOP_PAIR_SEPARATION,
+                            uncertainty_curve=TOOL_BUDGET_UNCERTAINTY_CURVE,
+                        )
+                        query_tool_limit = min(
+                            max_tools,
+                            len(retrieved_tools),
+                            max(min_tools, round(exposure_budget)),
                         )
                         log_debug_payload(
                             _logger, "search.tool_exposure",
@@ -621,6 +642,7 @@ class RAGentSemanticSearchTool(llm.Tool):
                             second_score=confidence.second_score,
                             margin=confidence.margin,
                             ratio=confidence.ratio,
+                            exposure_budget=round(exposure_budget, 4),
                             selected_candidate_count=min(
                                 query_tool_limit, len(retrieved_tools),
                             ),
