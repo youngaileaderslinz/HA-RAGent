@@ -14,34 +14,12 @@ from custom_components.ha_ragent.src.const import (
     RETRIEVAL_METHOD_LEXICAL,
     RETRIEVAL_METHOD_VECTOR,
     RETRIEVAL_TOOL_SIGNAL_WEIGHTS,
-    DEVICE_CONFIDENCE_HIGH_MARGIN,
-    DEVICE_CONFIDENCE_HIGH_RATIO,
-    DEVICE_CONFIDENCE_MEDIUM_MARGIN,
-    DEVICE_CONFIDENCE_MEDIUM_RATIO,
     DEVICE_CONFIDENCE_NEAR_TIE_MARGIN,
-    TOOL_CONFIDENCE_HIGH_MARGIN,
-    TOOL_CONFIDENCE_HIGH_RATIO,
-    TOOL_CONFIDENCE_MEDIUM_MARGIN,
-    TOOL_CONFIDENCE_MEDIUM_RATIO,
     TOOL_CONFIDENCE_NEAR_TIE_MARGIN,
     DEVICE_SELECTION_ABSOLUTE_FLOOR,
     DEVICE_SELECTION_RELATIVE_FLOOR,
     DEVICE_SELECTION_GAP_THRESHOLD,
     DEVICE_CONTINUITY_MAX_BOOST,
-    DEVICE_REDUNDANCY_PENALTY,
-    DEVICE_DIVERSITY_RESCUE_RELATIVE_FLOOR,
-    DEVICE_DIVERSITY_RESCUE_IDENTITY_RELATIVE_FLOOR,
-    DEVICE_EXPLICIT_IDENTITY_RELATIVE_FLOOR,
-    EXPOSURE_BUDGET_DISTRIBUTION_WEIGHT,
-    EXPOSURE_BUDGET_TOP_PAIR_WEIGHT,
-    EXPOSURE_BUDGET_COVERAGE_WEIGHT,
-    EXPOSURE_BUDGET_SOFTMAX_TEMPERATURE,
-    EXPOSURE_BUDGET_TOP_PAIR_SEPARATION,
-    EXPOSURE_BUDGET_UNCERTAINTY_CURVE,
-    TOOL_STRONG_SEMANTIC_MIN,
-    TOOL_STRONG_LEXICAL_MIN,
-    TOOL_DEVICE_RELEVANCE_BASE_WEIGHT,
-    TOOL_DEVICE_RELEVANCE_SIGNAL_WEIGHT,
 )
 from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
 from custom_components.ha_ragent.src.models.retrieval.continuity_context import ContinuityContext
@@ -61,12 +39,8 @@ _logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ConfidenceProfile:
-    """Distribution thresholds kept separate for devices and tools."""
+    """Minimal confidence threshold used for near-tie detection."""
 
-    high_margin: float
-    high_ratio: float
-    medium_margin: float
-    medium_ratio: float
     near_tie_margin: float
 
 
@@ -96,17 +70,9 @@ class ConfidenceAssessment:
 # make these initial values calibratable from real deployments without tying
 # confidence to backend-specific raw score scales.
 DEVICE_CONFIDENCE_PROFILE = ConfidenceProfile(
-    DEVICE_CONFIDENCE_HIGH_MARGIN,
-    DEVICE_CONFIDENCE_HIGH_RATIO,
-    DEVICE_CONFIDENCE_MEDIUM_MARGIN,
-    DEVICE_CONFIDENCE_MEDIUM_RATIO,
     DEVICE_CONFIDENCE_NEAR_TIE_MARGIN,
 )
 TOOL_CONFIDENCE_PROFILE = ConfidenceProfile(
-    TOOL_CONFIDENCE_HIGH_MARGIN,
-    TOOL_CONFIDENCE_HIGH_RATIO,
-    TOOL_CONFIDENCE_MEDIUM_MARGIN,
-    TOOL_CONFIDENCE_MEDIUM_RATIO,
     TOOL_CONFIDENCE_NEAR_TIE_MARGIN,
 )
 
@@ -217,65 +183,6 @@ class RetrievalHelper:
     def canonical_search_signature(query: object) -> str:
         """Normalize spelling representation without conflating distinct intents."""
         return " ".join(unicodedata.normalize("NFC", str(query or "")).casefold().split())
-
-    @staticmethod
-    def confidence_limit(level: str, minimum: int, maximum: int) -> int:
-        """Map high/medium/low confidence gradually onto an exposure range."""
-        minimum = max(0, int(minimum))
-        maximum = max(minimum, int(maximum))
-        if level == "high":
-            return minimum
-        if level == "medium":
-            return minimum + ((maximum - minimum + 1) // 2)
-        return maximum
-
-    @staticmethod
-    def exposure_budget(
-        scores: Iterable[float],
-        minimum: int,
-        maximum: int,
-        coverage_uncertainty: float = 0.0,
-        distribution_weight: float = EXPOSURE_BUDGET_DISTRIBUTION_WEIGHT,
-        top_pair_weight: float = EXPOSURE_BUDGET_TOP_PAIR_WEIGHT,
-        coverage_weight: float = EXPOSURE_BUDGET_COVERAGE_WEIGHT,
-        softmax_temperature: float = EXPOSURE_BUDGET_SOFTMAX_TEMPERATURE,
-        top_pair_separation: float = EXPOSURE_BUDGET_TOP_PAIR_SEPARATION,
-        uncertainty_curve: float = EXPOSURE_BUDGET_UNCERTAINTY_CURVE,
-    ) -> float:
-        """Return a continuous exposure budget from plausible score shape."""
-        scores = sorted(
-            (max(0.0, float(score)) for score in scores if math.isfinite(float(score))),
-            reverse=True,
-        )
-        minimum = max(0, int(minimum))
-        maximum = max(minimum, int(maximum))
-        if not scores or minimum >= maximum:
-            return float(minimum)
-        peak = scores[0]
-        exponentials = [
-            math.exp((score - peak) / softmax_temperature)
-            for score in scores
-        ]
-        total = sum(exponentials)
-        probabilities = [value / total for value in exponentials] if total else []
-        distribution_uncertainty = (
-            -sum(probability * math.log(probability) for probability in probabilities if probability > 0)
-            / math.log(len(probabilities))
-            if len(probabilities) > 1 else 0.0
-        )
-        if len(scores) < 2 or peak <= 0:
-            top_pair_uncertainty = 0.0 if len(scores) == 1 else 1.0
-        else:
-            separation = (peak - scores[1]) / peak
-            top_pair_uncertainty = 1.0 - min(
-                1.0, separation / top_pair_separation,
-            )
-        uncertainty = min(1.0, max(0.0,
-            distribution_weight * distribution_uncertainty
-            + top_pair_weight * top_pair_uncertainty
-            + coverage_weight * max(0.0, min(1.0, coverage_uncertainty))
-        ))
-        return minimum + uncertainty ** uncertainty_curve * (maximum - minimum)
 
     @staticmethod
     def prune_confidence_band(
@@ -396,29 +303,18 @@ class RetrievalHelper:
             else:
                 level = "low"
                 reason = "the only candidate lacks independent corroboration"
-        elif margin <= profile.near_tie_margin or ratio < profile.medium_ratio:
+        elif margin <= profile.near_tie_margin:
             level = "low"
             reason = "top candidates are near-tied"
         elif disagreeing and len(disagreeing) >= len(agreeing):
             level = "low"
             reason = "strong ranking signals disagree"
-        elif (
-            margin >= profile.high_margin
-            and ratio >= profile.high_ratio
-            and len(agreeing) >= 2
-        ) or (len(agreeing) >= 3 and margin >= profile.medium_margin):
+        elif len(agreeing) >= 2 and margin > profile.near_tie_margin:
             level = "high"
             reason = "clear winner supported by independent signals"
-        elif (
-            margin >= profile.medium_margin
-            and ratio >= profile.medium_ratio
-            and agreeing
-        ):
-            level = "medium"
-            reason = "moderately separated winner"
         else:
             level = "low"
-            reason = "winner depends on insufficient or weak evidence"
+            reason = "winner lacks sufficient independent separation"
 
         assessment = ConfidenceAssessment(
             level=level,
@@ -724,16 +620,6 @@ class RetrievalHelper:
             ),
             reverse=True,
         )
-        identity_scores = {
-            str(
-                RetrievalHelper._device_value(device, "id", "")
-                or RetrievalHelper._device_value(device, "name", "")
-            ): RetrievalHelper.device_target_score(query, device)
-            for device in scored_devices
-        }
-        best_identity_score = max(identity_scores.values(), default=0.0)
-        margin_threshold = DEVICE_CONFIDENCE_PROFILE.medium_margin
-        ratio_threshold = DEVICE_CONFIDENCE_PROFILE.medium_ratio
         near_tie_threshold = DEVICE_CONFIDENCE_PROFILE.near_tie_margin
         preferred_domains = {
             str(domain).casefold() for domain in preferred_domains if domain
@@ -782,8 +668,6 @@ class RetrievalHelper:
             for candidate_key, _score in confidence.candidate_scores
             if "identity_metadata" in support.get(candidate_key, ())
             and candidate_key in preferred_area_candidates
-            and identity_scores.get(candidate_key, 0.0)
-            >= best_identity_score * DEVICE_EXPLICIT_IDENTITY_RELATIVE_FLOOR
         }
         eligible_keys: set[str] = set()
         previous_score = top_score
@@ -813,143 +697,9 @@ class RetrievalHelper:
         selected: list[T] = []
         decisions: list[dict[str, object]] = []
         selected_keys: set[str] = set()
-        selected_signatures: set[tuple[str, str, str]] = set()
         previous_score = top_score
-
-        def candidate_signature(device: T) -> tuple[str, str, str]:
-            domains = RetrievalHelper._device_value(device, "domain", ()) or ()
-            if isinstance(domains, str):
-                domains = (domains,)
-            domain = str(next(iter(domains), "")).casefold()
-            # Always retain domain as a diversity axis. With no linguistic
-            # request splitting, this keeps compound targets such as a light
-            # and a switch in the same area from consuming each other's slot.
-            return (
-                domain,
-                str(RetrievalHelper._device_value(device, "device_class", "") or "").casefold(),
-                str(
-                    RetrievalHelper._device_value(device, "area_name", "")
-                    or RetrievalHelper._device_value(device, "area", "")
-                    or ""
-                ).casefold(),
-            )
-
-        def candidate_redundancy(left: T, right: T) -> float:
-            """Estimate overlap without turning domain into a quota."""
-            left_values = {
-                RetrievalHelper._normalize(value)
-                for value in RetrievalHelper._candidate_identity_values(left)
-                if value
-            }
-            right_values = {
-                RetrievalHelper._normalize(value)
-                for value in RetrievalHelper._candidate_identity_values(right)
-                if value
-            }
-            if left_values & right_values:
-                return 1.0
-            left_tokens = set(" ".join(left_values).split())
-            right_tokens = set(" ".join(right_values).split())
-            token_overlap = (
-                len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
-                if left_tokens and right_tokens else 0.0
-            )
-            left_signature = candidate_signature(left)
-            right_signature = candidate_signature(right)
-            structural_overlap = (
-                0.25 if left_signature[2] and left_signature[2] == right_signature[2] else 0.0
-            ) + (
-                0.15 if left_signature[0] and left_signature[0] == right_signature[0] else 0.0
-            )
-            return min(1.0, max(token_overlap, structural_overlap))
-
-        # A candidate outside the normal band may still represent another
-        # explicit target in a compound request. Rescue it only when its
-        # current-turn evidence is independently strong and it differs from
-        # the normal ambiguity cluster; never add domain quotas.
-        normal_signatures = {
-            candidate_signature(device)
-            for device in scored_devices
-            if str(
-                RetrievalHelper._device_value(device, "id", "")
-                or RetrievalHelper._device_value(device, "name", "")
-            ) in eligible_keys
-        }
-        rescued_keys: set[str] = set()
-        for device in current_scored_devices:
-            candidate_key = str(
-                RetrievalHelper._device_value(device, "id", "")
-                or RetrievalHelper._device_value(device, "name", "")
-            )
-            if candidate_key in eligible_keys:
-                continue
-            candidate_area = str(
-                RetrievalHelper._device_value(device, "area_name", "")
-                or RetrievalHelper._device_value(device, "area", "")
-                or ""
-            ).casefold()
-            if (
-                scores.get(candidate_key, 0.0)
-                >= top_score * DEVICE_DIVERSITY_RESCUE_RELATIVE_FLOOR
-                and "identity_metadata" in support.get(candidate_key, ())
-                and best_identity_score > 0.0
-                and identity_scores.get(candidate_key, 0.0)
-                >= best_identity_score * DEVICE_DIVERSITY_RESCUE_IDENTITY_RELATIVE_FLOOR
-                and (not preferred_areas or candidate_area in preferred_areas)
-                and candidate_signature(device) not in normal_signatures
-            ):
-                rescued_keys.add(candidate_key)
-
-        candidate_keys = eligible_keys | rescued_keys
-        plausible_scores = [scores[key] for key in candidate_keys if key in scores]
-        exposure_budget = RetrievalHelper.exposure_budget(
-            plausible_scores, min_limit, ceiling,
-        )
-        target_count = min(ceiling, len(candidate_keys), max(min_limit, round(exposure_budget)))
-
-        # Greedily order plausible candidates by relevance minus overlap with
-        # already selected targets. This prevents near-duplicate entities from
-        # consuming the prompt budget while retaining a distinct compound
-        # target such as a smart plug beside a light.
-        remaining = [
-            device for device in scored_devices
-            if str(
-                RetrievalHelper._device_value(device, "id", "")
-                or RetrievalHelper._device_value(device, "name", "")
-            ) in candidate_keys
-        ]
-        diversity_order: list[T] = []
-        while remaining:
-            device = max(
-                remaining,
-                key=lambda item: final_scores.get(
-                    str(
-                        RetrievalHelper._device_value(item, "id", "")
-                        or RetrievalHelper._device_value(item, "name", "")
-                    ),
-                    0.0,
-                ) - DEVICE_REDUNDANCY_PENALTY * max(
-                    (candidate_redundancy(item, selected_item)
-                     for selected_item in diversity_order),
-                    default=0.0,
-                ),
-            )
-            diversity_order.append(device)
-            remaining.remove(device)
-        diversity_keys = {
-            str(
-                RetrievalHelper._device_value(device, "id", "")
-                or RetrievalHelper._device_value(device, "name", "")
-            )
-            for device in diversity_order
-        }
-        scored_devices = [
-            *diversity_order,
-            *(device for device in scored_devices if str(
-                RetrievalHelper._device_value(device, "id", "")
-                or RetrievalHelper._device_value(device, "name", "")
-            ) not in diversity_keys),
-        ]
+        candidate_keys = eligible_keys
+        target_count = min(ceiling, len(candidate_keys))
 
         for index, device in enumerate(scored_devices):
             candidate_key = str(
@@ -959,9 +709,6 @@ class RetrievalHelper:
             current_score = scores.get(candidate_key, 0.0)
             score = final_scores.get(candidate_key, current_score)
             candidate_margin = max(0.0, top_score - current_score)
-            candidate_ratio = top_score / current_score if current_score > 1e-9 else (
-                float("inf") if top_score > 0 else 1.0
-            )
             step_drop = max(0.0, previous_score - score)
             supporting_signals = support.get(candidate_key, ())
             raw_candidate_domains = RetrievalHelper._device_value(device, "domain", ()) or ()
@@ -982,14 +729,10 @@ class RetrievalHelper:
                 plausible = False
             if preferred_area_candidates and not area_compatible:
                 plausible = False
-            signature = candidate_signature(device)
-            diverse = signature not in selected_signatures
-            include = plausible and len(selected) < target_count and (diverse or len(selected) + 1 >= target_count)
+            include = plausible and len(selected) < target_count
             reason = (
                 "top-ranked candidate anchors recall"
                 if index == 0 else
-                "included as a structurally distinct plausible candidate"
-                if include and diverse else
                 "included from the confidence band"
                 if include else
                 "excluded as non-plausible or beyond configured recall budget"
@@ -997,7 +740,6 @@ class RetrievalHelper:
             if include:
                 selected.append(device)
                 selected_keys.add(candidate_key)
-                selected_signatures.add(signature)
             decisions.append({
                 "candidate": candidate_key,
                 "included": include,
@@ -1006,17 +748,13 @@ class RetrievalHelper:
                 "current_score": round(current_score, 6),
                 "continuity_boost": round(score - current_score, 6),
                 "top_margin": round(candidate_margin, 6),
-                "top_ratio": (
-                    round(candidate_ratio, 6)
-                    if math.isfinite(candidate_ratio) else candidate_ratio
-                ),
                 "step_drop": round(max(0.0, previous_score - score), 6),
                 "supporting_signals": supporting_signals,
             })
             previous_score = score
 
-        # Coverage selects distinct candidates first, then fills only from the
-        # confidence band.
+        # Fill only from the confidence band if ordering or area filtering
+        # left the initial pass short.
         if len(selected) < target_count:
             for device in scored_devices:
                 candidate_key = str(
@@ -1087,21 +825,13 @@ class RetrievalHelper:
             ratio=confidence.ratio,
             configured_minimum=min_limit,
             configured_maximum=ceiling,
-            score_dropoff_margin_threshold=margin_threshold,
-            score_dropoff_ratio_threshold=ratio_threshold,
             near_tie_margin_threshold=near_tie_threshold,
             absolute_floor=absolute_floor,
             relative_floor=relative_floor,
             gap_threshold=gap_threshold,
             continuity_max_boost=DEVICE_CONTINUITY_MAX_BOOST,
-            redundancy_penalty=DEVICE_REDUNDANCY_PENALTY,
-            diversity_rescue_relative_floor=DEVICE_DIVERSITY_RESCUE_RELATIVE_FLOOR,
-            diversity_rescue_identity_relative_floor=DEVICE_DIVERSITY_RESCUE_IDENTITY_RELATIVE_FLOOR,
-            explicit_identity_relative_floor=DEVICE_EXPLICIT_IDENTITY_RELATIVE_FLOOR,
-            exposure_budget=round(exposure_budget, 4),
             explicit_identity_candidates=sorted(explicit_identity_keys),
             normal_confidence_candidates=sorted(eligible_keys),
-            diversity_rescue_candidates=sorted(rescued_keys),
             preferred_domains=sorted(preferred_domains),
             preferred_areas=sorted(preferred_areas),
             selected_candidate_count=len(selected),
@@ -1651,7 +1381,6 @@ class RetrievalHelper:
         """Return independent, extensible signals used to rank a tool."""
         devices = list(devices)
         query = RetrievalHelper._tool_query_text(query)
-        requested_domains = RetrievalHelper._device_domains(devices)
         exact, fuzzy = lexical_match if lexical_match is not None else RetrievalHelper._match_scores(
             query,
             getattr(tool, "canonical_search_parts", ()) or (
@@ -1660,15 +1389,20 @@ class RetrievalHelper:
             ),
         )
         compatibility = RetrievalHelper.tool_device_compatibility(tool, devices)
+        device_aware = any(
+            RetrievalHelper._metadata_value(tool, name)
+            for name in ("is_domain_aware", "is_device_class_aware", "is_area_aware")
+        )
         return {
             "semantic_rank": 1.0 / semantic_rank if semantic_rank else 0.0,
             "semantic_similarity": max(0.0, min(1.0, semantic_score or 0.0)),
             "lexical_exact": exact,
             "lexical_fuzzy": fuzzy,
             "capability": RetrievalHelper.tool_capability_compatibility(tool, requested_capability),
-            "domain": RetrievalHelper._tool_domain_signal(tool, requested_domains),
-            "device_metadata": max(-1.0, min(1.0, compatibility / 2.0)),
-            "device_coverage": RetrievalHelper.tool_device_coverage(tool, devices, query),
+            "device_relevance": (
+                max(0.0, min(1.0, compatibility / 2.0))
+                if devices and device_aware else 0.0
+            ),
             "continuity": max(0.0, continuity),
         }
 
@@ -1833,25 +1567,9 @@ class RetrievalHelper:
                 )
                 for tool in tools
             },
-            "device_coverage": {
-                str(getattr(tool, "name", "")): RetrievalHelper.tool_device_coverage(
-                    tool, devices, query,
-                )
-                for tool in tools
-            },
             "lexical": {
                 str(getattr(tool, "name", "")): RetrievalHelper.field_match_score(
                     query, getattr(tool, "canonical_search_parts", ()) or (),
-                )
-                for tool in tools
-            },
-            "strong_semantic_lexical": {
-                str(getattr(tool, "name", "")): float(
-                    semantic.get(str(getattr(tool, "name", "")), 0.0)
-                    >= TOOL_STRONG_SEMANTIC_MIN
-                    and RetrievalHelper.field_match_score(
-                        query, getattr(tool, "canonical_search_parts", ()) or (),
-                    ) >= TOOL_STRONG_LEXICAL_MIN
                 )
                 for tool in tools
             },
@@ -1990,52 +1708,3 @@ class RetrievalHelper:
         if services and required_services and not services & required_services:
             return 0.0
         return 1.0
-
-    @staticmethod
-    def tool_device_coverage(tool: Any, devices: Iterable[Any], query: str = "") -> float:
-        """Measure compatible candidate coverage, weighted by query identity evidence."""
-        devices = list(devices)
-        if not devices:
-            return 0.0
-        identity_scores = [
-            max(0.0, RetrievalHelper.device_target_score(query, device))
-            for device in devices
-        ]
-        confidence_scores = [
-            max(0.0, float(
-                RetrievalHelper._device_value(device, "retrieval_current_score", 0.0)
-                or 0.0
-            ))
-            for device in devices
-        ]
-        best_identity = max(identity_scores, default=0.0)
-        best_confidence = max(confidence_scores, default=0.0)
-        weights = [
-            TOOL_DEVICE_RELEVANCE_BASE_WEIGHT
-            + TOOL_DEVICE_RELEVANCE_SIGNAL_WEIGHT * max(
-                identity / best_identity if best_identity > 0 else 1.0,
-                confidence / best_confidence if best_confidence > 0 else 1.0,
-            )
-            for identity, confidence in zip(identity_scores, confidence_scores)
-        ]
-        return sum(
-            weight * RetrievalHelper.tool_device_service_compatibility(tool, device)
-            for device, weight in zip(devices, weights)
-        ) / sum(weights)
-
-    @staticmethod
-    def rerank_tools_for_devices(tools: Iterable[T], devices: Iterable[Any], limit: int) -> list[T]:
-        """Jointly rerank with a bounded positive device-compatibility boost."""
-        devices = list(devices)
-        tools = list(tools)
-        ranked = sorted(
-            enumerate(tools),
-            key=lambda pair: (
-                -(
-                    1.0 / (pair[0] + 1)
-                    + 0.35 * RetrievalHelper.tool_device_coverage(pair[1], devices)
-                ),
-                pair[0],
-            ),
-        )
-        return [tool for _, tool in ranked[:limit]]
