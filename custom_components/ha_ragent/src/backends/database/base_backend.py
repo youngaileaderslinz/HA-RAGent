@@ -193,6 +193,20 @@ class ABaseDbBackend(ABC):
         results = await self.async_retrieve_scored_objects(object_type, config_subentry, collection_name, query_embedding, top_k)
         return [result.item for result in results]
 
+    @staticmethod
+    def sort_scored_results(
+        results: List[ScoredResult[Device | LlmTool | Memory]],
+        top_k: int | None = None,
+    ) -> List[ScoredResult[Device | LlmTool | Memory]]:
+        """Return deterministic best-first results with ranks matching order."""
+        ordered = sorted(results, key=lambda result: (-result.score, result.rank))
+        if top_k is not None:
+            ordered = ordered[:max(0, top_k)]
+        return [
+            ScoredResult(result.item, result.score, rank)
+            for rank, result in enumerate(ordered, start=1)
+        ]
+
     @abstractmethod
     async def async_retrieve_scored_objects(self, object_type: type[DeviceEmbedding | LlmToolEmbedding | MemoryEmbedding], config_subentry: dict, collection_name: str, query_embedding: List[float], top_k: int = 10) -> List[ScoredResult[Device | LlmTool | Memory]]:
         """Retrieve ranked objects with normalized confidence."""

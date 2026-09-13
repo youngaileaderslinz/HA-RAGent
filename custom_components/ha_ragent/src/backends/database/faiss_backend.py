@@ -350,10 +350,10 @@ class FaissDbBackend(ABaseDbBackend):
     async def async_retrieve_scored_objects(self, object_type: type[DeviceEmbedding | LlmToolEmbedding | MemoryEmbedding], config_subentry: dict, collection_name: str, query_embedding: List[float], top_k: int = 10) -> List[ScoredResult[Device | LlmTool | Memory]]:
         try:
             results = await self.hass.async_add_executor_job(self._query_scored_devices, collection_name, query_embedding, top_k)
-            return [
+            return self.sort_scored_results([
                 ScoredResult(object_type.parse_object(metadata), score, rank)
                 for rank, (metadata, score) in enumerate(results, start=1)
-            ]
+            ], top_k)
         except Exception as err:
             _logger.error(f"Error retrieving scored objects: {err}", exc_info=True)
             return []

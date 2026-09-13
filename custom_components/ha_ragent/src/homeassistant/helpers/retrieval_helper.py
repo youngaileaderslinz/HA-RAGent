@@ -5,7 +5,7 @@ import math
 import time
 import unicodedata
 from collections.abc import Callable, Iterable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, TypeVar
 
 from custom_components.ha_ragent.src.const import (
@@ -14,6 +14,27 @@ from custom_components.ha_ragent.src.const import (
     RETRIEVAL_METHOD_LEXICAL,
     RETRIEVAL_METHOD_VECTOR,
     RETRIEVAL_TOOL_SIGNAL_WEIGHTS,
+    DEVICE_CONFIDENCE_HIGH_MARGIN,
+    DEVICE_CONFIDENCE_HIGH_RATIO,
+    DEVICE_CONFIDENCE_MEDIUM_MARGIN,
+    DEVICE_CONFIDENCE_MEDIUM_RATIO,
+    DEVICE_CONFIDENCE_NEAR_TIE_MARGIN,
+    TOOL_CONFIDENCE_HIGH_MARGIN,
+    TOOL_CONFIDENCE_HIGH_RATIO,
+    TOOL_CONFIDENCE_MEDIUM_MARGIN,
+    TOOL_CONFIDENCE_MEDIUM_RATIO,
+    TOOL_CONFIDENCE_NEAR_TIE_MARGIN,
+    DEVICE_SELECTION_ABSOLUTE_FLOOR,
+    DEVICE_SELECTION_RELATIVE_FLOOR,
+    DEVICE_SELECTION_GAP_THRESHOLD,
+    DEVICE_CONTINUITY_MAX_BOOST,
+    DEVICE_REDUNDANCY_PENALTY,
+    DEVICE_DIVERSITY_RESCUE_RELATIVE_FLOOR,
+    DEVICE_DIVERSITY_RESCUE_IDENTITY_RELATIVE_FLOOR,
+    TOOL_STRONG_SEMANTIC_MIN,
+    TOOL_STRONG_LEXICAL_MIN,
+    TOOL_DEVICE_RELEVANCE_BASE_WEIGHT,
+    TOOL_DEVICE_RELEVANCE_SIGNAL_WEIGHT,
 )
 from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
 from custom_components.ha_ragent.src.models.retrieval.continuity_context import ContinuityContext
@@ -56,6 +77,8 @@ class ConfidenceAssessment:
     reason: str = "no candidates"
     candidate_scores: tuple[tuple[str, float], ...] = ()
     candidate_support: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    final_candidate_scores: tuple[tuple[str, float], ...] = ()
+    continuity_boosts: tuple[tuple[str, float], ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -65,8 +88,20 @@ class ConfidenceAssessment:
 # normalized against each request's local distribution. The emitted diagnostics
 # make these initial values calibratable from real deployments without tying
 # confidence to backend-specific raw score scales.
-DEVICE_CONFIDENCE_PROFILE = ConfidenceProfile(0.30, 1.55, 0.10, 1.18, 0.06)
-TOOL_CONFIDENCE_PROFILE = ConfidenceProfile(0.24, 1.40, 0.08, 1.14, 0.05)
+DEVICE_CONFIDENCE_PROFILE = ConfidenceProfile(
+    DEVICE_CONFIDENCE_HIGH_MARGIN,
+    DEVICE_CONFIDENCE_HIGH_RATIO,
+    DEVICE_CONFIDENCE_MEDIUM_MARGIN,
+    DEVICE_CONFIDENCE_MEDIUM_RATIO,
+    DEVICE_CONFIDENCE_NEAR_TIE_MARGIN,
+)
+TOOL_CONFIDENCE_PROFILE = ConfidenceProfile(
+    TOOL_CONFIDENCE_HIGH_MARGIN,
+    TOOL_CONFIDENCE_HIGH_RATIO,
+    TOOL_CONFIDENCE_MEDIUM_MARGIN,
+    TOOL_CONFIDENCE_MEDIUM_RATIO,
+    TOOL_CONFIDENCE_NEAR_TIE_MARGIN,
+)
 
 class RetrievalHelper:
     """Stateless helpers for building and reranking retrieval queries."""
@@ -126,9 +161,16 @@ class RetrievalHelper:
             )
             return [], lexical
         try:
-            vector = await backend.async_retrieve_scored_objects(
+            raw_vector = await backend.async_retrieve_scored_objects(
                 object_type, options, collection, embedding, limit,
             )
+            vector = [
+                ScoredResult(result.item, result.score, rank)
+                for rank, result in enumerate(
+                    sorted(raw_vector, key=lambda result: (-result.score, result.rank)),
+                    start=1,
+                )
+            ]
             log_debug_payload(
                 _logger, "retrieval.sources.result", collection=collection,
                 method=method, embedding=embedding, vector=vector, lexical=lexical,
@@ -181,6 +223,37 @@ class RetrievalHelper:
         return maximum
 
     @staticmethod
+    def prune_confidence_band(
+        confidence: ConfidenceAssessment,
+        maximum: int,
+        *,
+        absolute_floor: float,
+        relative_floor: float,
+        gap_threshold: float,
+        preserve_signals: set[str] | None = None,
+    ) -> list[str]:
+        """Select a confidence band from final hybrid scores, not raw vectors."""
+        ranked = list(confidence.candidate_scores)
+        if maximum <= 0 or not ranked:
+            return []
+        support = dict(confidence.candidate_support)
+        preserve_signals = preserve_signals or set()
+        best = ranked[0][1]
+        selected: list[str] = []
+        previous = best
+        for index, (key, score) in enumerate(ranked):
+            preserved = bool(set(support.get(key, ())) & preserve_signals)
+            if index and previous - score >= gap_threshold and not preserved:
+                break
+            if not preserved and (score < absolute_floor or score < best * relative_floor):
+                break
+            selected.append(key)
+            previous = score
+            if len(selected) >= maximum:
+                break
+        return selected or [ranked[0][0]]
+
+    @staticmethod
     def _normalize_confidence_signal(values: dict[str, float]) -> dict[str, float]:
         """Normalize one signal against its local candidate distribution."""
         finite = {
@@ -226,12 +299,14 @@ class RetrievalHelper:
                 totals[key] += weights[name] * values.get(key, 0.0)
         totals = {key: value / total_weight for key, value in totals.items()}
 
-        top_key = ordered_keys[0]
-        top_score = totals.get(top_key, 0.0)
-        runner_scores = sorted(
-            (totals.get(key, 0.0) for key in ordered_keys[1:]), reverse=True,
+        original_positions = {key: index for index, key in enumerate(ordered_keys)}
+        score_order = sorted(
+            ordered_keys,
+            key=lambda key: (-totals.get(key, 0.0), original_positions[key]),
         )
-        second_score = runner_scores[0] if runner_scores else 0.0
+        top_key = score_order[0]
+        top_score = totals.get(top_key, 0.0)
+        second_score = totals.get(score_order[1], 0.0) if len(score_order) > 1 else 0.0
         margin = max(0.0, top_score - second_score)
         ratio = top_score / second_score if second_score > 1e-9 else (
             float("inf") if top_score > 0 else 0.0
@@ -254,7 +329,7 @@ class RetrievalHelper:
                 disagreeing.append(name)
 
         confirmed_top = top_key in confirmed_keys and not any(
-            key in confirmed_keys for key in ordered_keys[1:]
+            key in confirmed_keys for key in score_order[1:]
         )
         if confirmed_top:
             level = "high"
@@ -300,7 +375,7 @@ class RetrievalHelper:
             disagreeing_signals=tuple(sorted(disagreeing)),
             reason=reason,
             candidate_scores=tuple(
-                (key, round(totals.get(key, 0.0), 6)) for key in ordered_keys
+                (key, round(totals.get(key, 0.0), 6)) for key in score_order
             ),
             candidate_support=tuple(
                 (
@@ -311,7 +386,7 @@ class RetrievalHelper:
                         if name not in weak_signals and values.get(key, 0.0) >= 0.5
                     )),
                 )
-                for key in ordered_keys
+                for key in score_order
             ),
         )
         log_debug_payload(
@@ -446,28 +521,83 @@ class RetrievalHelper:
             }
         for name, score in (structured_scores or {}).items():
             signals[name] = {key(device): score(device) for device in devices}
-        if continuity_score:
-            signals["continuity"] = {
-                key(device): continuity_score(device) for device in devices
-            }
-        confirmed_keys: set[str] = set()
+        # Current-request evidence establishes confidence and eligibility.
+        # Historical context is applied afterwards as a capped prior so it
+        # cannot make an old target outrank a stronger current match.
+        continuity_raw = {
+            key(device): continuity_score(device) for device in devices
+        } if continuity_score else {}
         if confirmed_score:
-            confirmed = {key(device): confirmed_score(device) for device in devices}
-            signals["confirmed_continuity"] = confirmed
-            confirmed_keys = {item_key for item_key, score in confirmed.items() if score > 0}
+            for device in devices:
+                item_key = key(device)
+                continuity_raw[item_key] = max(
+                    continuity_raw.get(item_key, 0.0), confirmed_score(device),
+                )
         if text_parts:
             signals["lexical"] = {
                 key(device): RetrievalHelper.field_match_score(query, text_parts(device))
                 for device in devices
             }
-        return RetrievalHelper.assess_distribution_confidence(
+        assessment = RetrievalHelper.assess_distribution_confidence(
             keys,
             signals,
             profile=DEVICE_CONFIDENCE_PROFILE,
             weak_signals={"lexical"},
-            confirmed_keys=confirmed_keys,
             kind="device",
         )
+        current_scores = dict(assessment.candidate_scores)
+        continuity_boosts = {
+            item_key: min(
+                DEVICE_CONTINUITY_MAX_BOOST,
+                max(0.0, float(raw_score)),
+            )
+            for item_key, raw_score in continuity_raw.items()
+        }
+        final_scores = {
+            item_key: current_scores.get(item_key, 0.0)
+            + continuity_boosts.get(item_key, 0.0)
+            for item_key in current_scores
+        }
+        original_positions = {
+            item_key: index for index, (item_key, _score)
+            in enumerate(assessment.candidate_scores)
+        }
+        final_order = sorted(
+            final_scores,
+            key=lambda item_key: (-final_scores[item_key], original_positions[item_key]),
+        )
+        assessment = replace(
+            assessment,
+            final_candidate_scores=tuple(
+                (item_key, round(final_scores[item_key], 6))
+                for item_key in final_order
+            ),
+            continuity_boosts=tuple(
+                (item_key, round(continuity_boosts.get(item_key, 0.0), 6))
+                for item_key in final_order
+            ),
+        )
+        if _logger.isEnabledFor(logging.DEBUG):
+            hybrid_scores = dict(assessment.candidate_scores)
+            _logger.debug(
+                "RAGent device confidence: %s",
+                [
+                    {
+                        "candidate": candidate_key,
+                        "current_score": round(hybrid_scores.get(candidate_key, 0.0), 3),
+                        "final_score": round(final_scores.get(candidate_key, 0.0), 3),
+                        "continuity_boost": round(continuity_boosts.get(candidate_key, 0.0), 3),
+                        "vector": round(vector.get(candidate_key, 0.0), 3),
+                        "metadata": round(signals.get("metadata", {}).get(candidate_key, 0.0), 3),
+                        "lexical": round(signals.get("lexical", {}).get(candidate_key, 0.0), 3),
+                        "support": assessment.candidate_support[index][1],
+                    }
+                    for index, candidate_key in enumerate(
+                        key for key, _score in assessment.candidate_scores[:12]
+                    )
+                ],
+            )
+        return assessment
 
     @staticmethod
     def select_device_candidates(
@@ -476,6 +606,8 @@ class RetrievalHelper:
         min_limit: int,
         max_limit: int | None = None,
         confidence: ConfidenceAssessment | str | None = None,
+        preferred_domains: Iterable[str] = (),
+        preferred_areas: Iterable[str] = (),
     ) -> list[T]:
         """Expose the plausible ambiguity cluster within the configured ceiling."""
         if min_limit <= 0 and (max_limit is None or max_limit <= 0):
@@ -490,89 +622,403 @@ class RetrievalHelper:
             # compatibility callers bounded when those diagnostics are absent.
             return devices[:ceiling]
 
+        # Confidence thresholds use current-turn evidence. Final ordering may
+        # include a small, bounded continuity boost, but that prior must never
+        # set the relevance baseline for the current request.
         scores = dict(confidence.candidate_scores)
+        final_scores = dict(confidence.final_candidate_scores) or dict(scores)
         support = dict(confidence.candidate_support)
-        top_key = confidence.candidate_scores[0][0]
-        top_score = scores.get(top_key, 0.0)
+        top_key, top_score = max(scores.items(), key=lambda item: item[1])
+        devices_by_key = {
+            str(
+                RetrievalHelper._device_value(device, "id", "")
+                or RetrievalHelper._device_value(device, "name", "")
+            ): device
+            for device in devices
+        }
+        scored_devices = [
+            devices_by_key[candidate_key]
+            for candidate_key, _score in (
+                confidence.final_candidate_scores or confidence.candidate_scores
+            )
+            if candidate_key in devices_by_key
+        ]
+        scored_keys = {
+            str(
+                RetrievalHelper._device_value(device, "id", "")
+                or RetrievalHelper._device_value(device, "name", "")
+            )
+            for device in scored_devices
+        }
+        scored_devices.extend(
+            device
+            for device in devices
+            if str(
+                RetrievalHelper._device_value(device, "id", "")
+                or RetrievalHelper._device_value(device, "name", "")
+            ) not in scored_keys
+        )
+        current_scored_devices = sorted(
+            scored_devices,
+            key=lambda device: scores.get(
+                str(
+                    RetrievalHelper._device_value(device, "id", "")
+                    or RetrievalHelper._device_value(device, "name", "")
+                ),
+                0.0,
+            ),
+            reverse=True,
+        )
+        identity_scores = {
+            str(
+                RetrievalHelper._device_value(device, "id", "")
+                or RetrievalHelper._device_value(device, "name", "")
+            ): RetrievalHelper.device_target_score(query, device)
+            for device in scored_devices
+        }
+        best_identity_score = max(identity_scores.values(), default=0.0)
         margin_threshold = DEVICE_CONFIDENCE_PROFILE.medium_margin
         ratio_threshold = DEVICE_CONFIDENCE_PROFILE.medium_ratio
         near_tie_threshold = DEVICE_CONFIDENCE_PROFILE.near_tie_margin
-        selected: list[T] = []
-        decisions: list[dict[str, object]] = []
+        preferred_domains = {
+            str(domain).casefold() for domain in preferred_domains if domain
+        }
+        preferred_areas = {
+            str(area).casefold() for area in preferred_areas if area
+        }
+        preferred_domain_candidates = {
+            str(
+                RetrievalHelper._device_value(device, "id", "")
+                or RetrievalHelper._device_value(device, "name", "")
+            )
+            for device in scored_devices
+            if (
+                {
+                    str(value).casefold()
+                    for value in (
+                        ([RetrievalHelper._device_value(device, "domain", "")]
+                         if isinstance(RetrievalHelper._device_value(device, "domain", ""), str)
+                         else RetrievalHelper._device_value(device, "domain", ()) or ())
+                    )
+                }
+                & preferred_domains
+            )
+        }
+        preferred_area_candidates = {
+            str(
+                RetrievalHelper._device_value(device, "id", "")
+                or RetrievalHelper._device_value(device, "name", "")
+            )
+            for device in scored_devices
+            if str(
+                RetrievalHelper._device_value(device, "area_name", "")
+                or RetrievalHelper._device_value(device, "area", "")
+                or ""
+            ).casefold() in preferred_areas
+        }
+        # ``minimum`` is a safety setting, not a desired exposure count. Prune
+        # using the final hybrid confidence distribution, retaining explicit
+        # identity evidence even when its vector score is weak.
+        absolute_floor = DEVICE_SELECTION_ABSOLUTE_FLOOR
+        relative_floor = DEVICE_SELECTION_RELATIVE_FLOOR
+        gap_threshold = DEVICE_SELECTION_GAP_THRESHOLD
+        explicit_identity_keys = {
+            candidate_key
+            for candidate_key, _score in confidence.candidate_scores
+            if "identity_metadata" in support.get(candidate_key, ())
+            and candidate_key in preferred_area_candidates
+        }
+        eligible_keys: set[str] = set()
         previous_score = top_score
-
-        for index, device in enumerate(devices):
+        for index, device in enumerate(current_scored_devices):
             candidate_key = str(
                 RetrievalHelper._device_value(device, "id", "")
                 or RetrievalHelper._device_value(device, "name", "")
             )
             score = scores.get(candidate_key, 0.0)
-            candidate_margin = max(0.0, top_score - score)
-            candidate_ratio = top_score / score if score > 1e-9 else (
+            supporting_signals = support.get(candidate_key, ())
+            explicit_identity = candidate_key in explicit_identity_keys
+            if not explicit_identity and (
+                score < absolute_floor or score < top_score * relative_floor
+            ):
+                continue
+            if index and previous_score - score >= gap_threshold and not explicit_identity:
+                continue
+            eligible_keys.add(candidate_key)
+            previous_score = score
+        if not eligible_keys and scored_devices:
+            # Weak/flat distributions retain one uncertain candidate; semantic
+            # search remains available to recover a missed target.
+            eligible_keys.add(str(
+                RetrievalHelper._device_value(scored_devices[0], "id", "")
+                or RetrievalHelper._device_value(scored_devices[0], "name", "")
+            ))
+        selected: list[T] = []
+        decisions: list[dict[str, object]] = []
+        selected_keys: set[str] = set()
+        selected_signatures: set[tuple[str, str, str]] = set()
+        previous_score = top_score
+
+        def candidate_signature(device: T) -> tuple[str, str, str]:
+            domains = RetrievalHelper._device_value(device, "domain", ()) or ()
+            if isinstance(domains, str):
+                domains = (domains,)
+            domain = str(next(iter(domains), "")).casefold()
+            # Always retain domain as a diversity axis. With no linguistic
+            # request splitting, this keeps compound targets such as a light
+            # and a switch in the same area from consuming each other's slot.
+            return (
+                domain,
+                str(RetrievalHelper._device_value(device, "device_class", "") or "").casefold(),
+                str(
+                    RetrievalHelper._device_value(device, "area_name", "")
+                    or RetrievalHelper._device_value(device, "area", "")
+                    or ""
+                ).casefold(),
+            )
+
+        def candidate_redundancy(left: T, right: T) -> float:
+            """Estimate overlap without turning domain into a quota."""
+            left_values = {
+                RetrievalHelper._normalize(value)
+                for value in RetrievalHelper._candidate_identity_values(left)
+                if value
+            }
+            right_values = {
+                RetrievalHelper._normalize(value)
+                for value in RetrievalHelper._candidate_identity_values(right)
+                if value
+            }
+            if left_values & right_values:
+                return 1.0
+            left_tokens = set(" ".join(left_values).split())
+            right_tokens = set(" ".join(right_values).split())
+            token_overlap = (
+                len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+                if left_tokens and right_tokens else 0.0
+            )
+            left_signature = candidate_signature(left)
+            right_signature = candidate_signature(right)
+            structural_overlap = (
+                0.25 if left_signature[2] and left_signature[2] == right_signature[2] else 0.0
+            ) + (
+                0.15 if left_signature[0] and left_signature[0] == right_signature[0] else 0.0
+            )
+            return min(1.0, max(token_overlap, structural_overlap))
+
+        # A candidate outside the normal band may still represent another
+        # explicit target in a compound request. Rescue it only when its
+        # current-turn evidence is independently strong and it differs from
+        # the normal ambiguity cluster; never add domain quotas.
+        normal_signatures = {
+            candidate_signature(device)
+            for device in scored_devices
+            if str(
+                RetrievalHelper._device_value(device, "id", "")
+                or RetrievalHelper._device_value(device, "name", "")
+            ) in eligible_keys
+        }
+        rescued_keys: set[str] = set()
+        for device in current_scored_devices:
+            candidate_key = str(
+                RetrievalHelper._device_value(device, "id", "")
+                or RetrievalHelper._device_value(device, "name", "")
+            )
+            if candidate_key in eligible_keys:
+                continue
+            candidate_area = str(
+                RetrievalHelper._device_value(device, "area_name", "")
+                or RetrievalHelper._device_value(device, "area", "")
+                or ""
+            ).casefold()
+            if (
+                scores.get(candidate_key, 0.0)
+                >= top_score * DEVICE_DIVERSITY_RESCUE_RELATIVE_FLOOR
+                and "identity_metadata" in support.get(candidate_key, ())
+                and best_identity_score > 0.0
+                and identity_scores.get(candidate_key, 0.0)
+                >= best_identity_score * DEVICE_DIVERSITY_RESCUE_IDENTITY_RELATIVE_FLOOR
+                and (not preferred_areas or candidate_area in preferred_areas)
+                and candidate_signature(device) not in normal_signatures
+            ):
+                rescued_keys.add(candidate_key)
+
+        candidate_keys = eligible_keys | rescued_keys
+        target_count = min(
+            ceiling,
+            len(candidate_keys),
+            RetrievalHelper.confidence_limit(confidence.level, min_limit, ceiling),
+        )
+
+        # Greedily order plausible candidates by relevance minus overlap with
+        # already selected targets. This prevents near-duplicate entities from
+        # consuming the prompt budget while retaining a distinct compound
+        # target such as a smart plug beside a light.
+        remaining = [
+            device for device in scored_devices
+            if str(
+                RetrievalHelper._device_value(device, "id", "")
+                or RetrievalHelper._device_value(device, "name", "")
+            ) in candidate_keys
+        ]
+        diversity_order: list[T] = []
+        while remaining:
+            device = max(
+                remaining,
+                key=lambda item: final_scores.get(
+                    str(
+                        RetrievalHelper._device_value(item, "id", "")
+                        or RetrievalHelper._device_value(item, "name", "")
+                    ),
+                    0.0,
+                ) - DEVICE_REDUNDANCY_PENALTY * max(
+                    (candidate_redundancy(item, selected_item)
+                     for selected_item in diversity_order),
+                    default=0.0,
+                ),
+            )
+            diversity_order.append(device)
+            remaining.remove(device)
+        diversity_keys = {
+            str(
+                RetrievalHelper._device_value(device, "id", "")
+                or RetrievalHelper._device_value(device, "name", "")
+            )
+            for device in diversity_order
+        }
+        scored_devices = [
+            *diversity_order,
+            *(device for device in scored_devices if str(
+                RetrievalHelper._device_value(device, "id", "")
+                or RetrievalHelper._device_value(device, "name", "")
+            ) not in diversity_keys),
+        ]
+
+        for index, device in enumerate(scored_devices):
+            candidate_key = str(
+                RetrievalHelper._device_value(device, "id", "")
+                or RetrievalHelper._device_value(device, "name", "")
+            )
+            current_score = scores.get(candidate_key, 0.0)
+            score = final_scores.get(candidate_key, current_score)
+            candidate_margin = max(0.0, top_score - current_score)
+            candidate_ratio = top_score / current_score if current_score > 1e-9 else (
                 float("inf") if top_score > 0 else 1.0
             )
             step_drop = max(0.0, previous_score - score)
             supporting_signals = support.get(candidate_key, ())
-            near_tied = (
-                candidate_margin <= near_tie_threshold
-                or candidate_ratio < ratio_threshold
+            raw_candidate_domains = RetrievalHelper._device_value(device, "domain", ()) or ()
+            if isinstance(raw_candidate_domains, str):
+                raw_candidate_domains = (raw_candidate_domains,)
+            candidate_domains = {
+                str(value).casefold() for value in raw_candidate_domains
+            }
+            preferred = bool(preferred_domains & candidate_domains)
+            candidate_area = str(
+                RetrievalHelper._device_value(device, "area_name", "")
+                or RetrievalHelper._device_value(device, "area", "")
+                or ""
+            ).casefold()
+            area_compatible = not preferred_areas or candidate_area in preferred_areas
+            plausible = candidate_key in candidate_keys
+            if preferred_domain_candidates and not preferred:
+                plausible = False
+            if preferred_area_candidates and not area_compatible:
+                plausible = False
+            signature = candidate_signature(device)
+            diverse = signature not in selected_signatures
+            include = plausible and len(selected) < target_count and (diverse or len(selected) + 1 >= target_count)
+            reason = (
+                "top-ranked candidate anchors recall"
+                if index == 0 else
+                "included as a structurally distinct plausible candidate"
+                if include and diverse else
+                "included from the confidence band"
+                if include else
+                "excluded as non-plausible or beyond configured recall budget"
             )
-            within_cluster = (
-                candidate_margin <= margin_threshold
-                and candidate_ratio <= ratio_threshold
-            )
-            independently_supported = len(supporting_signals) >= 2
-
-            if index == 0:
-                include = True
-                reason = "top-ranked candidate anchors the ambiguity cluster"
-            elif not within_cluster:
-                include = False
-                reason = "excluded at meaningful top-score drop-off"
-            elif not near_tied and not independently_supported:
-                include = False
-                reason = "excluded because ranking evidence lacks corroboration"
-            else:
-                include = True
-                reason = (
-                    "included because it is near-tied with the top candidate"
-                    if near_tied
-                    else "included because independent structured signals support it"
-                )
-
-            if include and len(selected) < ceiling:
+            if include:
                 selected.append(device)
-            elif include:
-                include = False
-                reason = "excluded by configured maximum ceiling"
+                selected_keys.add(candidate_key)
+                selected_signatures.add(signature)
             decisions.append({
                 "candidate": candidate_key,
                 "included": include,
                 "reason": reason,
                 "score": round(score, 6),
+                "current_score": round(current_score, 6),
+                "continuity_boost": round(score - current_score, 6),
                 "top_margin": round(candidate_margin, 6),
                 "top_ratio": (
                     round(candidate_ratio, 6)
                     if math.isfinite(candidate_ratio) else candidate_ratio
                 ),
-                "step_drop": round(step_drop, 6),
+                "step_drop": round(max(0.0, previous_score - score), 6),
                 "supporting_signals": supporting_signals,
             })
             previous_score = score
-            if index > 0 and not within_cluster:
-                for excluded in devices[index + 1:]:
-                    excluded_key = str(
-                        RetrievalHelper._device_value(excluded, "id", "")
-                        or RetrievalHelper._device_value(excluded, "name", "")
-                    )
+
+        # Coverage selects distinct candidates first, then fills only from the
+        # confidence band.
+        if len(selected) < target_count:
+            for device in scored_devices:
+                candidate_key = str(
+                    RetrievalHelper._device_value(device, "id", "")
+                    or RetrievalHelper._device_value(device, "name", "")
+                )
+                if candidate_key in selected_keys or candidate_key not in candidate_keys:
+                    continue
+                selected.append(device)
+                selected_keys.add(candidate_key)
+                decision = next(
+                    (item for item in decisions if item["candidate"] == candidate_key),
+                    None,
+                )
+                if decision is None:
                     decisions.append({
-                        "candidate": excluded_key,
-                        "included": False,
-                        "reason": "excluded after earlier meaningful score drop-off",
-                        "score": round(scores.get(excluded_key, 0.0), 6),
-                        "supporting_signals": support.get(excluded_key, ()),
+                        "candidate": candidate_key,
+                        "included": True,
+                        "reason": "included from the confidence band",
+                        "score": round(scores.get(candidate_key, 0.0), 6),
+                        "supporting_signals": support.get(candidate_key, ()),
                     })
-                break
+                else:
+                    decision["included"] = True
+                    decision["reason"] = "included from the confidence band"
+                if len(selected) >= target_count:
+                    break
+
+        # The configured minimum is a safety floor after confidence pruning,
+        # never a desired count. Preserve the highest-ranked remaining items
+        # only when the confidence band is smaller than that floor.
+        safety_target = min(ceiling, min_limit, len(scored_devices))
+        if len(selected) < safety_target:
+            for device in scored_devices:
+                candidate_key = str(
+                    RetrievalHelper._device_value(device, "id", "")
+                    or RetrievalHelper._device_value(device, "name", "")
+                )
+                if candidate_key in selected_keys:
+                    continue
+                selected.append(device)
+                selected_keys.add(candidate_key)
+                decision = next(
+                    (item for item in decisions if item["candidate"] == candidate_key),
+                    None,
+                )
+                if decision is None:
+                    decisions.append({
+                        "candidate": candidate_key,
+                        "included": True,
+                        "reason": "included to satisfy configured safety minimum",
+                        "score": round(scores.get(candidate_key, 0.0), 6),
+                        "supporting_signals": support.get(candidate_key, ()),
+                    })
+                else:
+                    decision["included"] = True
+                    decision["reason"] = "included to satisfy configured safety minimum"
+                if len(selected) >= safety_target:
+                    break
 
         log_debug_payload(
             _logger, "retrieval.device_ambiguity_cluster",
@@ -587,6 +1033,18 @@ class RetrievalHelper:
             score_dropoff_margin_threshold=margin_threshold,
             score_dropoff_ratio_threshold=ratio_threshold,
             near_tie_margin_threshold=near_tie_threshold,
+            absolute_floor=absolute_floor,
+            relative_floor=relative_floor,
+            gap_threshold=gap_threshold,
+            continuity_max_boost=DEVICE_CONTINUITY_MAX_BOOST,
+            redundancy_penalty=DEVICE_REDUNDANCY_PENALTY,
+            diversity_rescue_relative_floor=DEVICE_DIVERSITY_RESCUE_RELATIVE_FLOOR,
+            diversity_rescue_identity_relative_floor=DEVICE_DIVERSITY_RESCUE_IDENTITY_RELATIVE_FLOOR,
+            explicit_identity_candidates=sorted(explicit_identity_keys),
+            normal_confidence_candidates=sorted(eligible_keys),
+            diversity_rescue_candidates=sorted(rescued_keys),
+            preferred_domains=sorted(preferred_domains),
+            preferred_areas=sorted(preferred_areas),
             selected_candidate_count=len(selected),
             selected_candidates=[
                 str(RetrievalHelper._device_value(device, "id", ""))
@@ -594,6 +1052,8 @@ class RetrievalHelper:
             ],
             candidate_decisions=decisions,
         )
+        if _logger.isEnabledFor(logging.DEBUG):
+            _logger.debug("RAGent device pruning: %s", decisions[:12])
         return selected
 
     @staticmethod
@@ -740,19 +1200,14 @@ class RetrievalHelper:
 
     @staticmethod
     def device_target_score(query: str, device: Any) -> float:
-        """Score target identity and capability above location-only similarity."""
+        """Score entity identity without saturating every same-type candidate."""
         aliases = RetrievalHelper._device_value(device, "aliases", []) or []
-        domains = RetrievalHelper._device_value(device, "domain", []) or []
         if isinstance(aliases, str):
             aliases = [aliases]
-        if isinstance(domains, str):
-            domains = [domains]
         return RetrievalHelper.field_match_score(query, (
             RetrievalHelper._device_value(device, "id", ""),
             RetrievalHelper._device_value(device, "friendly_name", ""),
             *aliases,
-            *domains,
-            RetrievalHelper._device_value(device, "device_class", ""),
         ))
 
     @staticmethod
@@ -917,12 +1372,19 @@ class RetrievalHelper:
             fuzzy_ranking,
         )
 
+        # Always expose the diagnostic channel.  A strong current match may
+        # disable continuity's influence on fusion, but hiding the scores made
+        # it impossible to tell whether continuity was absent or intentionally
+        # suppressed.
         continuity_scores = {
             item_key: continuity_score(item)
             for item_key, item in candidates.items()
-        } if continuity_score and not has_strong_current_match else {}
+        } if continuity_score else {}
         continuity_ranking = RetrievalHelper._rank_positive_scores(
-            {key: score for key, score in continuity_scores.items() if score > 0},
+            {
+                key: score for key, score in continuity_scores.items()
+                if score > 0
+            } if not has_strong_current_match else {},
             0.0,
         )
 
@@ -1064,12 +1526,31 @@ class RetrievalHelper:
         if not isinstance(capability, dict):
             return {}
         action = str(capability.get("action", "") or "").strip().casefold()
+        allowed_actions = {
+            "turn_on", "turn_off", "toggle", "open", "close", "stop",
+            "lock", "unlock", "cover_set_position", "fan_set_speed",
+            "climate_set_temperature", "climate_set_hvac_mode",
+            "media_player_play", "media_player_pause", "media_player_stop", "light_set",
+            "light_set_brightness", "light_set_color", "scene_turn_on",
+            "vacuum_start", "vacuum_return_to_base", "set_value", "on", "off",
+            "set", "pause", "unpause", "cancel", "broadcast",
+        }
+        if action not in allowed_actions:
+            return {}
         domains = capability.get("domains", capability.get("domain", ())) or ()
         if isinstance(domains, str):
             domains = (domains,)
+        allowed_domains = {
+            "alarm_control_panel", "automation", "button", "camera", "climate",
+            "cover", "fan", "humidifier", "input_boolean", "input_number",
+            "light", "lock", "media_player", "number", "scene", "script",
+            "select", "sensor", "siren", "switch", "vacuum", "valve",
+            "water_heater", "weather", "binary_sensor",
+        }
+        domains = tuple(sorted({str(value).strip().casefold() for value in domains if value} & allowed_domains))
         return {
             "action": action,
-            "domains": tuple(sorted({str(value).strip().casefold() for value in domains if value})),
+            "domains": domains,
         }
 
     @staticmethod
@@ -1128,6 +1609,7 @@ class RetrievalHelper:
             "capability": RetrievalHelper.tool_capability_compatibility(tool, requested_capability),
             "domain": RetrievalHelper._tool_domain_signal(tool, requested_domains),
             "device_metadata": max(-1.0, min(1.0, compatibility / 2.0)),
+            "device_coverage": RetrievalHelper.tool_device_coverage(tool, devices, query),
             "continuity": max(0.0, continuity),
         }
 
@@ -1292,15 +1774,25 @@ class RetrievalHelper:
                 )
                 for tool in tools
             },
-            "device_compatibility": {
-                str(getattr(tool, "name", "")): max(
-                    0.0, RetrievalHelper.tool_device_compatibility(tool, devices),
+            "device_coverage": {
+                str(getattr(tool, "name", "")): RetrievalHelper.tool_device_coverage(
+                    tool, devices, query,
                 )
                 for tool in tools
             },
             "lexical": {
                 str(getattr(tool, "name", "")): RetrievalHelper.field_match_score(
                     query, getattr(tool, "canonical_search_parts", ()) or (),
+                )
+                for tool in tools
+            },
+            "strong_semantic_lexical": {
+                str(getattr(tool, "name", "")): float(
+                    semantic.get(str(getattr(tool, "name", "")), 0.0)
+                    >= TOOL_STRONG_SEMANTIC_MIN
+                    and RetrievalHelper.field_match_score(
+                        query, getattr(tool, "canonical_search_parts", ()) or (),
+                    ) >= TOOL_STRONG_LEXICAL_MIN
                 )
                 for tool in tools
             },
@@ -1375,9 +1867,7 @@ class RetrievalHelper:
         domains = RetrievalHelper._device_domains(devices)
         device_classes = RetrievalHelper._device_classes(devices)
         score = 0.0
-        allowed_domains = getattr(tool, "schema_domains", None)
-        if allowed_domains is None:
-            allowed_domains = RetrievalHelper._schema_values(properties.get("domain", {}))
+        allowed_domains = RetrievalHelper._tool_declared_domains(tool)
         allowed_classes = getattr(tool, "schema_device_classes", None)
         if allowed_classes is None:
             allowed_classes = RetrievalHelper._schema_values(properties.get("device_class", {}))
@@ -1407,6 +1897,74 @@ class RetrievalHelper:
         return score
 
     @staticmethod
+    def _tool_service_names(tool: Any) -> set[str]:
+        """Map canonical tool actions to Home Assistant service names."""
+        action = str(getattr(tool, "canonical_action", "") or "").casefold()
+        aliases = {
+            "light_set": {"turn_on"},
+            "light_set_brightness": {"turn_on"},
+            "light_set_color": {"turn_on"},
+            "fan_set_speed": {"set_percentage", "turn_on"},
+        }
+        return aliases.get(action, {action} if action else set())
+
+    @staticmethod
+    def tool_device_service_compatibility(tool: Any, device: Any) -> float:
+        """Return whether a tool can invoke a compatible service on one device."""
+        device_domains = RetrievalHelper._device_domains((device,))
+        declared_domains = RetrievalHelper._tool_declared_domains(tool)
+        # An empty declaration is deliberately unrestricted, not incompatible.
+        if declared_domains and not declared_domains & device_domains:
+            return 0.0
+        properties = (getattr(tool, "parameters", None) or {}).get("properties") or {}
+        allowed_classes = getattr(tool, "schema_device_classes", None)
+        if allowed_classes is None:
+            allowed_classes = RetrievalHelper._schema_values(properties.get("device_class", {}))
+        device_class = str(RetrievalHelper._device_value(device, "device_class", "") or "").casefold()
+        if allowed_classes and device_class and device_class not in allowed_classes:
+            return 0.0
+        services = {
+            str(service).casefold()
+            for service in (RetrievalHelper._device_value(device, "services", ()) or ())
+        }
+        required_services = RetrievalHelper._tool_service_names(tool)
+        if services and required_services and not services & required_services:
+            return 0.0
+        return 1.0
+
+    @staticmethod
+    def tool_device_coverage(tool: Any, devices: Iterable[Any], query: str = "") -> float:
+        """Measure compatible candidate coverage, weighted by query identity evidence."""
+        devices = list(devices)
+        if not devices:
+            return 0.0
+        identity_scores = [
+            max(0.0, RetrievalHelper.device_target_score(query, device))
+            for device in devices
+        ]
+        confidence_scores = [
+            max(0.0, float(
+                RetrievalHelper._device_value(device, "retrieval_current_score", 0.0)
+                or 0.0
+            ))
+            for device in devices
+        ]
+        best_identity = max(identity_scores, default=0.0)
+        best_confidence = max(confidence_scores, default=0.0)
+        weights = [
+            TOOL_DEVICE_RELEVANCE_BASE_WEIGHT
+            + TOOL_DEVICE_RELEVANCE_SIGNAL_WEIGHT * max(
+                identity / best_identity if best_identity > 0 else 1.0,
+                confidence / best_confidence if best_confidence > 0 else 1.0,
+            )
+            for identity, confidence in zip(identity_scores, confidence_scores)
+        ]
+        return sum(
+            weight * RetrievalHelper.tool_device_service_compatibility(tool, device)
+            for device, weight in zip(devices, weights)
+        ) / sum(weights)
+
+    @staticmethod
     def rerank_tools_for_devices(tools: Iterable[T], devices: Iterable[Any], limit: int) -> list[T]:
         """Jointly rerank with a bounded positive device-compatibility boost."""
         devices = list(devices)
@@ -1416,13 +1974,7 @@ class RetrievalHelper:
             key=lambda pair: (
                 -(
                     1.0 / (pair[0] + 1)
-                    + 0.3 * min(
-                        2.0,
-                        max(
-                            0.0,
-                            RetrievalHelper.tool_device_compatibility(pair[1], devices),
-                        ),
-                    )
+                    + 0.35 * RetrievalHelper.tool_device_coverage(pair[1], devices)
                 ),
                 pair[0],
             ),

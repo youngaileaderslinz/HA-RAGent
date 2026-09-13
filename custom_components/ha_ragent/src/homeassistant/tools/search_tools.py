@@ -19,6 +19,7 @@ from custom_components.ha_ragent.src.const import (
     RAGENT_MAX_SEARCH_QUERY_CHARS,
     RAGENT_MAX_SEARCH_QUERIES,
     RAGENT_SEMANTIC_SEARCH_TOOL_NAME,
+    RAGENT_PREFIXED_REQUIRED_TOOL_NAMES,
     RETRIEVAL_METHOD_LEXICAL,
     TRANSLATION_ERROR_SEARCH_QUERY_EMPTY,
     TRANSLATION_ERROR_SEARCH_QUERIES_TOO_MANY,
@@ -40,13 +41,35 @@ class RAGentSemanticSearchTool(llm.Tool):
     name = RAGENT_SEMANTIC_SEARCH_TOOL_NAME
     parameters = vol.Schema(
         {
-            vol.Required("search_queries"): vol.All(
+            vol.Required(
+                "search_queries",
+                description=(
+                    "One self-contained query per independent target group. The array "
+                    "position must match the corresponding capabilities item."
+                ),
+            ): vol.All(
                 [str], vol.Length(min=1, max=RAGENT_MAX_SEARCH_QUERIES)
             ),
-            vol.Optional("capabilities"): vol.All(
+            vol.Required(
+                "capabilities",
+                description=(
+                    "Structured capability parallel to search_queries, for example "
+                    "[{action: turn_on, domain: light}] or "
+                    "[{action: fan_set_speed, domain: fan}]."
+                ),
+            ): vol.All(
                 [{
-                    vol.Required("action"): str,
-                    vol.Optional("domain"): vol.Any(str, [str]),
+                    vol.Required(
+                        "action",
+                        description=(
+                            "Stable canonical action ID such as turn_on, turn_off, "
+                            "or fan_set_speed; do not put natural-language prose here."
+                        ),
+                    ): str,
+                    vol.Optional(
+                        "domain",
+                        description="Optional Home Assistant domain or domains.",
+                    ): vol.Any(str, [str]),
                 }],
                 vol.Length(min=1, max=RAGENT_MAX_SEARCH_QUERIES),
             ),
@@ -133,7 +156,6 @@ class RAGentSemanticSearchTool(llm.Tool):
         )
         self._completed_candidate_names: set[str] = set()
         self._candidate_context = list(candidates or [])
-        self._requested_capabilities = []
         log_debug_payload(
             _logger, "search.context_set", entry_id=getattr(self, "entry_id", ""),
             subentry_id=getattr(self, "subentry_id", ""), latest_request=self._latest_request,
@@ -403,6 +425,18 @@ class RAGentSemanticSearchTool(llm.Tool):
         )
         search_devices = scope in {"devices", "devices_and_tools"}
         search_tools = scope in {"tools", "devices_and_tools"}
+        if (
+            "search_queries" in tool_input.tool_args
+            and search_tools
+            and len(requested_capabilities) != len(model_search_queries)
+        ):
+            return {
+                "error": (
+                    "Each tool-search query requires one structured capability "
+                    "with a canonical action and optional domain."
+                ),
+                "requested_capabilities": requested_capabilities,
+            }
 
         devices: list[dict[str, object]] = []
         tools: list[dict[str, object]] = []
@@ -428,6 +462,9 @@ class RAGentSemanticSearchTool(llm.Tool):
             result_tool_limit = max(result_tool_limit, max_tools)
             for query_index, model_query in enumerate(model_search_queries or [""]):
                 try:
+                    query_devices: list[Device | dict[str, object]] = list(
+                        self._candidate_context
+                    )
                     requested_capability = (
                         requested_capabilities[query_index]
                         if query_index < len(requested_capabilities)
@@ -437,7 +474,6 @@ class RAGentSemanticSearchTool(llm.Tool):
                     device_query = self._device_search_query(model_query, queries[query_index], focused=focused)
                     if search_devices:
                         device_queries.append(device_query)
-                    tool_query = self._tool_search_query(model_query, [], focused=focused)
                     device_embedding = QueryEmbedding(
                         lambda query=device_query: self._embed_query_for_subentry(entry, subentry, query)
                     )
@@ -470,24 +506,6 @@ class RAGentSemanticSearchTool(llm.Tool):
                                 device_query, device,
                             )
 
-                        def device_taxonomy_score(device: Device) -> float:
-                            return RetrievalHelper.field_match_score(
-                                device_query,
-                                (*(device.domain or ()), device.device_class),
-                            )
-
-                        requested_domains = set(
-                            RetrievalHelper.normalize_requested_capability(
-                                requested_capability,
-                            ).get("domains", ())
-                        )
-
-                        def requested_domain_score(device: Device) -> float:
-                            return float(bool(
-                                requested_domains
-                                & {str(value).casefold() for value in (device.domain or ())}
-                            ))
-
                         def device_metadata_score(device: Device) -> float:
                             return device_identity_score(device)
 
@@ -510,8 +528,6 @@ class RAGentSemanticSearchTool(llm.Tool):
                             text_parts=device_text_parts,
                             structured_scores={
                                 "identity_metadata": device_identity_score,
-                                "domain_device_class": device_taxonomy_score,
-                                "requested_domain": requested_domain_score,
                             },
                         )
                         retrieved_devices = RetrievalHelper.select_device_candidates(
@@ -521,13 +537,25 @@ class RAGentSemanticSearchTool(llm.Tool):
                             max_devices,
                             device_confidence,
                         )
+                        current_scores = dict(device_confidence.candidate_scores)
+                        for device in retrieved_devices:
+                            device.retrieval_current_score = current_scores.get(device.id, 0.0)
+                        query_devices = [
+                            device for device in retrieved_devices
+                            if isinstance(device, Device)
+                        ]
                         device_candidate_batches[query_index].extend(
                             self._device_candidate(device)
-                            for device in retrieved_devices
-                            if isinstance(device, Device)
+                            for device in query_devices
                         )
 
                     if search_tools and tool_limit > 0:
+                        # Device retrieval must complete before constructing the
+                        # tool query: domain/state/location context is a ranking
+                        # input, not just prompt decoration.
+                        tool_query = self._tool_search_query(
+                            model_query, query_devices, focused=focused,
+                        )
                         tool_queries.append(tool_query)
                         collection_name = f"tools_{subentry_id}"
                         candidate_limit = RetrievalHelper.adaptive_candidate_limit(tool_limit)
@@ -548,14 +576,32 @@ class RAGentSemanticSearchTool(llm.Tool):
                             scored_tools,
                             all_tools,
                             tool_query,
-                            [],
+                            query_devices,
                             max(tool_limit, RetrievalHelper.expanded_tool_limit(tool_limit)),
                             requested_capability=requested_capability,
                         )
+                        # Required tools are injected into the normal prompt
+                        # independently; they must not consume search result
+                        # slots either.
+                        required_tool_names = set(RAGENT_PREFIXED_REQUIRED_TOOL_NAMES)
+                        retrieved_tools = [
+                            tool for tool in retrieved_tools
+                            if tool.name not in required_tool_names
+                        ]
+                        if requested_capability:
+                            compatible_tools = [
+                                tool
+                                for tool in retrieved_tools
+                                if RetrievalHelper.tool_capability_compatibility(
+                                    tool, requested_capability,
+                                ) >= 0
+                            ]
+                            if compatible_tools:
+                                retrieved_tools = compatible_tools
                         confidence = RetrievalHelper.tool_search_confidence_details(
                             retrieved_tools[:max_tools],
                             tool_query,
-                            [],
+                            query_devices,
                             requested_capability,
                             scored_tools,
                         )
@@ -584,10 +630,15 @@ class RAGentSemanticSearchTool(llm.Tool):
                             if not isinstance(tool, LlmTool) or tool.name in seen_query_tool_names:
                                 continue
                             seen_query_tool_names.add(tool.name)
+                            metadata = tool.metadata.to_dict() if tool.metadata else None
+                            if metadata is not None:
+                                metadata["supported_domains"] = list(
+                                    tool.canonical_supported_domains
+                                )
                             ranking_signals = RetrievalHelper.tool_ranking_signals(
                                 tool,
                                 tool_query,
-                                [],
+                                query_devices,
                                 semantic_rank=semantic_ranks.get(tool.name),
                                 semantic_score=semantic_scores.get(tool.name),
                                 requested_capability=requested_capability,
@@ -597,7 +648,7 @@ class RAGentSemanticSearchTool(llm.Tool):
                                     "name": tool.name,
                                     "description": tool.description,
                                     "parameters": tool.parameters or {},
-                                    "metadata": tool.metadata.to_dict() if tool.metadata else None,
+                                    "metadata": metadata,
                                     "action": tool.canonical_action,
                                     "domains": tool.canonical_supported_domains,
                                     "expected_states": (

@@ -44,6 +44,7 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
         translations = translations or RAGentTranslations(llm_context.language or "en")
         self._scheduling_area = ""
         self._scheduling_floor = ""
+        self._initial_requested_capabilities: list[dict[str, object]] = []
         self._wrapped_api = wrapped_api
         self.prompt = getattr(wrapped_api, "prompt", "")
         self.custom_serializer = getattr(wrapped_api, "custom_serializer", None)
@@ -160,6 +161,20 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
                     candidates=candidates,
                 )
 
+    def set_request_capabilities(
+        self, capabilities: list[dict[str, object]],
+    ) -> None:
+        """Retain capabilities structured before initial tool retrieval."""
+        self._initial_requested_capabilities = [
+            dict(capability) for capability in capabilities if capability
+        ]
+        # Search tools may retain refined capabilities from an earlier turn.
+        # Clear that per-call state here, after the planner has produced the
+        # new baseline, so set_search_context can safely bind location data.
+        for tool in self.tools:
+            if isinstance(tool, RAGentSemanticSearchTool):
+                tool._requested_capabilities = []
+
     def set_scheduling_context(self, request: str, messages: list[dict], candidates: list[dict]) -> None:
         """Supply runtime context directly; the model only specifies the action."""
         for tool in self.tools:
@@ -182,11 +197,12 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
                 tool.prune_candidates(completed_names)
 
     def requested_capabilities(self) -> list[dict[str, object]]:
-        """Return structured operations requested through semantic search."""
+        """Return search-refined or initially planned structured operations."""
         for tool in self.tools:
             if isinstance(tool, RAGentSemanticSearchTool):
-                return tool.requested_capabilities
-        return []
+                if tool.requested_capabilities:
+                    return tool.requested_capabilities
+        return list(self._initial_requested_capabilities)
 
     async def async_rediscover_capabilities(
         self, capabilities: list[dict[str, object]],

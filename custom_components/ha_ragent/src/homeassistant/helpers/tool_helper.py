@@ -386,6 +386,35 @@ class ToolHelper:
         return ToolHelper._copy_tool_input(tool_call, tool_call.tool_name, args)
 
     @staticmethod
+    def sanitize_tool_call(tool_call: ToolInput, metadata: ToolMetadata | None,
+                           candidates: list[dict[str, object]]) -> ToolInput:
+        """Build execution arguments from trusted retrieved candidate metadata."""
+        args = dict(tool_call.tool_args)
+        requested = str(args.get("name", args.get("entity_id", "")) or "").casefold()
+        match = next((candidate for candidate in candidates if requested in {
+            str(candidate.get("name", "")).casefold(),
+            str(candidate.get("friendly_name", "")).casefold(),
+            *(str(value).casefold() for value in (candidate.get("aliases") or [])),
+        }), None)
+        if match is not None:
+            args["name"] = match.get("friendly_name") or match.get("name")
+            if metadata and metadata.is_domain_aware:
+                domains = match.get("domain") or []
+                args["domain"] = list(domains) if isinstance(domains, (list, tuple)) else [domains]
+            if metadata and metadata.is_area_aware:
+                for key in ("area", "floor"):
+                    if match.get(key):
+                        args[key] = match[key]
+            if metadata and metadata.is_device_class_aware:
+                if match.get("device_class"):
+                    args["device_class"] = match["device_class"]
+                else:
+                    args.pop("device_class", None)
+        return ToolHelper.to_home_assistant_tool_call(
+            ToolHelper._copy_tool_input(tool_call, tool_call.tool_name, args), metadata,
+        )
+
+    @staticmethod
     def to_history_tool_call(tool_call: ToolInput) -> ToolInput:
         """Create the history call with the original name restored."""
         args = dict(tool_call.tool_args)

@@ -269,14 +269,14 @@ class MongoDbBackend(ABaseDbBackend):
             ]
             cursor = await collection.aggregate(pipeline)
             results = await cursor.to_list(length=top_k)
-            return [
+            return self.sort_scored_results([
                 ScoredResult(
                     object_type.parse_object(document),
                     min(1.0, max(0.0, float(document.get("vector_score", 0.0)))),
                     rank,
                 )
                 for rank, document in enumerate(results, start=1)
-            ]
+            ], top_k)
         except Exception as err:
             _logger.error(f"Error retrieving scored objects: {err}", exc_info=True)
             return []

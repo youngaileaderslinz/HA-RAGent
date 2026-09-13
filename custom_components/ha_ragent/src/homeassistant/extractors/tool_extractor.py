@@ -24,7 +24,10 @@ from custom_components.ha_ragent.src.const import (
     RAGENT_TIMER_DEVICE_ID,
 )
 
-from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
+from custom_components.ha_ragent.src.models.embedding.tool_metadata import (
+    ToolMetadata,
+    split_canonical_name,
+)
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.homeassistant.ragent_api import resolve_llm_api_id
 from custom_components.ha_ragent.src.homeassistant.ragent_config_entry import RAGentConfigEntry
@@ -44,23 +47,24 @@ class ToolExtractor:
     def _normalize_strings(values: Iterable[Any]) -> set[str]:
         return {str(value).lower() for value in values if isinstance(value, str) and value}
 
-    def _extract_values_from_validator(self, validator: Any) -> Tuple[set[str], bool]:
+    @classmethod
+    def _extract_values_from_validator(cls, validator: Any) -> Tuple[set[str], bool]:
         values: set[str] = set()
         universal = False
 
         if isinstance(validator, vol.In):
-            return self._normalize_strings(validator.container), False
+            return cls._normalize_strings(validator.container), False
 
         if isinstance(validator, vol.All) or isinstance(validator, vol.Any):
             for nested in validator.validators:
-                nested_values, nested_universal = self._extract_values_from_validator(nested)
+                nested_values, nested_universal = cls._extract_values_from_validator(nested)
                 values.update(nested_values)
                 universal = universal or nested_universal
             return values, universal
 
         if isinstance(validator, (list, tuple, set)):
             for nested in validator:
-                nested_values, nested_universal = self._extract_values_from_validator(nested)
+                nested_values, nested_universal = cls._extract_values_from_validator(nested)
                 values.update(nested_values)
                 universal = universal or nested_universal
             return values, universal
@@ -70,7 +74,8 @@ class ToolExtractor:
 
         return set(), False
 
-    def _extract_field_constraints(self, schema_dict: dict[Any, Any], field_name: str) -> Tuple[List[str], bool, bool]:
+    @classmethod
+    def _extract_field_constraints(cls, schema_dict: dict[Any, Any], field_name: str) -> Tuple[List[str], bool, bool]:
         values = set()
         universal = False
         has_field = False
@@ -80,7 +85,7 @@ class ToolExtractor:
                 continue
 
             has_field = True
-            found_values, found_universal = self._extract_values_from_validator(validator)
+            found_values, found_universal = cls._extract_values_from_validator(validator)
             values.update(found_values)
             universal = universal or found_universal
 
@@ -126,6 +131,9 @@ class ToolExtractor:
 
         source = getattr(tool, "metadata", None)
         action = cls._metadata_value(source, "canonical_action", "action", "capability_id", default="")
+        if not action and (intent_type := getattr(tool, "intent_type", "")):
+            parts = split_canonical_name(intent_type)
+            action = "_".join(parts[1:] if parts[:1] == ("hass",) else parts)
         if not action:
             schema_actions = cls._schema_values(properties.get("action", {}))
             if len(schema_actions) == 1:
@@ -135,9 +143,25 @@ class ToolExtractor:
         domains = cls._metadata_value(source, "supported_domains", "domains", "domain", default=())
         if isinstance(domains, str):
             domains = (domains,)
+        schema_domains = cls._schema_values(properties.get("domain", {}))
+        # Keep the original voluptuous schema as a fallback. Some HA/API
+        # adapters flatten constrained fields while converting to OpenAPI and
+        # silently drop the enum, even though the source schema still has it.
+        raw_parameters = getattr(tool, "parameters", None)
+        raw_schema = (
+            raw_parameters
+            if isinstance(raw_parameters, dict)
+            else getattr(raw_parameters, "schema", None)
+        )
+        if isinstance(raw_schema, dict):
+            raw_domains, _universal, has_domain = cls._extract_field_constraints(
+                raw_schema, "domain",
+            )
+            if has_domain:
+                schema_domains.update(raw_domains)
         metadata.supported_domains = tuple(sorted({
             *(str(value).casefold() for value in (domains or ())),
-            *cls._schema_values(properties.get("domain", {})),
+            *schema_domains,
         }))
 
         expected_states = cls._metadata_value(source, "expected_states", "expected_state", default=())
@@ -148,9 +172,12 @@ class ToolExtractor:
                 *cls._schema_values(properties.get("expected_state", {})),
                 *cls._schema_values(properties.get("expected_states", {})),
             }
+        if not expected_states:
+            expected_states = {
+                "turn_on": ("on",),
+                "turn_off": ("off",),
+            }.get(metadata.canonical_action, ())
         metadata.expected_states = tuple(sorted(str(value).casefold() for value in (expected_states or ())))
-        metadata.family = cls._metadata_value(source, "family", default=None)
-
         return metadata
 
     def _extract_tool_metadata(self, tool: Any, parameters: Any) -> ToolMetadata:
@@ -255,12 +282,24 @@ class ToolExtractor:
                 else:
                     parameters = {}
 
+                try:
+                    metadata = self._extract_tool_metadata(tool, parameters)
+                except Exception as metadata_err:
+                    # One malformed tool must not erase every other tool from
+                    # the startup index. Preserve the live schema for ranking
+                    # and use neutral metadata for this individual tool.
+                    _logger.warning(
+                        "Could not extract metadata for tool %s: %s",
+                        tool_name, metadata_err,
+                    )
+                    metadata = ToolMetadata()
+
                 tool_list.append(
                     LlmTool(
                         name=tool_name,
                         description=getattr(tool, "description", ""),
                         parameters=parameters,
-                        metadata=self._extract_tool_metadata(tool, parameters),
+                        metadata=metadata,
                     )
                 )
                 seen_tool_names.add(tool_name)

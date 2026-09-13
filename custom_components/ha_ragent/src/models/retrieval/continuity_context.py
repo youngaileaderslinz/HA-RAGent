@@ -22,12 +22,14 @@ class ContinuityContext:
         return max((values.get(str(candidate).casefold(), 0.0) for candidate in candidates if candidate), default=0.0)
 
     def entity_score(self, device: object) -> float:
-        """Return continuity evidence tied to an exact entity identity."""
+        """Return continuity evidence tied to a successfully resolved entity."""
         entity_id = str(getattr(device, "id", "") or "")
-        return (
-            1.5 * self._maximum(self.entities, [entity_id])
-            + 0.2 * self._maximum(self.ambiguous_entities, [entity_id])
-        )
+        return 1.5 * self._maximum(self.entities, [entity_id])
+
+    def ambiguous_entity_score(self, device: object) -> float:
+        """Return weak evidence from failed or still-unresolved entity targets."""
+        entity_id = str(getattr(device, "id", "") or "")
+        return 0.2 * self._maximum(self.ambiguous_entities, [entity_id])
 
     def area_score(self, device: object) -> float:
         """Return weaker location continuity without implying entity identity."""
@@ -38,21 +40,12 @@ class ContinuityContext:
             + 0.2 * self._maximum(self.floors, [floor])
         )
 
-    def taxonomy_score(self, device: object) -> float:
-        """Return continuity for domain and device class independently."""
-        domains = list(getattr(device, "domain", None) or [])
-        device_class = str(getattr(device, "device_class", "") or "")
-        return (
-            0.35 * self._maximum(self.domains, domains)
-            + 0.35 * self._maximum(self.device_classes, [device_class])
-        )
-
     def device_score(self, device: object) -> float:
-        """Combine distinct continuity sources for candidate ranking only."""
+        """Combine only entity and location continuity for device ranking."""
         return (
             self.entity_score(device)
+            + self.ambiguous_entity_score(device)
             + self.area_score(device)
-            + self.taxonomy_score(device)
         )
 
     def tool_score(self, tool: object) -> float:

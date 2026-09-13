@@ -87,7 +87,12 @@ class DeviceExtractor:
                 aliases=aliases,
                 services=services,
                 unit_of_measurement=state.attributes.get("unit_of_measurement"),
-                device_class=state.attributes.get("device_class"),
+                # HA exposes this on state attributes for some integrations,
+                # but the entity registry is the authoritative fallback.
+                device_class=(
+                    state.attributes.get("device_class")
+                    or getattr(entity_entry, "device_class", None)
+                ),
             ))
         
         return devices

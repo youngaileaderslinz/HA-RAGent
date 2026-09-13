@@ -58,6 +58,9 @@ from custom_components.ha_ragent.src.const import (
     DOMAIN,
     CONF_ALLOW_QUESTIONS,
     RAGENT_PREFIXED_REQUIRED_TOOL_NAMES,
+    TOOL_SELECTION_ABSOLUTE_FLOOR,
+    TOOL_SELECTION_RELATIVE_FLOOR,
+    TOOL_SELECTION_GAP_THRESHOLD,
     RAGENT_SCHEDULED_REQUEST_PREFIX,
     RAGENT_PREFIXED_SCHEDULED_REQUEST_PROHIBITED_TOOL_NAMES,
     STARTUP_EMBEDDING_RUNNING_FLAG,
@@ -118,8 +121,10 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         self,
         history_manager: HistoryManager,
         chat_log: conversation.ChatLog,
+        retrieval_query: str = "",
+        query_embedding: QueryEmbedding | None = None,
     ) -> ContinuityContext:
-        """Retain bounded recent structured history without embedding turns."""
+        """Retain bounded recent structured history with semantic signals."""
         contexts = history_manager.structured_turn_contexts(chat_log)
         remember_num = get_setting_value(CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS, self.runtime_options)
         remember_time = get_setting_value(CONF_REMEMBER_CONVERSATION_TIME_MINUTES, self.runtime_options)
@@ -133,10 +138,23 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 _logger, "continuity.disabled", continuity=continuity,
             )
             return continuity
+        current_vector: list[float] = []
+        vectors: dict[str, list[float]] = {}
+        if contexts:
+            current_vector = await query_embedding.get() if query_embedding else []
+            embedded = await asyncio.gather(*(
+                self._async_embed_retrieval_text(
+                    RetrievalHelper.build_retrieval_text(context.to_embedding_text())
+                )
+                for context in contexts
+            ))
+            vectors = {
+                context.key: vector
+                for context, vector in zip(contexts, embedded)
+                if vector
+            }
         selected = RetrievalHelper.select_history_contexts(
-            contexts,
-            {},
-            [],
+            contexts, vectors, current_vector,
             max_age_seconds=remember_time * 60 if remember_time > 0 else float("inf"),
             limit=remember_num if remember_num > 0 else len(contexts),
         )
@@ -188,6 +206,11 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 self.entry.vector_db_backend, DeviceEmbedding, options,
                 collection_name, query_embedding, candidate_limit, query=query,
             )
+            get_lexical = getattr(self.entry.vector_db_backend, "async_get_lexical_objects", None)
+            if not all_devices and callable(get_lexical):
+                all_devices = await get_lexical(
+                    DeviceEmbedding, options, collection_name,
+                )
         except Exception as e:
             _logger.error(f"Error retrieving devices from vector DB: {e}", exc_info=True)
             return []
@@ -214,11 +237,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 device, current_area, current_floor,
             )
 
-        def device_taxonomy_score(device: Device) -> float:
-            return RetrievalHelper.field_match_score(
-                query, (*(device.domain or ()), device.device_class),
-            )
-
         def device_metadata_score(device: Device) -> float:
             return device_identity_score(device) + 0.5 * device_location_score(device)
 
@@ -231,8 +249,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             device_text_parts,
             candidate_limit,
             metadata_score=device_metadata_score,
-            continuity_score=continuity.device_score,
-            preserve_score=continuity.successful_target_score,
             trim_confident=False,
         )
         confidence = RetrievalHelper.device_search_confidence(
@@ -244,15 +260,32 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             structured_scores={
                 "identity_metadata": device_identity_score,
                 "area_floor": device_location_score,
-                "domain_device_class": device_taxonomy_score,
-                "entity_continuity": continuity.entity_score,
-                "area_continuity": continuity.area_score,
-                "taxonomy_continuity": continuity.taxonomy_score,
             },
+            continuity_score=lambda device: (
+                continuity.entity_score(device)
+                + continuity.area_score(device)
+                + continuity.ambiguous_entity_score(device)
+            ),
             confirmed_score=continuity.successful_target_score,
         )
+        current_scores = dict(confidence.candidate_scores)
+        for device in ranked_devices:
+            # Runtime-only evidence for tool/device compatibility weighting.
+            device.retrieval_current_score = current_scores.get(device.id, 0.0)
+        query_areas = {
+            str(device.area_name).casefold()
+            for device in ranked_devices
+            if device.area_name
+            and RetrievalHelper._normalize(device.area_name)
+            in RetrievalHelper._normalize(query)
+        }
         return RetrievalHelper.select_device_candidates(
-            query, ranked_devices, n_devices, max_devices, confidence,
+            query,
+            ranked_devices,
+            n_devices,
+            max_devices,
+            confidence,
+            preferred_areas=query_areas,
         )
 
     async def _async_retrieve_tools(
@@ -276,16 +309,32 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 self.entry.vector_db_backend, LlmToolEmbedding, options,
                 collection_name, query_embedding, candidate_limit, query=query,
             )
+            get_lexical = getattr(self.entry.vector_db_backend, "async_get_lexical_objects", None)
+            if not all_tools and callable(get_lexical):
+                all_tools = await get_lexical(
+                    LlmToolEmbedding, options, collection_name,
+                )
         except Exception as e:
             _logger.error(f"Error retrieving tools from vector DB: {e}", exc_info=True)
             return []
 
+        # Required tools are always exposed separately and must not consume
+        # slots from the configured optional retrieval budget.
+        required_names = set(RAGENT_PREFIXED_REQUIRED_TOOL_NAMES)
+        scored_tools = [
+            result for result in scored_tools
+            if result.item.name not in required_names
+        ]
+        all_tools = [
+            tool for tool in all_tools
+            if tool.name not in required_names
+        ]
         ranked_tools = await asyncio.to_thread(
             RetrievalHelper.rank_tool_candidates,
             scored_tools,
             all_tools,
             query,
-            [],
+            devices or [],
             max(exposure_limit, RetrievalHelper.expanded_tool_limit(exposure_limit)),
             continuity_score=continuity.tool_score,
         )
@@ -299,7 +348,32 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             vector_results=scored_tools,
             continuity_score=continuity.tool_score,
         )
-        limit = RetrievalHelper.confidence_limit(confidence.level, n_tools, max_tools)
+        selected_names = set(RetrievalHelper.prune_confidence_band(
+            confidence,
+            max_tools,
+            absolute_floor=TOOL_SELECTION_ABSOLUTE_FLOOR,
+            relative_floor=TOOL_SELECTION_RELATIVE_FLOOR,
+            gap_threshold=TOOL_SELECTION_GAP_THRESHOLD,
+            preserve_signals={"device_coverage", "strong_semantic_lexical"},
+        ))
+        selected_tools = [
+            tool for tool in ranked_tools
+            if tool.name in selected_names
+        ][:max_tools]
+        # Confidence pruning is allowed to reduce the optional set, but it
+        # must not violate the configured minimum. Fill from the existing
+        # ranked candidates; do not start another search or include required
+        # tools in this budget.
+        minimum_target = min(max_tools, max(0, n_tools))
+        selected_tool_names = {tool.name for tool in selected_tools}
+        if len(selected_tools) < minimum_target:
+            for tool in ranked_tools:
+                if tool.name in selected_tool_names:
+                    continue
+                selected_tools.append(tool)
+                selected_tool_names.add(tool.name)
+                if len(selected_tools) >= minimum_target:
+                    break
         log_debug_payload(
             _logger, "retrieval.tool_exposure",
             confidence=confidence.level,
@@ -308,9 +382,13 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             second_score=confidence.second_score,
             margin=confidence.margin,
             ratio=confidence.ratio,
-            selected_candidate_count=min(limit, len(ranked_tools)),
+            selected_candidate_count=len(selected_tools),
+            minimum_fill_count=max(0, len(selected_tools) - len(selected_names)),
+            configured_minimum=n_tools,
+            configured_maximum=max_tools,
+            selected_tools=[tool.name for tool in selected_tools],
         )
-        return ranked_tools[:limit]
+        return selected_tools
 
     async def _async_retrieve_memories(self, query_embedding: List[float] | QueryEmbedding, n_memories: int) -> List[Memory]:
         """Retrieve relevant persistent memories for this agent."""
@@ -487,6 +565,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         formatted_index = 0
         active_candidate_context = list(candidate_context)
         failed_signatures: set[str] = set()
+        fulfilled_capability_indexes: set[int] = set()
         tools_by_name = {tool.name: tool for tool in tool_list}
 
         for idx in range(max_tool_call_iterations):
@@ -511,11 +590,9 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 _logger.debug(f"RAGent prompt size (iteration {idx + 1}): messages={message_chars} chars, tools={tool_schema_chars} chars, tool_count={len(tool_list)}")
 
             tool_calls_in_iteration = []
+            executed_signatures_in_iteration: set[str] = set()
             try:
                 _logger.debug(f"Sending prompt to LLM (Iteration {idx + 1}/{max_tool_call_iterations}).")
-                if _logger.isEnabledFor(logging.DEBUG):
-                    _logger.debug(f"Full messages sent to the LLM:\n{json.dumps(formatted_messages, ensure_ascii=False, indent=2, default=str)}")
-                
                 content_chunks = []
                 async for chunk in self.entry.llm_backend.async_send_chat_request(
                     dict(self.subentry.data),
@@ -526,8 +603,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 assistant_content = "".join(content_chunks)
                 _logger.debug(f"RAGent timing: LLM iteration {idx + 1}: {time.perf_counter() - iteration_start:.3f}s")
 
-                _logger.debug(f"RAW LLM response: {assistant_content}")
-                
                 helper_start = time.perf_counter()
                 tool_calls_in_iteration = tool_helper.parse_tool_calls(assistant_content, tool_metadata_dict)
                 exposed_tool_names = {tool.name for tool in tool_list}
@@ -600,6 +675,24 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                             )
                             continue
 
+                        if call_signature in executed_signatures_in_iteration:
+                            history_manager.append_message(
+                                MessageHelper.create_tool_failure_message(
+                                    agent_id=user_input.agent_id,
+                                    tool_call_id=tool_call.id,
+                                    tool_name=tool_name,
+                                    error=ValueError(
+                                        "This exact tool call was already executed in this model iteration."
+                                    ),
+                                )
+                            )
+                            _logger.debug(
+                                "Skipping duplicate tool call in iteration %d: %s",
+                                idx + 1, call_signature,
+                            )
+                            continue
+                        executed_signatures_in_iteration.add(call_signature)
+
                         requested_capabilities = (
                             llm_api.requested_capabilities()
                             if isinstance(llm_api, RAGentAugmentedAPIInstance)
@@ -648,8 +741,9 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
 
                         try:
                             if llm_api:
-                                execution_call = tool_helper.to_home_assistant_tool_call(
-                                    tool_call, tool_metadata_dict.get(tool_name),
+                                selected_metadata = tool_metadata_dict.get(tool_name)
+                                execution_call = tool_helper.sanitize_tool_call(
+                                    tool_call, selected_metadata, active_candidate_context,
                                 )
                                 if (isinstance(llm_api, RAGentAugmentedAPIInstance)
                                     and tool_name.rsplit("__", 1)[-1] == RAGENT_PLANNED_ACTION_TOOL_NAME):
@@ -658,6 +752,22 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                     )
                                 tool_start = time.perf_counter()
                                 tool_result = await llm_api.async_call_tool(execution_call)
+                                # Optional constraints can make HA reject an
+                                # otherwise valid target. Retry locally with
+                                # those constraints removed; do not spend an
+                                # additional model iteration.
+                                if (
+                                    not MessageHelper.tool_result_succeeded(
+                                        tool_helper.parse_tool_results(tool_result)
+                                    )
+                                    and any(key in execution_call.tool_args for key in ("device_class", "area", "floor"))
+                                ):
+                                    retry_args = dict(execution_call.tool_args)
+                                    for key in ("device_class", "area", "floor"):
+                                        retry_args.pop(key, None)
+                                    tool_result = await llm_api.async_call_tool(
+                                        tool_helper._copy_tool_input(execution_call, execution_call.tool_name, retry_args)
+                                )
                                 parsed_tool_result = tool_helper.parse_tool_results(tool_result)
                                 tool_succeeded = MessageHelper.tool_result_succeeded(parsed_tool_result)
                                 if tool_succeeded and tool_helper.is_semantic_search_tool(tool_name):
@@ -682,14 +792,43 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                     if isinstance(llm_api, RAGentAugmentedAPIInstance):
                                         llm_api.refresh_search_candidates(active_candidate_context)
                                     tool_calls_overall.append((tool_call, parsed_tool_result))
+                                if (
+                                    tool_succeeded
+                                    and not tool_helper.is_semantic_search_tool(tool_name)
+                                    and isinstance(llm_api, RAGentAugmentedAPIInstance)
+                                ):
+                                    for capability_index, capability in enumerate(
+                                        llm_api.requested_capabilities()
+                                    ):
+                                        if (
+                                            capability_index not in fulfilled_capability_indexes
+                                            and RetrievalHelper.tool_capability_compatibility(
+                                                selected_tool, capability,
+                                            ) >= 1.0
+                                        ):
+                                            fulfilled_capability_indexes.add(capability_index)
                                 stored_tool_result = MessageHelper.compact_tool_result_value(
                                     tool_name,
                                     parsed_tool_result,
                                 )
                                 targets = tool_helper.successful_target_names(tool_call, parsed_tool_result)
+                                completed_target_names = {
+                                    str(target).casefold() for target in targets
+                                }
+                                unresolved_targets = [
+                                    candidate
+                                    for candidate in active_candidate_context
+                                    if str(candidate.get("name", "")).casefold()
+                                    not in completed_target_names
+                                ]
+                                if tool_succeeded and not tool_helper.is_semantic_search_tool(tool_name):
+                                    active_candidate_context = unresolved_targets
+                                    if isinstance(llm_api, RAGentAugmentedAPIInstance):
+                                        llm_api.prune_search_candidates(completed_target_names)
                                 fulfillment_status = "failed"
                                 rediscovery_required = not tool_succeeded
                                 observed_states: dict[str, str | None] = {}
+                                device_classes: set[str] = set()
                                 if tool_succeeded:
                                     has_declared_action = bool(
                                         getattr(selected_tool, "canonical_action", "")
@@ -708,6 +847,20 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                             target: state.state if state is not None else None
                                             for target, state in zip(targets, current_states)
                                         }
+                                        device_classes = {
+                                            str(state.attributes.get("device_class")).casefold()
+                                            for state in current_states
+                                            if state is not None and state.attributes.get("device_class")
+                                        }
+                                        target_names = {
+                                            str(target).casefold() for target in targets
+                                        }
+                                        device_classes.update(
+                                            str(candidate.get("device_class")).casefold()
+                                            for candidate in active_candidate_context
+                                            if str(candidate.get("name", "")).casefold() in target_names
+                                            and candidate.get("device_class")
+                                        )
                                     if expected_states and targets:
                                         if all(
                                             state is not None and str(state.state).casefold() in expected_states
@@ -724,7 +877,14 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                     "tool_succeeded": tool_succeeded,
                                     "fulfillment_status": fulfillment_status,
                                     "observed_states": observed_states,
+                                    "device_classes": sorted(device_classes),
+                                    "unresolved_targets": unresolved_targets,
                                     "rediscovery_required": rediscovery_required,
+                                    "unresolved_capabilities": [
+                                        capability
+                                        for index, capability in enumerate(requested_capabilities)
+                                        if index not in fulfilled_capability_indexes
+                                    ],
                                 }
                                 if rediscovery_required:
                                     failed_signatures.add(call_signature)
@@ -784,7 +944,10 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                 history_manager.append_message(tool_result_msg)
 
                         except Exception as tool_err:
-                            _logger.debug(f"Tool {tool_name} failed; passing the failure back to the model: {tool_err}")
+                            _logger.exception(
+                                "Tool %s failed; passing the failure back to the model",
+                                tool_name,
+                            )
                             tool_result_msg = MessageHelper.create_tool_failure_message(
                                 agent_id=user_input.agent_id,
                                 tool_call_id=tool_call.id,
@@ -802,7 +965,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
 
 
             except Exception as err:
-                _logger.error(f"There was a problem talking to the backend: {err}")
+                _logger.exception("There was a problem talking to the backend: %s", err)
                 if tool_calls_overall:
                     break
                 intent_response = intent.IntentResponse(language=user_input.language)
@@ -823,16 +986,44 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
             
         intent_response = intent.IntentResponse(language=user_input.language)
+        requested_capabilities = (
+            llm_api.requested_capabilities()
+            if isinstance(llm_api, RAGentAugmentedAPIInstance)
+            else []
+        )
+        unresolved_capabilities = [
+            capability
+            for index, capability in enumerate(requested_capabilities)
+            if index not in fulfilled_capability_indexes
+        ]
         if len(tool_calls_overall) > 0:
             str_tools = [f"{input.tool_name}({', '.join(str(x) for x in input.tool_args.values())})" for input, response in tool_calls_overall]
             tools_str = '\n'.join(str_tools)
+            if unresolved_capabilities:
+                tools_str += f"\nUnresolved requested capabilities: {unresolved_capabilities}"
             intent_response.async_set_card(title="Changes", content=f"Ran the following tools:\n{tools_str}")
 
         continue_conversation = False
         if final_model_speech:
+            if unresolved_capabilities:
+                final_model_speech += (
+                    "\nUnresolved requested capabilities: "
+                    + ", ".join(
+                        str(capability.get("action", capability))
+                        for capability in unresolved_capabilities
+                    )
+                )
             intent_response.async_set_speech(final_model_speech)
             has_question = final_model_speech.endswith(("?", ";", "\uff1f"))
             continue_conversation = get_setting_value(CONF_ALLOW_QUESTIONS, self.runtime_options) and has_question
+        elif unresolved_capabilities:
+            intent_response.async_set_speech(
+                "Unresolved requested capabilities: "
+                + ", ".join(
+                    str(capability.get("action", capability))
+                    for capability in unresolved_capabilities
+                )
+            )
         else:
             intent_response.async_set_speech(self.entry.translations.error(TRANSLATION_ERROR_NO_SPEECH))
 
@@ -841,6 +1032,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             conversation_id=user_input.conversation_id,
             final_model_speech=final_model_speech,
             tool_calls=tool_calls_overall,
+            unresolved_capabilities=unresolved_capabilities,
             continue_conversation=continue_conversation,
         )
         return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id, continue_conversation=continue_conversation)
@@ -918,10 +1110,13 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     )
                 ) if needs_embedding else []
                 continuity = ContinuityContext() if scheduled_request else await self._async_build_continuity_context(
-                    history_manager, chat_log,
+                    history_manager,
+                    chat_log,
+                    retrieval_query,
+                    query_embedding if isinstance(query_embedding, QueryEmbedding) else None,
                 )
                 log_debug_payload(
-                    _logger, "conversation.retrieval_plan",
+                    _logger, "conversation.retrieval_request",
                     conversation_id=user_input.conversation_id,
                     user_text=user_input.text, retrieval_query=retrieval_query,
                     retrieval_method=retrieval_method,
@@ -938,57 +1133,63 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     continuity=continuity,
                 )
 
-                # Rank devices, tools, and memories independently. A bad device
-                # shortlist must never suppress the correct capability.
+                # Retrieve a broad device pool alongside memories, then provide
+                # the resolved device context to tool ranking. Device mismatch
+                # remains neutral, so context can boost compatible capabilities
+                # without suppressing recovery.
                 async with asyncio.TaskGroup() as retrieval_tasks:
                     memory_task = retrieval_tasks.create_task(self._async_retrieve_memories(query_embedding, memory_limit))
                     min_devices, max_devices, min_tools, max_tools = self._configured_retrieval_ranges(
                         self.runtime_options
                     )
-                    tool_retrieval_query = RetrievalHelper.build_tool_search_query(
-                        retrieval_query, "", []
-                    )
-                    device_task = retrieval_tasks.create_task(self._async_retrieve_devices(
-                        query_embedding,
-                        retrieval_query,
-                        n_devices=min_devices,
-                        continuity=continuity,
-                        current_area=current_area,
-                        current_floor=current_floor,
-                        max_devices=max_devices,
-                    ))
-                    if llm_api:
-                        tool_task = retrieval_tasks.create_task(self._async_retrieve_tools(
+                    device_task = retrieval_tasks.create_task(
+                        self._async_retrieve_devices(
                             query_embedding,
-                            tool_retrieval_query,
-                            n_tools=min_tools,
+                            retrieval_query,
+                            n_devices=min_devices,
                             continuity=continuity,
-                            devices=[],
-                            max_tools=max_tools,
-                        ))
-                    else:
-                        tool_task = None
+                            current_area=current_area,
+                            current_floor=current_floor,
+                            max_devices=max_devices,
+                        )
+                    )
 
                 retrieved_memories = memory_task.result()
                 retrieved_devices = device_task.result()
-                retrieved_tools = tool_task.result() if tool_task else []
+                log_timing("retrieval: devices and memories")
+
+                retrieved_tools = await self._async_retrieve_tools(
+                    query_embedding,
+                    retrieval_query,
+                    n_tools=min_tools,
+                    continuity=continuity,
+                    devices=retrieved_devices,
+                    max_tools=max_tools,
+                ) if llm_api else []
+                log_timing("retrieval: tools")
                 log_debug_payload(
                     _logger, "conversation.retrieval_result",
                     conversation_id=user_input.conversation_id,
                     retrieval_query=retrieval_query,
-                    tool_retrieval_query=tool_retrieval_query,
                     devices=retrieved_devices, tools=retrieved_tools,
                     memories=retrieved_memories, continuity=continuity,
                 )
 
-                log_timing(
-                    f"Step 2 retrieved {len(retrieved_devices)} devices, "
-                    f"{len(retrieved_tools)} tools and "
-                    f"{len(retrieved_memories)} memories"
-                )
-
                 retrieved_tools = self._ensure_required_tools_exposed(retrieved_tools, llm_api)
                 retrieved_tools = self._exclude_prohibited_scheduled_request_tools(retrieved_tools, scheduled_request)
+                required_tool_count = sum(
+                    tool.name in set(RAGENT_PREFIXED_REQUIRED_TOOL_NAMES)
+                    for tool in retrieved_tools
+                )
+                optional_tool_count = len(retrieved_tools) - required_tool_count
+                _logger.debug(
+                    "RAGent retrieval exposure: devices=%d/%d tools_optional=%d/%d "
+                    "tools_required=%d tools_total=%d memories=%d",
+                    len(retrieved_devices), max_devices,
+                    optional_tool_count, max_tools,
+                    required_tool_count, len(retrieved_tools),
+                    len(retrieved_memories),
+                )
 
                 device_list = []
                 for device in retrieved_devices:
@@ -1066,7 +1267,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 log_timing("model and tool processing")
                 return result
         except Exception as err:
-            _logger.error(f"Unexpected error in async_process: {err}")
+            _logger.exception("Unexpected error in async_process: %s", err)
             intent_response = intent.IntentResponse(language=user_input.language)
             intent_response.async_set_error(intent.IntentResponseErrorCode.FAILED_TO_HANDLE, self.entry.translations.error(TRANSLATION_ERROR_UNEXPECTED))
             return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)

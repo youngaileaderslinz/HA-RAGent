@@ -265,14 +265,14 @@ class ChromaDbBackend(ABaseDbBackend):
             distance_rows = result.get("distances") or []
             metadatas = metadata_rows[0] if metadata_rows else []
             distances = distance_rows[0] if distance_rows else []
-            return [
+            return self.sort_scored_results([
                 ScoredResult(
                     object_type.parse_object(metadata),
                     1.0 / (1.0 + max(0.0, float(distance))),
                     rank,
                 )
                 for rank, (metadata, distance) in enumerate(zip(metadatas, distances), start=1)
-            ]
+            ], top_k)
         except Exception as err:
             _logger.error(f"Error retrieving scored objects: {err}", exc_info=True)
             return []

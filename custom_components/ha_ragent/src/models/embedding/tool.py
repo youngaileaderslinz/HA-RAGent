@@ -113,7 +113,12 @@ class LlmTool(SerializableModel, EmbeddableModel):
         """Return explicit target domains declared by the tool schema."""
         domains = set(self.schema_domains)
         if self.metadata:
-            domains.update(self.metadata.supported_domains)
+            metadata_domains = (
+                self.metadata.get("supported_domains", ())
+                if isinstance(self.metadata, dict)
+                else self.metadata.supported_domains
+            )
+            domains.update(metadata_domains or ())
         return tuple(sorted(domains))
 
     @property
@@ -127,19 +132,11 @@ class LlmTool(SerializableModel, EmbeddableModel):
                 canonical_name,
                 self.canonical_action,
                 *self.canonical_supported_domains,
-                self.family,
                 self.description,
                 *self.canonical_schema_parts,
             )
             if value
         )
-
-    @property
-    def family(self) -> str:
-        """Determine the family of the tool based on its metadata or name."""
-        if self.metadata and self.metadata.family:
-            return self.metadata.family
-        return ""
 
     @staticmethod
     def split_canonical_name(name: str) -> tuple[str, ...]:
@@ -148,10 +145,16 @@ class LlmTool(SerializableModel, EmbeddableModel):
     
     def to_dict(self) -> dict[str, Any]:
         """Return a dictionary representation of the tool."""
+        metadata = self.metadata.to_dict() if self.metadata else None
+        if metadata is not None:
+            # Existing indexes can contain metadata written before schema
+            # domains were extracted. Always serialize the live schema-derived
+            # value so re-exposure does not preserve stale empty metadata.
+            metadata["supported_domains"] = list(self.canonical_supported_domains)
         return {
             "name": self.name,
             "description": self.description,
-            "metadata": self.metadata.to_json_str() if self.metadata else None,
+            "metadata": json.dumps(metadata) if metadata is not None else None,
             "parameters": json.dumps(self.parameters)
         }
 
@@ -175,7 +178,6 @@ class LlmTool(SerializableModel, EmbeddableModel):
             "canonical parts",
             " ".join(self.canonical_name_parts),
         )
-        self.append_if_exists(parts, "family", self.family)
         self.append_if_exists(parts, "action", self.canonical_action)
         self.append_if_exists(
             parts,

@@ -204,7 +204,32 @@ class HistoryManager:
             for message in turn:
                 if isinstance(message, conversation.ToolResultContent):
                     result = getattr(message, "tool_result", None)
+                    execution_status = result.get("execution_status") if isinstance(result, dict) else None
+                    if isinstance(execution_status, dict):
+                        self._add_values(actions, execution_status.get("executed_capability"))
+                        self._add_values(device_classes, execution_status.get("device_classes"))
+                        unresolved_targets = execution_status.get("unresolved_targets", [])
+                        self._collect_search_candidates(
+                            {"candidate_devices": unresolved_targets},
+                            ambiguous_entities,
+                        )
+                        requested = execution_status.get("requested_capabilities", [])
+                        if isinstance(requested, dict):
+                            requested = [requested]
+                        if isinstance(requested, list):
+                            for capability in requested:
+                                if not isinstance(capability, dict):
+                                    continue
+                                self._add_values(actions, capability.get("action"))
+                                self._add_values(
+                                    domains,
+                                    capability.get("domains", capability.get("domain")),
+                                )
                     if not MessageHelper.tool_result_succeeded(result):
+                        # Do not persist failed model-supplied identifiers:
+                        # they may be invented and therefore are not retrieval
+                        # evidence. Retrieved candidates are collected through
+                        # successful search results and validated separately.
                         continue
                     tool_name = str(getattr(message, "tool_name", "") or "")
                     if self._is_semantic_search(tool_name):
@@ -222,10 +247,6 @@ class HistoryManager:
                         device_classes,
                         ambiguous_entities,
                     )
-                    execution_status = result.get("execution_status") if isinstance(result, dict) else None
-                    if isinstance(execution_status, dict):
-                        self._add_values(actions, execution_status.get("executed_capability"))
-
                     tool_call = self._take_matching_tool_call(
                         message,
                         calls_by_id,
@@ -271,6 +292,17 @@ class HistoryManager:
                         ))
 
             created_at = getattr(user_message, "created_at", None)
+            if not hasattr(created_at, "timestamp"):
+                # Some HA content implementations omit the user timestamp but
+                # retain it on another message in the turn.
+                created_at = next(
+                    (
+                        getattr(message, "created_at", None)
+                        for message in turn
+                        if hasattr(getattr(message, "created_at", None), "timestamp")
+                    ),
+                    dt_util.utcnow(),
+                )
             timestamp = created_at.timestamp() if hasattr(created_at, "timestamp") else None
             text = str(getattr(user_message, "content", "") or "").strip()
             key = "\x1f".join((

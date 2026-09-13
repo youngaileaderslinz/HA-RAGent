@@ -24,7 +24,6 @@ def normalize_canonical_text(text: object) -> str:
 
 @dataclass
 class ToolMetadata(SerializableModel):
-    family: str = None
     is_domain_aware: bool = False
     is_area_aware: bool = False
     is_device_class_aware: bool = False
@@ -36,7 +35,6 @@ class ToolMetadata(SerializableModel):
     def to_dict(self) -> dict[str, Any]:
         """Return a dictionary representation of the tool metadata."""
         return {
-            "family": self.family,
             "canonical_action": self.canonical_action,
             "supported_domains": list(self.supported_domains),
             "expected_states": list(self.expected_states),
@@ -49,7 +47,6 @@ class ToolMetadata(SerializableModel):
     def from_dict(data: dict[str, Any]) -> 'ToolMetadata':
         """Create a ToolMetadata instance from a dictionary."""
         return ToolMetadata(
-            family=data.get("family", None),
             canonical_action=data.get("canonical_action", ""),
             supported_domains=tuple(data.get("supported_domains") or ()),
             expected_states=tuple(data.get("expected_states") or ()),

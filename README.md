@@ -24,6 +24,19 @@ Changes to the default system prompt apply only to newly created RAGent entries.
 ### Exposed Script Entities:
 Scripts will be passed as tools and are excluded from device embeddings. Only scripts that are exposed to conversation/assist will be visible.
 
+Custom scripts that act on entities should return the affected entity IDs so HA-RAGent can preserve target continuity and verify state. Both a direct Home Assistant-style result and a wrapper result are supported. The wrapper format is:
+
+```json
+{
+  "success": true,
+  "result": {
+    "success": ["media_player.living_room"]
+  }
+}
+```
+
+`result.success` may be one entity ID string or a list of entity IDs. The outer `success` reports whether the script completed; the nested value identifies the targets that actually succeeded.
+
 ### OpenAI-Compatible Backends
 OpenAI-compatible backends have currently been tested only with llamaccp. Compatibility with other providers is not guaranteed, so test the selected backend thoroughly before using it in production.
 
@@ -109,10 +122,10 @@ Use the `Add Integration` button in the bottom right to add a new integration ca
     - **Lexical search** uses names, aliases and metadata without semantic similarity
 - `Tools excluded from embedding`
     - Excludes selected tool names from the vector index. Names are matched exactly and are case-sensitive
-- `Number of Devices`
-    - Controls how many relevant entity candidates are retrieved and added to the prompt
-- `Number of Tools`
-    - Controls how many relevant tools are retrieved and offered to the model (required HA-RAGent tools do not count to this limit)
+- `Minimum Number of Devices` / `Maximum Number of Devices`
+    - Defaults to `4` / `6`. Confident retrieval uses the minimum; uncertain or ambiguous retrieval expands up to the maximum.
+- `Minimum Number of Tools` / `Maximum Number of Tools`
+    - Defaults to `4` / `6`. Confident retrieval uses the minimum; uncertain retrieval expands up to the maximum (required HA-RAGent tools do not count toward either limit).
 - `Number of Long-Term Memories`
     - Controls how many semantically relevant, explicitly stored memories are added to each prompt. Set it to `0` to disable recall without deleting memories.
 - `Maximum Memory Entries`

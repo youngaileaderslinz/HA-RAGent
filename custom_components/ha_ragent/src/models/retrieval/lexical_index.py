@@ -23,8 +23,13 @@ def normalize(text: str) -> str:
 def features(text: str) -> Counter[str]:
     text = normalize(text)
     terms = Counter("w:" + word for word in text.split())
-    # Whole-text character features also work for scripts without word spaces.
-    terms.update("c:" + text[i:i + 3] for i in range(max(0, len(text) - 2)))
+    # Character 3-5 grams retain robust matching for compounds, morphology,
+    # spelling variants, and scripts without word boundaries.
+    terms.update(
+        f"c{size}:" + text[index:index + size]
+        for size in range(3, 6)
+        for index in range(max(0, len(text) - size + 1))
+    )
     return terms
 
 
