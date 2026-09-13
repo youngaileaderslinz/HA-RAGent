@@ -69,7 +69,7 @@ class ToolExtractor:
                 universal = universal or nested_universal
             return values, universal
 
-        if callable(validator) and getattr(validator, "__name__", "") == "string":
+        if callable(validator) and getattr(validator, "__name__", "") in {"string", "str"}:
             return set(), True
 
         return set(), False

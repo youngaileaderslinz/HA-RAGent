@@ -256,14 +256,13 @@ def test_discovered_tools_are_converted_for_next_iteration() -> None:
                 "name": "HassTurnOn",
                 "description": "Turn on a target",
                 "parameters": {"properties": {"name": {"type": "string"}}},
-                "metadata": {"family": "power", "is_domain_aware": True},
+                "metadata": {"is_domain_aware": True},
             }],
         },
         existing_names,
     )
 
     assert [tool.name for tool in discovered] == ["HassTurnOn"]
-    assert discovered[0].metadata.family == "power"
     assert discovered[0].metadata.is_domain_aware is True
     assert "HassTurnOn" in existing_names
 

@@ -20,6 +20,39 @@ from custom_components.ha_ragent.src.models.retrieval.scored_result import Score
 from custom_components.ha_ragent.src.models.retrieval.turn_context import TurnContext
 
 
+@pytest.mark.parametrize("user_text", [
+    "Schalte die Küchenlampe ein",
+    "Allume la lampe de la cuisine",
+    "أضئ مصباح المطبخ",
+    "厨房のランプをつけて",
+])
+def test_multilingual_requests_keep_command_text_for_retrieval(user_text):
+    """Retrieval receives the complete request; no language phrase is removed."""
+    assert RetrievalHelper.build_retrieval_text(user_text) == user_text
+
+
+@pytest.mark.parametrize("query,alias", [
+    ("Schalte die Küchenlampe ein", "Küchenlampe"),
+    ("Allume la lampe de la cuisine", "lampe de la cuisine"),
+    ("أضئ مصباح المطبخ", "مصباح المطبخ"),
+    ("厨房のランプをつけて", "厨房のランプ"),
+])
+def test_multilingual_target_aliases_rank_without_keyword_rules(query, alias):
+    target = Device("light.kitchen", "Kitchen lamp", "Kitchen", "", aliases=[alias])
+    unrelated = Device("switch.bedroom", "Bedroom switch", "Bedroom", "")
+
+    result = RetrievalHelper.rank_scored_candidates(
+        [ScoredResult(unrelated, 0.9, 1)],
+        [unrelated, target],
+        query,
+        lambda device: device.id,
+        lambda device: (device.friendly_name, *(device.aliases or ())),
+        1,
+    )
+
+    assert result == [target]
+
+
 @pytest.mark.parametrize(
     ("configured", "expected"),
     [
@@ -61,9 +94,8 @@ def test_raw_commands_and_group_words_never_resolve_a_target_by_themselves(query
 def test_unknown_tool_compatibility_is_neutral_even_with_an_english_name():
     tool = LlmTool("HassLock", "Lock a door", parameters={})
     signals = RetrievalHelper.tool_ranking_signals(tool, "Licht einschalten", [{"domain": ["light"]}])
-    assert signals["domain"] == 0
     assert tool.canonical_action == ""
-    assert tool.family == ""
+    assert signals["device_relevance"] == 0
 
 
 def test_declared_capabilities_round_trip_without_name_inference():
@@ -72,8 +104,50 @@ def test_declared_capabilities_round_trip_without_name_inference():
     restored = LlmTool.from_dict(tool.to_dict())
     assert restored.canonical_action == "vendor_mode"
     assert restored.canonical_supported_domains == ("fan",)
-    assert RetrievalHelper.tool_ranking_signals(restored, "", [{"domain": ["fan"]}])["domain"] > 0
-    assert RetrievalHelper.tool_ranking_signals(restored, "", [{"domain": ["light"]}])["domain"] < 0
+
+
+@pytest.mark.parametrize("query", [
+    "stop playback", "Wiedergabe anhalten", "arrêter la lecture", "再生を停止",
+])
+def test_translated_requests_use_the_same_structured_capability(query):
+    stop = LlmTool(
+        "vendor__MediaControlA",
+        "Opaque media control",
+        metadata=ToolMetadata(canonical_action="stop", supported_domains=("media_player",)),
+    )
+    pause = LlmTool(
+        "vendor__MediaControlB",
+        "Opaque media control",
+        metadata=ToolMetadata(canonical_action="pause", supported_domains=("media_player",)),
+    )
+    result = RetrievalHelper.rank_tool_candidates(
+        [], [pause, stop], query, [], 2,
+        requested_capability={"action": "stop", "domain": "media_player"},
+    )
+    assert result == [stop]
+
+
+def test_media_and_timer_capabilities_do_not_collide():
+    media_stop = LlmTool(
+        "vendor__A",
+        "Stop something",
+        metadata=ToolMetadata(canonical_action="stop", supported_domains=("media_player",)),
+    )
+    timer_stop = LlmTool(
+        "vendor__B",
+        "Stop something",
+        metadata=ToolMetadata(canonical_action="stop", supported_domains=("timer",)),
+    )
+    unpause = LlmTool(
+        "vendor__C",
+        "Control playback",
+        metadata=ToolMetadata(canonical_action="unpause", supported_domains=("media_player",)),
+    )
+    result = RetrievalHelper.rank_tool_candidates(
+        [], [timer_stop, unpause, media_stop], "", [], 3,
+        requested_capability={"action": "stop", "domain": "media_player"},
+    )
+    assert result == [media_stop]
 
 
 def test_area_and_floor_aliases_round_trip_and_are_searchable():
@@ -136,7 +210,7 @@ def test_recent_unfinished_conversation_is_retained_without_embeddings():
 
 
 @pytest.mark.parametrize("mode,query,embeddings,vectors,lexical", [
-    ("automatic", "Küchenlampe", 0, 0, 1),
+    ("automatic", "Küchenlampe", 1, 1, 1),
     ("automatic", "schalte sie ein", 1, 1, 1),
     ("lexical", "schalte sie ein", 0, 0, 1),
     ("vector", "Küchenlampe", 1, 1, 0),

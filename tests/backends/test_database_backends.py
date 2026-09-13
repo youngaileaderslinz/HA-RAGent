@@ -35,7 +35,24 @@ from custom_components.ha_ragent.src.models.embedding.memory_embedding import Me
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_embedding import LlmToolEmbedding
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
+from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
+
 EMBEDDING_DIMENSION = 3
+
+
+def test_backend_score_boundary_returns_only_sorted_top_results() -> None:
+    results = [
+        ScoredResult("low", 0.2, 1),
+        ScoredResult("top", 0.9, 3),
+        ScoredResult("runner", 0.8, 2),
+    ]
+
+    selected = ABaseDbBackend.sort_scored_results(results, top_k=2)
+
+    assert [(result.item, result.score, result.rank) for result in selected] == [
+        ("top", 0.9, 1),
+        ("runner", 0.8, 2),
+    ]
 
 
 MOCK_FAISS_DB_CONFIG = {CONF_VECTOR_DB_NAME: "ha_ragent_test"}

@@ -15,6 +15,23 @@ from custom_components.ha_ragent.src.models.embedding.memory_embedding import Me
 from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 
+def test_missing_translation_language_falls_back_to_english() -> None:
+    RAGentTranslations._cache.clear()
+
+    missing = RAGentTranslations._load("missing")
+    english = RAGentTranslations._load("en")
+
+    assert missing == english
+
+
+def test_missing_translation_values_use_safe_defaults() -> None:
+    translations = RAGentTranslations.__new__(RAGentTranslations)
+    translations._data = {}
+
+    assert translations.get("Tools", "missing_tool", "fallback") == "fallback"
+    assert not translations.has_tool("missing_tool")
+
+
 class FakeEmbedder:
     async def async_embed_text(self, config: dict[str, Any], text: str) -> list[float]:
         return [1.0, float(len(text)), 0.5]

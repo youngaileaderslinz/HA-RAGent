@@ -1,16 +1,28 @@
 import asyncio
+import json
 import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
+from custom_components.ha_ragent.src import const
+from custom_components.ha_ragent.src.const import (
+    CONF_RETRIEVAL_METHOD,
+    RETRIEVAL_METHOD_AUTOMATIC,
+    RETRIEVAL_METHOD_LEXICAL,
+    RETRIEVAL_METHOD_VECTOR,
+)
+from custom_components.ha_ragent.src.homeassistant.ragent import RAGent
 from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
+from custom_components.ha_ragent.src.models.embedding.device import Device
+from custom_components.ha_ragent.src.models.retrieval.continuity_context import ContinuityContext
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.retrieval.lexical_index import lexical_index
-from custom_components.ha_ragent.src.models.retrieval.continuity_context import ContinuityContext
-from custom_components.ha_ragent.src.homeassistant.ragent import RAGent
-from custom_components.ha_ragent.src.const import CONF_RETRIEVAL_METHOD
+from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
+from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
+from custom_components.ha_ragent.src.homeassistant.ragent_api import RAGentAugmentedAPIInstance
+from custom_components.ha_ragent.src.homeassistant.tools.search_tools import RAGentSemanticSearchTool
 
 
 @pytest.mark.parametrize("query,name", [("ab", "xabz"), ("x", "xyz"), ("厨房", "厨房吊灯"), ("مص", "مصباح")])
@@ -62,3 +74,19 @@ def test_request_ranking_runs_outside_event_loop(monkeypatch):
         subentry_id="agent",
     )
     assert asyncio.run(RAGent._async_retrieve_tools(agent, [], "capability", 1, ContinuityContext())) == [tool]
+
+
+def test_initial_capabilities_remain_available_without_semantic_search() -> None:
+    search = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+    search._requested_capabilities = []
+    api = RAGentAugmentedAPIInstance.__new__(RAGentAugmentedAPIInstance)
+    api.tools = [search]
+    api._initial_requested_capabilities = []
+
+    api.set_request_capabilities([
+        {"action": "turn_on", "domains": ("switch",)},
+    ])
+
+    assert api.requested_capabilities() == [
+        {"action": "turn_on", "domains": ("switch",)},
+    ]
