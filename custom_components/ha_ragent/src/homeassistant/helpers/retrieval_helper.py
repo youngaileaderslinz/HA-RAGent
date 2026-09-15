@@ -2,17 +2,12 @@ from __future__ import annotations
 
 import logging
 import math
-import time
 import unicodedata
 from collections.abc import Callable, Iterable
-from dataclasses import asdict, dataclass, replace
+from dataclasses import replace
 from typing import Any, TypeVar
 
 from custom_components.ha_ragent.src.const import (
-    CONF_RETRIEVAL_METHOD,
-    RETRIEVAL_METHOD_AUTOMATIC,
-    RETRIEVAL_METHOD_LEXICAL,
-    RETRIEVAL_METHOD_VECTOR,
     DEVICE_CONFIDENCE_NEAR_TIE_MARGIN,
     TOOL_CONFIDENCE_NEAR_TIE_MARGIN,
     DEVICE_SELECTION_ABSOLUTE_FLOOR,
@@ -21,6 +16,12 @@ from custom_components.ha_ragent.src.const import (
     DEVICE_CONTINUITY_MAX_BOOST,
 )
 from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
+from custom_components.ha_ragent.src.models.retrieval.confidence_assessment import (
+    ConfidenceAssessment,
+)
+from custom_components.ha_ragent.src.models.retrieval.confidence_profile import (
+    ConfidenceProfile,
+)
 from custom_components.ha_ragent.src.models.retrieval.continuity_context import ContinuityContext
 from custom_components.ha_ragent.src.models.retrieval.turn_context import TurnContext
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import (
@@ -29,41 +30,12 @@ from custom_components.ha_ragent.src.models.embedding.tool_metadata import (
 
 from custom_components.ha_ragent.src.models.retrieval.lexical_index import lexical_index, match_features, match_score
 from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
+from custom_components.ha_ragent.src.homeassistant.helpers.source_retriever import SourceRetriever
+from custom_components.ha_ragent.src.homeassistant.helpers.history_retriever import HistoryRetriever
 from custom_components.ha_ragent.src.logging import log_debug_payload
-from custom_components.ha_ragent.src.utils import get_setting_value
 
 T = TypeVar("T")
 _logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class ConfidenceProfile:
-    """Minimal confidence threshold used for near-tie detection."""
-
-    near_tie_margin: float
-
-
-@dataclass(frozen=True)
-class ConfidenceAssessment:
-    """Explainable confidence derived from a local candidate distribution."""
-
-    level: str
-    top_score: float = 0.0
-    second_score: float = 0.0
-    margin: float = 0.0
-    ratio: float = 0.0
-    agreeing_signals: tuple[str, ...] = ()
-    disagreeing_signals: tuple[str, ...] = ()
-    reason: str = "no candidates"
-    candidate_scores: tuple[tuple[str, float], ...] = ()
-    candidate_support: tuple[tuple[str, tuple[str, ...]], ...] = ()
-    final_candidate_scores: tuple[tuple[str, float], ...] = ()
-    continuity_boosts: tuple[tuple[str, float], ...] = ()
-    absolute_strength: float = 0.0
-    independent_signal_count: int = 0
-
-    def to_dict(self) -> dict[str, object]:
-        return asdict(self)
 
 
 # These profiles are deliberately separate and dimensionless. Scores are
@@ -82,82 +54,18 @@ class RetrievalHelper:
 
     @staticmethod
     def retrieval_method(options: dict) -> str:
-        method = str(get_setting_value(CONF_RETRIEVAL_METHOD, options)).strip().lower()
-        return method if method in {
-            RETRIEVAL_METHOD_AUTOMATIC, RETRIEVAL_METHOD_LEXICAL, RETRIEVAL_METHOD_VECTOR,
-        } else RETRIEVAL_METHOD_AUTOMATIC
+        """Return the configured source-retrieval mode."""
+        return SourceRetriever.retrieval_method(options)
 
     @staticmethod
     async def async_retrieve_sources(
         backend: Any, object_type: type, options: dict, collection: str,
         embedding: list[float] | QueryEmbedding, limit: int, query: str = "",
     ) -> tuple[list, list]:
-        """Retrieve exactly the sources selected by the configured method."""
-        if limit <= 0:
-            return [], []
-        method = RetrievalHelper.retrieval_method(options)
-        log_debug_payload(
-            _logger, "retrieval.sources.request", collection=collection,
-            object_type=getattr(object_type, "__name__", str(object_type)),
-            method=method, query=query, limit=limit,
-            embedding_deferred=isinstance(embedding, QueryEmbedding),
+        """Retrieve and combine sources through the specialized retrievers."""
+        return await SourceRetriever.async_retrieve_sources(
+            backend, object_type, options, collection, embedding, limit, query,
         )
-        lexical = []
-        if method != RETRIEVAL_METHOD_VECTOR:
-            try:
-                lexical = await backend.async_get_lexical_objects(
-                    object_type, options, collection,
-                )
-            except Exception as err:
-                _logger.warning("Lexical retrieval failed for %s: %s", collection, err)
-        if method == RETRIEVAL_METHOD_LEXICAL:
-            log_debug_payload(
-                _logger, "retrieval.sources.result", collection=collection,
-                method=method, vector=[], lexical=lexical,
-            )
-            return [], lexical
-        if isinstance(embedding, QueryEmbedding):
-            try:
-                embedding = await embedding.get()
-            except Exception as err:
-                _logger.warning("Query embedding failed for %s: %s", collection, err)
-                log_debug_payload(
-                    _logger, "retrieval.sources.result", collection=collection,
-                    method=method, vector=[], lexical=lexical,
-                    failure={"stage": "embedding", "error": repr(err)},
-                )
-                return [], lexical
-        if not embedding:
-            log_debug_payload(
-                _logger, "retrieval.sources.result", collection=collection,
-                method=method, vector=[], lexical=lexical,
-                failure={"stage": "embedding", "error": "empty embedding"},
-            )
-            return [], lexical
-        try:
-            raw_vector = await backend.async_retrieve_scored_objects(
-                object_type, options, collection, embedding, limit,
-            )
-            vector = [
-                ScoredResult(result.item, result.score, rank)
-                for rank, result in enumerate(
-                    sorted(raw_vector, key=lambda result: (-result.score, result.rank)),
-                    start=1,
-                )
-            ]
-            log_debug_payload(
-                _logger, "retrieval.sources.result", collection=collection,
-                method=method, embedding=embedding, vector=vector, lexical=lexical,
-            )
-            return vector, lexical
-        except Exception as err:
-            _logger.warning("Vector retrieval failed for %s: %s", collection, err)
-            log_debug_payload(
-                _logger, "retrieval.sources.result", collection=collection,
-                method=method, embedding=embedding, vector=[], lexical=lexical,
-                failure={"stage": "vector", "error": repr(err)},
-            )
-            return [], lexical
 
     @staticmethod
     def local_candidates_confident(query: str, items: Iterable[Any]) -> bool:
@@ -416,10 +324,6 @@ class RetrievalHelper:
         query = trusted_query or fallback_query
         if trusted_query and fallback_query and fallback_query != trusted_query:
             query += f"\n{fallback_query}"
-        return query
-
-    @staticmethod
-    def _tool_query_text(query: str) -> str:
         return query
 
     @staticmethod
@@ -968,22 +872,11 @@ class RetrievalHelper:
 
     @staticmethod
     def build_retrieval_text(current_request: str) -> str:
-        """Build a language-neutral query from only the current request."""
-        return " ".join(current_request.split())
+        return HistoryRetriever.build_retrieval_text(current_request)
 
     @staticmethod
     def cosine_similarity(left: Iterable[float], right: Iterable[float]) -> float:
-        """Return cosine similarity for two embedding vectors."""
-        left = list(left)
-        right = list(right)
-        if len(left) != len(right) or not left:
-            return 0.0
-        dot_product = sum(a * b for a, b in zip(left, right))
-        left_norm = math.sqrt(sum(value * value for value in left))
-        right_norm = math.sqrt(sum(value * value for value in right))
-        if not left_norm or not right_norm:
-            return 0.0
-        return dot_product / (left_norm * right_norm)
+        return HistoryRetriever.cosine_similarity(left, right)
 
     @staticmethod
     def select_history_contexts(
@@ -994,83 +887,13 @@ class RetrievalHelper:
         limit: int = 3,
         now: float | None = None,
     ) -> list[tuple[TurnContext, float]]:
-        """Select semantic history with decay plus a small short-term signal."""
-        now = time.time() if now is None else now
-        contexts = list(contexts)
-        selected: dict[str, tuple[TurnContext, float]] = {}
-        for index, context in enumerate(contexts):
-            fallback_age = float((len(contexts) - index - 1) * 30)
-            age = max(0.0, now - context.created_at) if context.created_at is not None else fallback_age
-            if age > max_age_seconds:
-                continue
-            decay = 0.5 ** (age / 120.0)
-            similarity = max(0.0, RetrievalHelper.cosine_similarity(
-                current_vector,
-                vectors.get(context.key, []),
-            ))
-            relevance = similarity * decay
-            if context.entities or context.target_groups:
-                relevance += 0.3 * decay
-            elif context.has_canonical_context:
-                relevance += 0.05 * decay
-            if similarity >= 0.2:
-                selected[context.key] = (context, relevance)
-
-            # Keep the configured number of recent retained turns, including
-            # clarification questions
-            # with no successful tool result. The existing LLM needs their text
-            # to resolve an unfinished request without a language parser.
-            if index >= len(contexts) - limit:
-                short_term_weight = 0.15 * decay
-                previous = selected.get(context.key)
-                if previous is None or short_term_weight > previous[1]:
-                    selected[context.key] = (context, short_term_weight)
-
-        result = sorted(selected.values(), key=lambda item: item[1], reverse=True)[:limit]
-        log_debug_payload(
-            _logger, "continuity.history_selection", contexts=contexts,
-            vectors=vectors, current_vector=current_vector,
-            max_age_seconds=max_age_seconds, limit=limit, now=now, selected=result,
+        return HistoryRetriever.select_history_contexts(
+            contexts, vectors, current_vector, max_age_seconds, limit, now,
         )
-        return result
 
     @staticmethod
     def build_continuity_context(selected_contexts: Iterable[tuple[TurnContext, float]]) -> ContinuityContext:
-        """Aggregate selected structured turns into weighted continuity maps."""
-        continuity = ContinuityContext()
-        selected_contexts = list(selected_contexts)
-        for context, weight in selected_contexts:
-            continuity.selected_turn_keys.add(context.key)
-            for attribute in (
-                "entities",
-                "tools",
-                "areas",
-                "floors",
-                "domains",
-                "device_classes",
-                "actions",
-                "ambiguous_entities",
-            ):
-                values = getattr(context, attribute)
-                target = getattr(continuity, attribute)
-                for value in values:
-                    normalized = str(value).casefold()
-                    target[normalized] = max(target.get(normalized, 0.0), weight)
-        recent_contexts = sorted(
-            selected_contexts,
-            key=lambda item: item[0].created_at or 0.0,
-            reverse=True,
-        )
-        continuity.target_groups = [
-            (group, weight)
-            for context, weight in recent_contexts
-            for group in context.target_groups
-        ]
-        log_debug_payload(
-            _logger, "continuity.built", selected_contexts=selected_contexts,
-            continuity=continuity,
-        )
-        return continuity
+        return HistoryRetriever.build_continuity_context(selected_contexts)
 
     @staticmethod
     def adaptive_candidate_limit(limit: int) -> int:
@@ -1081,13 +904,6 @@ class RetrievalHelper:
     def expanded_tool_limit(limit: int) -> int:
         """Expand the exposed tool set for a confidently resolved target."""
         return min(20, limit * 3) if limit > 0 else 0
-
-    @staticmethod
-    def _character_ngrams(text: str, size: int = 3) -> set[str]:
-        compact = text.replace(" ", "")
-        if len(compact) <= size:
-            return {compact} if compact else set()
-        return {compact[index:index + size] for index in range(len(compact) - size + 1)}
 
     @staticmethod
     def _match_scores(query: str, values: Iterable[object]) -> tuple[float, float]:
@@ -1439,8 +1255,8 @@ class RetrievalHelper:
         return result
 
     @staticmethod
-    def target_is_confident(query: str, devices: Iterable[Any], continuity: ContinuityContext) -> bool:
-        """Return whether the current or successful prior target is resolved."""
+    def target_is_confident(query: str, devices: Iterable[Any]) -> bool:
+        """Return whether the current target is resolved."""
         status, _ = RetrievalHelper.device_resolution(query, devices)
         return status == "high"
 
@@ -1568,7 +1384,6 @@ class RetrievalHelper:
     ) -> dict[str, float]:
         """Return independent, extensible signals used to rank a tool."""
         devices = list(devices)
-        query = RetrievalHelper._tool_query_text(query)
         exact, fuzzy = lexical_match if lexical_match is not None else RetrievalHelper._match_scores(
             query,
             getattr(tool, "canonical_search_parts", ()) or (
@@ -1637,7 +1452,6 @@ class RetrievalHelper:
         query: str,
         devices: Iterable[Any],
         limit: int,
-        continuity_score: Callable[[T], float] | None = None,
         requested_capability: object = None,
     ) -> list[T]:
         """Rank a broad tool pool without discarding uncertain candidates."""
@@ -1676,10 +1490,6 @@ class RetrievalHelper:
             for name, tool in candidate_by_name.items()
         }
         device_ranking = RetrievalHelper._rank_only_if_separated(device_scores, 0.0)
-        # Target continuity belongs to device exposure. It must never make a
-        # previously used tool or action more relevant for this request.
-        continuity_scores = {name: 0.0 for name in candidate_by_name}
-        continuity_ranking: list[str] = []
         fused = RetrievalHelper.reciprocal_rank_fusion((
             # Preserve score ties from the vector backend. Converting these
             # to a positional list made equal scores order-dependent.
@@ -1696,7 +1506,6 @@ class RetrievalHelper:
                 "tfidf": corpus_scores[name],
                 "capability": compatibility_scores[name],
                 "device_compatibility": device_scores[name],
-                "continuity": continuity_scores[name],
                 "rrf": fused.get(name, 0.0),
             }
             scored.append(
@@ -1762,14 +1571,11 @@ class RetrievalHelper:
         devices: Iterable[Any],
         requested_capability: object = None,
         vector_results: Iterable[ScoredResult[Any]] = (),
-        continuity_score: Callable[[Any], float] | None = None,
     ) -> ConfidenceAssessment:
         """Measure per-capability confidence from separation and schema evidence."""
         tools = list(tools)
         if not tools:
             return ConfidenceAssessment(level="none")
-        query = RetrievalHelper._tool_query_text(query)
-        devices = list(devices)
         names = [str(getattr(tool, "name", "")) for tool in tools]
         semantic = {
             str(getattr(result.item, "name", "")): result.score
@@ -1799,10 +1605,6 @@ class RetrievalHelper:
         # Confidence pruning uses the exact combined action/broad corpus that
         # determines tool ranking, rather than a separate approximation.
         _action_scores, signals["lexical"] = RetrievalHelper.tool_lexical_scores(tools, query)
-        # Historical tool/action continuity is useful for ordering candidates,
-        # but it is not evidence that the current request is relevant. Keep it
-        # out of confidence classification so an old action cannot certify a
-        # new one without current vector/schema/lexical support.
         return RetrievalHelper.assess_distribution_confidence(
             names,
             signals,
@@ -1822,7 +1624,6 @@ class RetrievalHelper:
     def tool_search_confidence(
         tools: Iterable[Any], query: str, devices: Iterable[Any], requested_capability: object = None,
         vector_results: Iterable[ScoredResult[Any]] = (),
-        continuity_score: Callable[[Any], float] | None = None,
     ) -> str:
         """Return the explainable distribution-confidence level."""
         return RetrievalHelper.tool_search_confidence_details(
@@ -1831,7 +1632,6 @@ class RetrievalHelper:
             devices,
             requested_capability,
             vector_results,
-            continuity_score,
         ).level
 
     @staticmethod

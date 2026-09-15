@@ -40,20 +40,6 @@ class ContinuityContext:
             + 0.2 * self._maximum(self.floors, [floor])
         )
 
-    def device_score(self, device: object) -> float:
-        """Combine only entity and location continuity for device ranking."""
-        return (
-            self.entity_score(device)
-            + self.ambiguous_entity_score(device)
-            + self.area_score(device)
-        )
-
-    def tool_score(self, tool: object) -> float:
-        """Return a continuity boost for a tool candidate."""
-        name = str(getattr(tool, "name", "") or "")
-        action = str(getattr(tool, "canonical_action", "") or "")
-        return self._maximum(self.tools, [name]) + 0.5 * self._maximum(self.actions, [action])
-
     def successful_target_score(self, device: object) -> float:
         """Confirm only exact entity membership in a successful target group."""
         entity_id = str(getattr(device, "id", "") or "").casefold()
