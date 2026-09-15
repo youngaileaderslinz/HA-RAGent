@@ -24,7 +24,8 @@
     "tool_domains": "It can be used with the Home Assistant domains {value}.",
     "tool_expected_states": "The expected resulting states are {value}.",
     "tool_description": "Use this tool when {value}.",
-    "memory_content": "Content: {content}"
+    "memory_content": "Content: {content}",
+    "turn_target_group": "target group: {value}"
   },
   "Error messages": {
     "backend_error": "Sorry, there was a problem talking to the backend.",

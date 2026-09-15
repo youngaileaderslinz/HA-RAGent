@@ -13,9 +13,7 @@ class EmbeddableModel(ABC):
 
         from custom_components.ha_ragent.src.translation import RAGentTranslations
 
-        if "en" not in RAGentTranslations._cache:
-            RAGentTranslations._load("en")
-        return RAGentTranslations("en")
+        return RAGentTranslations.default("en")
 
     @staticmethod
     def append_if_exists(parts_list: list[str], format_str: str, value: str | None) -> None:

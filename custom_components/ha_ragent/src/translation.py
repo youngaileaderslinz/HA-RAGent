@@ -38,6 +38,14 @@ class RAGentTranslations:
         RAGentTranslations._cache[language] = data
         return data
 
+    @classmethod
+    def default(cls, language: str = "en") -> "RAGentTranslations":
+        """Return a synchronously available translation service for pure models."""
+        normalized = language.split("-")[0].lower()
+        if normalized not in cls._cache:
+            cls._load(normalized)
+        return cls(normalized)
+
     def _section(self, name: str) -> dict[str, Any]:
         value = self._data.get(name, {})
         return value if isinstance(value, dict) else {}

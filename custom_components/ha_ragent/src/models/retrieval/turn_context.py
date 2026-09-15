@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from custom_components.ha_ragent.src.models.retrieval.target_group import TargetGroup
+from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 @dataclass
 class TurnContext:
@@ -18,7 +19,9 @@ class TurnContext:
     target_groups: tuple[TargetGroup, ...] = ()
     created_at: float | None = None
 
-    def to_embedding_text(self) -> str:
+    def to_embedding_text(self, translations: RAGentTranslations | None = None) -> str:
+        """Return compact conversational context for semantic embedding."""
+        translations = translations or RAGentTranslations.default("en")
         values = [
             self.text,
             *self.entities,
@@ -31,7 +34,7 @@ class TurnContext:
             *self.ambiguous_entities,
         ]
         values.extend(
-            "target group: " + " ".join((
+            translations.embedding("turn_target_group", value=" ".join((
                 *group.entities,
                 *group.areas,
                 *group.floors,
@@ -39,7 +42,7 @@ class TurnContext:
                 *group.device_classes,
                 group.tool,
                 group.action,
-            ))
+            )))
             for group in self.target_groups
         )
         return " | ".join(value for value in values if value)

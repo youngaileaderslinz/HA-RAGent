@@ -2,6 +2,7 @@ import logging
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry, device_registry, entity_registry, floor_registry, label_registry, llm
+from homeassistant.helpers import service as service_helper
 from homeassistant.components.homeassistant.exposed_entities import async_should_expose
 
 from custom_components.ha_ragent.src.models.embedding.device import Device
@@ -15,6 +16,37 @@ class DeviceExtractor:
         self._hass = hass
         self._entry = entry
 
+    @staticmethod
+    def _required_features(description: object) -> int:
+        """Return the supported-feature mask declared by a service description."""
+        required = 0
+        if isinstance(description, dict):
+            for name, value in description.items():
+                if name == "supported_features" and isinstance(value, list):
+                    for feature in value:
+                        try:
+                            required |= int(service_helper.validate_supported_feature(feature))
+                        except Exception:
+                            # Dynamic services may not use HA's feature notation.
+                            continue
+                else:
+                    required |= DeviceExtractor._required_features(value)
+        elif isinstance(description, list):
+            for value in description:
+                required |= DeviceExtractor._required_features(value)
+        return required
+
+    @classmethod
+    def _supported_services(
+        cls, descriptions: dict[str, object], supported_features: int,
+    ) -> list[str]:
+        """Return services whose declared feature requirements the entity meets."""
+        return sorted(
+            service_name
+            for service_name, description in descriptions.items()
+            if not (required := cls._required_features(description))
+            or supported_features & required == required
+        )
 
     async def _async_get_embeddable_devices(self, exposed_entities: list[str]) -> list[Device]:
         area_reg = area_registry.async_get(self._hass)
@@ -22,8 +54,7 @@ class DeviceExtractor:
         entity_reg = entity_registry.async_get(self._hass)
         floor_reg = floor_registry.async_get(self._hass)
         label_reg = label_registry.async_get(self._hass)
-        services_by_domain = self._hass.services.async_services()
-        
+        service_descriptions = await service_helper.async_get_all_descriptions(self._hass)
         devices = []
         
         for entity_id in exposed_entities:
@@ -70,10 +101,10 @@ class DeviceExtractor:
             if entity_entry:
                 aliases = entity_registry.async_get_entity_aliases(self._hass, entity_entry)
 
-            if aliases:
-                friendly_name = aliases[0]
-            
-            services = list(services_by_domain.get(domain, {}))
+            services = self._supported_services(
+                service_descriptions.get(domain, {}),
+                int(state.attributes.get("supported_features", 0) or 0),
+            )
 
             devices.append(Device(
                 id=entity_id,

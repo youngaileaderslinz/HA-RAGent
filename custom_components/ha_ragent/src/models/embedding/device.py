@@ -89,13 +89,14 @@ class Device(SerializableModel, EmbeddableModel):
         cleaned_attributes = attributes.copy()
         for key, value in attributes.items():
             if key in DEVICE_ATTRIBUTES_TO_EXCLUDE:
-                cleaned_attributes.pop(key)
+                cleaned_attributes.pop(key, None)
+                continue
 
             try:
                 json_value = json.dumps(value)
                 if len(json_value) > DEVICE_ATTRIBUTES_MAX_JSON_LENGTH:
-                    cleaned_attributes.pop(key)
+                    cleaned_attributes.pop(key, None)
             except (TypeError, OverflowError):
-                cleaned_attributes.pop(key)
+                cleaned_attributes.pop(key, None)
 
         return cleaned_attributes

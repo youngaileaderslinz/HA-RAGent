@@ -24,7 +24,8 @@
     "tool_domains": "Es kann mit den Home-Assistant-Domains {value} verwendet werden.",
     "tool_expected_states": "Die erwarteten resultierenden Zustände sind {value}.",
     "tool_description": "Verwende dieses Tool, wenn {value}.",
-    "memory_content": "Inhalt: {content}"
+    "memory_content": "Inhalt: {content}",
+    "turn_target_group": "Zielgruppe: {value}"
   },
   "Error messages": {
     "backend_error": "Entschuldigung, bei der Verbindung zum Backend ist ein Fehler aufgetreten.",

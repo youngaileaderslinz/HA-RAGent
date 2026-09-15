@@ -1050,7 +1050,7 @@ class RetrievalHelper:
     @staticmethod
     def _rank_positive_scores(scores: dict[str, float], minimum: float) -> list[str]:
         ranked = sorted(scores.items(), key=lambda pair: pair[1], reverse=True)
-        return [item_key for item_key, score in ranked if score >= minimum]
+        return [item_key for item_key, score in ranked if score > minimum]
 
     @staticmethod
     def _has_strong_current_match(

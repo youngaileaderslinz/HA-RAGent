@@ -144,7 +144,9 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             current_vector = await query_embedding.get() if query_embedding else []
             embedded = await asyncio.gather(*(
                 self._async_embed_retrieval_text(
-                    RetrievalHelper.build_retrieval_text(context.to_embedding_text())
+                    RetrievalHelper.build_retrieval_text(
+                        context.to_embedding_text(self.entry.translations),
+                    )
                 )
                 for context in contexts
             ))
@@ -177,6 +179,10 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         max_tools = max(0, int(get_setting_value(
             CONF_MAX_TOOLS_TO_EXTRACT, runtime_options,
         )))
+        if max_devices:
+            requested_min_devices = min(requested_min_devices, max_devices)
+        if max_tools:
+            requested_min_tools = min(requested_min_tools, max_tools)
         return (
             requested_min_devices,
             max_devices,
@@ -240,6 +246,13 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         def device_metadata_score(device: Device) -> float:
             return device_identity_score(device) + 0.5 * device_location_score(device)
 
+        def device_continuity_score(device: Device) -> float:
+            return (
+                continuity.entity_score(device)
+                + continuity.area_score(device)
+                + continuity.ambiguous_entity_score(device)
+            )
+
         ranked_devices = await asyncio.to_thread(
             RetrievalHelper.rank_scored_candidates,
             scored_devices,
@@ -249,6 +262,8 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             device_text_parts,
             candidate_limit,
             metadata_score=device_metadata_score,
+            continuity_score=device_continuity_score,
+            preserve_score=continuity.successful_target_score,
             trim_confident=False,
         )
         confidence = RetrievalHelper.device_search_confidence(
@@ -261,11 +276,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 "identity_metadata": device_identity_score,
                 "area_floor": device_location_score,
             },
-            continuity_score=lambda device: (
-                continuity.entity_score(device)
-                + continuity.area_score(device)
-                + continuity.ambiguous_entity_score(device)
-            ),
+            continuity_score=device_continuity_score,
             confirmed_score=continuity.successful_target_score,
         )
         query_areas = {
@@ -583,6 +594,14 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             executed_signatures_in_iteration: set[str] = set()
             try:
                 _logger.debug(f"Sending prompt to LLM (Iteration {idx + 1}/{max_tool_call_iterations}).")
+                log_debug_payload(
+                    _logger,
+                    "conversation.llm_request",
+                    level="debug",
+                    iteration=idx + 1,
+                    messages=formatted_messages,
+                    tools=[tool.to_tool_dict() for tool in tool_list],
+                )
                 content_chunks = []
                 async for chunk in self.entry.llm_backend.async_send_chat_request(
                     dict(self.subentry.data),
@@ -735,6 +754,9 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                 execution_call = tool_helper.sanitize_tool_call(
                                     tool_call, selected_metadata, active_candidate_context,
                                 )
+                                tool_helper.validate_tool_arguments(
+                                    execution_call, selected_tool,
+                                )
                                 if (isinstance(llm_api, RAGentAugmentedAPIInstance)
                                     and tool_name.rsplit("__", 1)[-1] == RAGENT_PLANNED_ACTION_TOOL_NAME):
                                     llm_api.set_scheduling_context(
@@ -805,16 +827,19 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                 completed_target_names = {
                                     str(target).casefold() for target in targets
                                 }
-                                unresolved_targets = [
+                                remaining_candidates = [
                                     candidate
                                     for candidate in active_candidate_context
                                     if str(candidate.get("name", "")).casefold()
                                     not in completed_target_names
                                 ]
                                 if tool_succeeded and not tool_helper.is_semantic_search_tool(tool_name):
-                                    active_candidate_context = unresolved_targets
+                                    active_candidate_context = remaining_candidates
                                     if isinstance(llm_api, RAGentAugmentedAPIInstance):
                                         llm_api.prune_search_candidates(completed_target_names)
+                                unresolved_targets = tool_helper.failed_target_candidates(
+                                    tool_call, parsed_tool_result, active_candidate_context,
+                                )
                                 fulfillment_status = "failed"
                                 rediscovery_required = not tool_succeeded
                                 observed_states: dict[str, str | None] = {}
@@ -1004,7 +1029,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     )
                 )
             intent_response.async_set_speech(final_model_speech)
-            has_question = final_model_speech.endswith(("?", ";", "\uff1f"))
+            has_question = final_model_speech.endswith(("?", "\uff1f"))
             continue_conversation = get_setting_value(CONF_ALLOW_QUESTIONS, self.runtime_options) and has_question
         elif unresolved_capabilities:
             intent_response.async_set_speech(
@@ -1188,7 +1213,14 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                         continue
 
                     device.state = st.state
-                    device.attributes = Device.clean_attributes(st.attributes)
+                    attributes = Device.clean_attributes(st.attributes)
+                    if "light" in (device.domain or []):
+                        brightness = attributes.pop("brightness", None)
+                        if isinstance(brightness, (int, float)) and not isinstance(brightness, bool):
+                            attributes["brightness_percent"] = round(
+                                max(0.0, min(255.0, float(brightness))) / 255.0 * 100,
+                            )
+                    device.attributes = attributes
                     device_list.append(device)
 
                 candidate_context = self._candidate_context_from_devices(device_list)

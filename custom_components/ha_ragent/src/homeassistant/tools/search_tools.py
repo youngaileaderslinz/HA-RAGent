@@ -208,6 +208,10 @@ class RAGentSemanticSearchTool(llm.Tool):
         requested_min_tools = max(0, int(get_setting_value(CONF_MIN_TOOLS_TO_EXTRACT, runtime_options)))
         max_devices = max(0, int(get_setting_value(CONF_MAX_DEVICES_TO_EXTRACT, runtime_options)))
         max_tools = max(0, int(get_setting_value(CONF_MAX_TOOLS_TO_EXTRACT, runtime_options)))
+        if max_devices:
+            requested_min_devices = min(requested_min_devices, max_devices)
+        if max_tools:
+            requested_min_tools = min(requested_min_tools, max_tools)
         return (
             requested_min_devices,
             max_devices,

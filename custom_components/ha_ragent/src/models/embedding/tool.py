@@ -46,6 +46,20 @@ class LlmTool(SerializableModel, EmbeddableModel):
                 values.update(LlmTool._schema_values(value))
         return values
 
+    @classmethod
+    def _schema_field_values(cls, schema: object, field: str) -> set[str]:
+        """Collect constrained values for a field throughout a nested schema."""
+        values: set[str] = set()
+        if isinstance(schema, dict):
+            for name, value in schema.items():
+                if name == field:
+                    values.update(cls._schema_values(value))
+                values.update(cls._schema_field_values(value, field))
+        elif isinstance(schema, list):
+            for value in schema:
+                values.update(cls._schema_field_values(value, field))
+        return values
+
     @staticmethod
     def _schema_search_parts(schema: object, path: str = "", depth: int = 0) -> tuple[str, ...]:
         """Return bounded names, descriptions, required fields, types, and enums."""
@@ -91,12 +105,11 @@ class LlmTool(SerializableModel, EmbeddableModel):
         cached = getattr(self, "_cached_schema_features", None)
         if cached is None or cached[0] != parameters:
             snapshot = deepcopy(parameters)
-            properties = snapshot.get("properties") or {}
             cached = (
                 snapshot,
                 self._schema_search_parts(snapshot),
-                frozenset(self._schema_values(properties.get("domain", {}))),
-                frozenset(self._schema_values(properties.get("device_class", {}))),
+                frozenset(self._schema_field_values(snapshot, "domain")),
+                frozenset(self._schema_field_values(snapshot, "device_class")),
             )
             self._cached_schema_features = cached
         return cached
@@ -138,6 +151,22 @@ class LlmTool(SerializableModel, EmbeddableModel):
             )
             if value
         )
+
+    @property
+    def canonical_action_document(self) -> str:
+        """Return compact language-independent action metadata for lexical retrieval."""
+        parts: list[object] = [
+            self.canonical_action or " ".join(self.canonical_name_parts),
+            *self.canonical_supported_domains,
+        ]
+        if self.metadata:
+            expected_states = (
+                self.metadata.get("expected_states", ())
+                if isinstance(self.metadata, dict)
+                else self.metadata.expected_states
+            )
+            parts.extend(expected_states or ())
+        return " ".join(str(part) for part in parts if part)
 
     @staticmethod
     def split_canonical_name(name: str) -> tuple[str, ...]:

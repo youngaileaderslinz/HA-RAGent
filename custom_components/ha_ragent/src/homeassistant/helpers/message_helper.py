@@ -28,7 +28,7 @@ class MessageHelper:
 
     @staticmethod
     def _compact_candidate_devices(candidates: object) -> list[object]:
-        """Preserve bounded state and location data for candidate devices."""
+        """Expose only identity and currently actionable device context to the LLM."""
         if not isinstance(candidates, list):
             return []
         retained_keys = (
@@ -39,11 +39,8 @@ class MessageHelper:
             "unit_of_measurement",
             "area",
             "floor",
-            "area_aliases",
-            "floor_aliases",
             "domain",
             "device_class",
-            "attributes",
         )
         compact: list[object] = []
         for candidate in candidates[:MessageHelper._MAX_RESULT_ITEMS]:
@@ -61,7 +58,7 @@ class MessageHelper:
 
     @staticmethod
     def _compact_candidate_tools(candidates: object) -> list[object]:
-        """Preserve compact capability and confidence data for candidate tools."""
+        """Expose only the tool capability information needed for selection."""
         if not isinstance(candidates, list):
             return []
         retained_keys = (
@@ -70,9 +67,6 @@ class MessageHelper:
             "action",
             "domains",
             "expected_states",
-            "canonical_action",
-            "supported_domains",
-            "retrieval_score",
         )
         compact: list[object] = []
         for candidate in candidates[:MessageHelper._MAX_RESULT_ITEMS]:

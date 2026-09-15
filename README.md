@@ -123,9 +123,9 @@ Use the `Add Integration` button in the bottom right to add a new integration ca
 - `Tools excluded from embedding`
     - Excludes selected tool names from the vector index. Names are matched exactly and are case-sensitive
 - `Minimum Number of Devices` / `Maximum Number of Devices`
-    - Defaults to `4` / `6`. Confident retrieval uses the minimum; uncertain or ambiguous retrieval expands up to the maximum.
+    - Defaults to `2` / `6`. Confident retrieval uses the minimum; uncertain or ambiguous retrieval expands up to the maximum.
 - `Minimum Number of Tools` / `Maximum Number of Tools`
-    - Defaults to `4` / `6`. Confident retrieval uses the minimum; uncertain retrieval expands up to the maximum (required HA-RAGent tools do not count toward either limit).
+    - Defaults to `2` / `6`. Confident retrieval uses the minimum; uncertain retrieval expands up to the maximum (required HA-RAGent tools do not count toward either limit).
 - `Number of Long-Term Memories`
     - Controls how many semantically relevant, explicitly stored memories are added to each prompt. Set it to `0` to disable recall without deleting memories.
 - `Maximum Memory Entries`
