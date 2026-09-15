@@ -361,11 +361,10 @@ class RetrievalHelper:
         devices: Iterable[Any],
         capability: object = None,
     ) -> str:
-        """Build a language-neutral tool query from action and target metadata.
+        """Combine the supplied query with available action and domain IDs.
 
-        Device/entity retrieval owns the natural-language request. Once a
-        structured capability is available, tool retrieval only needs the
-        canonical action and the domains of independently resolved targets.
+        Retain the original query for tools whose description or schema is
+        their only capability information. Add no language-specific labels.
         """
         requested = RetrievalHelper.normalize_requested_capability(capability)
         if requested:
@@ -382,16 +381,15 @@ class RetrievalHelper:
                 }
             )
             all_domains = tuple(dict.fromkeys((*domains, *resolved_domains)))
-            query = f"Canonical action: {action}"
-            if all_domains:
-                query += f"\nTarget domains: {', '.join(all_domains)}"
-            return query
+            return "\n".join(dict.fromkeys(
+                part for part in (fallback_query, action, *all_domains) if part
+            ))
 
         # Legacy callers without structured intent retain their existing
         # behavior, but production structured searches never take this path.
         query = trusted_query or fallback_query
         if trusted_query and fallback_query and fallback_query != trusted_query:
-            query += f"\nSearch intent: {fallback_query}"
+            query += f"\n{fallback_query}"
         return query
 
     @staticmethod
@@ -586,6 +584,7 @@ class RetrievalHelper:
         confidence: ConfidenceAssessment | str | None = None,
         preferred_domains: Iterable[str] = (),
         preferred_areas: Iterable[str] = (),
+        preserve_score: Callable[[T], float] | None = None,
     ) -> list[T]:
         """Expose the plausible ambiguity cluster within the configured ceiling."""
         if min_limit <= 0 and (max_limit is None or max_limit <= 0):
@@ -726,6 +725,15 @@ class RetrievalHelper:
         selected_keys: set[str] = set()
         previous_score = top_score
         candidate_keys = eligible_keys
+        preserved_keys = {
+            candidate_key
+            for candidate_key, device in devices_by_key.items()
+            if preserve_score is not None and preserve_score(device) > 0
+        }
+        # Successful historical targets are continuity evidence, not current
+        # identity evidence. Carry them through this final gate independently
+        # of the current score thresholds.
+        candidate_keys |= preserved_keys
         target_count = min(ceiling, len(candidate_keys))
 
         for index, device in enumerate(scored_devices):
@@ -752,12 +760,19 @@ class RetrievalHelper:
             ).casefold()
             area_compatible = not preferred_areas or candidate_area in preferred_areas
             plausible = candidate_key in candidate_keys
-            if preferred_domain_candidates and not preferred:
+            preserved = candidate_key in preserved_keys
+            if preferred_domain_candidates and not preferred and not preserved:
                 plausible = False
-            if preferred_area_candidates and not area_compatible:
+            if preferred_area_candidates and not area_compatible and not preserved:
                 plausible = False
-            include = plausible and len(selected) < target_count
+            include = (
+                plausible
+                and len(selected) < ceiling
+                and (preserved or len(selected) < target_count)
+            )
             reason = (
+                "preserved successful target"
+                if preserved else
                 "top-ranked candidate anchors recall"
                 if index == 0 else
                 "included from the confidence band"
@@ -777,8 +792,44 @@ class RetrievalHelper:
                 "top_margin": round(candidate_margin, 6),
                 "step_drop": round(max(0.0, previous_score - score), 6),
                 "supporting_signals": supporting_signals,
+                "preserved_successful_target": preserved,
             })
             previous_score = score
+
+        # A tight ceiling can otherwise fill before a preserved target is
+        # reached in the current-score ordering. Replace the weakest selected
+        # item so successful target continuity survives the final gate.
+        missing_preserved = [
+            device for device in scored_devices
+            if str(
+                RetrievalHelper._device_value(device, "id", "")
+                or RetrievalHelper._device_value(device, "name", "")
+            ) in preserved_keys and str(
+                RetrievalHelper._device_value(device, "id", "")
+                or RetrievalHelper._device_value(device, "name", "")
+            ) not in selected_keys
+        ]
+        for device in missing_preserved:
+            if len(selected) < ceiling:
+                selected.append(device)
+                selected_keys.add(str(
+                    RetrievalHelper._device_value(device, "id", "")
+                    or RetrievalHelper._device_value(device, "name", "")
+                ))
+                continue
+            if not selected:
+                break
+            replaced = selected.pop()
+            replaced_key = str(
+                RetrievalHelper._device_value(replaced, "id", "")
+                or RetrievalHelper._device_value(replaced, "name", "")
+            )
+            selected_keys.discard(replaced_key)
+            selected.append(device)
+            selected_keys.add(str(
+                RetrievalHelper._device_value(device, "id", "")
+                or RetrievalHelper._device_value(device, "name", "")
+            ))
 
         # Fill only from the confidence band if ordering or area filtering
         # left the initial pass short.
@@ -1020,11 +1071,17 @@ class RetrievalHelper:
         aliases = RetrievalHelper._device_value(device, "aliases", []) or []
         if isinstance(aliases, str):
             aliases = [aliases]
-        return RetrievalHelper.field_match_score(query, (
+        values = (
             RetrievalHelper._device_value(device, "id", ""),
             RetrievalHelper._device_value(device, "friendly_name", ""),
             *aliases,
-        ))
+        )
+        exact, fuzzy = RetrievalHelper._match_scores(query, values)
+        # Numeric fragments are not stable identity evidence: a requested
+        # value such as 5 can be a substring or typo-match for 50. Preserve
+        # exact lexical identity, but do not let fuzzy numeric overlap boost
+        # the identity signal.
+        return exact + (0.5 * fuzzy if not RetrievalHelper._has_numeric_token(query) else 0.0)
 
     @staticmethod
     def trusted_location_score(device: Any, area: str = "", floor: str = "") -> float:
@@ -1058,9 +1115,11 @@ class RetrievalHelper:
         vector_ranking: list[str],
         exact_ranking: list[str],
         fuzzy_ranking: list[str],
+        query: str = "",
     ) -> bool:
+        numeric_query = RetrievalHelper._has_numeric_token(query)
         if any(
-            exact >= 0.9 or fuzzy >= 0.9
+            exact >= 0.9 or (fuzzy >= 0.9 and not numeric_query)
             for exact, fuzzy in match_scores.values()
         ):
             return True
@@ -1074,6 +1133,15 @@ class RetrievalHelper:
             bool(fuzzy_ranking)
             and best_vector == fuzzy_ranking[0]
             and match_scores[best_vector][1] >= 0.7
+            and not numeric_query
+        )
+
+    @staticmethod
+    def _has_numeric_token(value: object) -> bool:
+        """Return whether normalized text contains a token with a digit."""
+        return any(
+            any(character.isdigit() for character in token)
+            for token in RetrievalHelper._normalize(value).split()
         )
 
     @staticmethod
@@ -1082,6 +1150,7 @@ class RetrievalHelper:
         match_scores: dict[str, tuple[float, float]],
         vector_positions: dict[str, int],
         limit: int,
+        query: str = "",
     ) -> list[str]:
         if not ordered_keys:
             return ordered_keys
@@ -1091,10 +1160,13 @@ class RetrievalHelper:
         top_vector_rank = vector_positions.get(top_key)
         top_is_confident = (
             top_exact >= 0.9
-            or top_fuzzy >= 0.9
+            or (top_fuzzy >= 0.9 and not RetrievalHelper._has_numeric_token(query))
             or (
                 top_vector_rank == 1
-                and (top_exact >= 0.5 or top_fuzzy >= 0.7)
+                and (top_exact >= 0.5 or (
+                    top_fuzzy >= 0.7
+                    and not RetrievalHelper._has_numeric_token(query)
+                ))
             )
         )
         if not top_is_confident:
@@ -1104,7 +1176,10 @@ class RetrievalHelper:
             item_key
             for item_key in ordered_keys[:limit]
             if match_scores[item_key][0] >= 0.5
-            or match_scores[item_key][1] >= 0.7
+            or (
+                match_scores[item_key][1] >= 0.7
+                and not RetrievalHelper._has_numeric_token(query)
+            )
             or vector_positions.get(item_key, limit + 1) <= 2
         ]
         return confident or ordered_keys
@@ -1186,6 +1261,7 @@ class RetrievalHelper:
             vector_ranking,
             exact_ranking,
             fuzzy_ranking,
+            query,
         )
 
         # Always expose the diagnostic channel.  A strong current match may
@@ -1232,6 +1308,7 @@ class RetrievalHelper:
                 match_scores,
                 vector_positions,
                 limit,
+                query,
             )
 
         selected_keys = ordered_keys[:limit]
@@ -1342,28 +1419,17 @@ class RetrievalHelper:
         if not isinstance(capability, dict):
             return {}
         action = str(capability.get("action", "") or "").strip().casefold()
-        allowed_actions = {
-            "turn_on", "turn_off", "toggle", "open", "close", "stop",
-            "lock", "unlock", "cover_set_position", "fan_set_speed",
-            "climate_set_temperature", "climate_set_hvac_mode",
-            "media_player_play", "media_player_pause", "media_player_stop", "light_set",
-            "light_set_brightness", "light_set_color", "scene_turn_on",
-            "vacuum_start", "vacuum_return_to_base", "set_value", "on", "off",
-            "set", "pause", "unpause", "cancel", "broadcast",
-        }
-        if action not in allowed_actions:
+        if not action:
             return {}
         domains = capability.get("domains", capability.get("domain", ())) or ()
         if isinstance(domains, str):
             domains = (domains,)
-        allowed_domains = {
-            "alarm_control_panel", "automation", "button", "camera", "climate",
-            "cover", "fan", "humidifier", "input_boolean", "input_number",
-            "light", "lock", "media_player", "number", "scene", "script",
-            "select", "sensor", "siren", "switch", "vacuum", "valve",
-            "water_heater", "weather", "binary_sensor",
-        }
-        domains = tuple(sorted({str(value).strip().casefold() for value in domains if value} & allowed_domains))
+        if not isinstance(domains, (list, tuple, set, frozenset)):
+            domains = ()
+        domains = tuple(sorted({
+            value.strip().casefold() for value in domains
+            if isinstance(value, str) and value.strip()
+        }))
         return {
             "action": action,
             "domains": domains,
@@ -1480,6 +1546,22 @@ class RetrievalHelper:
         )
         index = lexical_index(documents)
         corpus_scores = dict(zip(corpus_names, index.scores(query)))
+        # Custom integrations need not declare canonical actions. Their live
+        # descriptions and schemas are independent sources of lexical evidence.
+        # Combine text channels before fusion so repeated text gets one vote.
+        broad_documents = tuple(
+            tuple(str(part) for part in (
+                getattr(tool, "canonical_search_parts", ()) or (
+                    getattr(tool, "name", ""), getattr(tool, "description", ""),
+                )
+            ) if part)
+            for tool in corpus_tools
+        )
+        broad_scores = lexical_index(broad_documents).scores(query)
+        corpus_scores = {
+            name: max(corpus_scores[name], score)
+            for name, score in zip(corpus_names, broad_scores)
+        }
         lexical_ranking = RetrievalHelper._rank_positive_scores(corpus_scores, 0.01)
         compatibility_scores = {
             name: RetrievalHelper.tool_capability_compatibility(tool, requested_capability)
@@ -1618,11 +1700,10 @@ class RetrievalHelper:
                 for tool in tools
             },
         }
-        if continuity_score:
-            signals["continuity"] = {
-                str(getattr(tool, "name", "")): continuity_score(tool)
-                for tool in tools
-            }
+        # Historical tool/action continuity is useful for ordering candidates,
+        # but it is not evidence that the current request is relevant. Keep it
+        # out of confidence classification so an old action cannot certify a
+        # new one without current vector/schema/lexical support.
         return RetrievalHelper.assess_distribution_confidence(
             names,
             signals,

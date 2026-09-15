@@ -293,6 +293,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             max_devices,
             confidence,
             preferred_areas=query_areas,
+            preserve_score=continuity.successful_target_score,
         )
 
     async def _async_retrieve_tools(

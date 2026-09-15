@@ -23,7 +23,7 @@ def normalize(text: str) -> str:
 def features(text: str) -> Counter[str]:
     """Return character ``char_wb`` 3--5 gram TF-IDF features."""
     terms: Counter[str] = Counter()
-    for word in normalize(text).split():
+    for word in canonical_normalize(text).split():
         padded = f" {word} "
         for size in range(3, 6):
             terms.update(
