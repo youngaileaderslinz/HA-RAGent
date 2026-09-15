@@ -9,6 +9,23 @@
     "MAX_RETRIES_PROMPT": "Budget: {{ max_retries }} Modellrunden. Wiederhole nur zur Zielauflösung, nötigen Verifizierung, bei neuen Informationen oder vorübergehenden Fehlern. Wiederhole erfolgreiche Aktionen niemals unnötig.",
     "SCHEDULED_ACTION_PROMPT": "Dies ist die Ausführung einer fälligen geplanten Aktion. Verwende den bei der Planung erfassten Kontext nur zur Auflösung von Zielidentität und Parametern. Nimm nicht an, dass der damalige Gerätezustand noch aktuell ist. Setze keine anderen früheren Aufgaben fort und wiederhole sie nicht. Verwende aktuelle Geräte-/Tool-Daten, führe die Aktion jetzt aus, verifiziere den resultierenden Zustand, sofern verfügbar, und plane sie nicht erneut."
   },
+  "Embedding": {
+    "device_name": "Das Gerät heißt {value}.",
+    "device_aliases": "Es ist auch bekannt als {value}.",
+    "device_area": "Es befindet sich im Bereich {value}.",
+    "device_area_aliases": "Der Bereich ist auch bekannt als {value}.",
+    "device_floor": "Es befindet sich auf der Etage {value}.",
+    "device_floor_aliases": "Die Etage ist auch bekannt als {value}.",
+    "device_domain": "Die Home-Assistant-Domain ist {value}.",
+    "device_class": "Die Geräteklasse ist {value}.",
+    "device_labels": "Es hat die Labels {value}.",
+    "device_unit": "Die Maßeinheit ist {value}.",
+    "tool_action": "Dieses Tool führt die Aktion {value} aus.",
+    "tool_domains": "Es kann mit den Home-Assistant-Domains {value} verwendet werden.",
+    "tool_expected_states": "Die erwarteten resultierenden Zustände sind {value}.",
+    "tool_description": "Verwende dieses Tool, wenn {value}.",
+    "memory_content": "Inhalt: {content}"
+  },
   "Error messages": {
     "backend_error": "Entschuldigung, bei der Verbindung zum Backend ist ein Fehler aufgetreten.",
     "max_retries_exhausted": "Entschuldigung, ich habe die maximale Anzahl an Versuchen erreicht.",

@@ -1,6 +1,22 @@
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 class EmbeddableModel(ABC):
+    @staticmethod
+    def _translations(translations: "RAGentTranslations | None") -> "RAGentTranslations":
+        """Use the entry translation service, or English for direct callers."""
+        if translations is not None:
+            return translations
+
+        from custom_components.ha_ragent.src.translation import RAGentTranslations
+
+        if "en" not in RAGentTranslations._cache:
+            RAGentTranslations._load("en")
+        return RAGentTranslations("en")
+
     @staticmethod
     def append_if_exists(parts_list: list[str], format_str: str, value: str | None) -> None:
         """Append a value to a list if it exists and is not empty."""
@@ -9,6 +25,6 @@ class EmbeddableModel(ABC):
             parts_list.append(f"{format_str.format(value_str)}")
 
     @abstractmethod
-    def to_embedding_text(self) -> str:
+    def to_embedding_text(self, translations: "RAGentTranslations | None" = None) -> str:
         """Return the semantic text sent to the embedding model."""
         raise NotImplementedError("to_embedding_text method must be implemented in subclasses.")

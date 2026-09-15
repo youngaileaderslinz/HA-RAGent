@@ -9,6 +9,23 @@
     "MAX_RETRIES_PROMPT": "Budget: {{ max_retries }} model rounds. Retry only for target resolution, required verification, new information, or transient errors. Never repeat successful actions unnecessarily.",
     "SCHEDULED_ACTION_PROMPT": "This is execution of a due scheduled action. Use captured planning context only to resolve target identity and parameters. Do not assume the old device state is still current. Do not continue or repeat unrelated prior tasks. Use current device/tool data, execute the action now, verify the resulting state when available, and do not schedule it again."
   },
+  "Embedding": {
+    "device_name": "The device is named {value}.",
+    "device_aliases": "It is also known as {value}.",
+    "device_area": "It is located in the area {value}.",
+    "device_area_aliases": "The area is also known as {value}.",
+    "device_floor": "It is located on the floor {value}.",
+    "device_floor_aliases": "The floor is also known as {value}.",
+    "device_domain": "Its Home Assistant domain is {value}.",
+    "device_class": "Its device class is {value}.",
+    "device_labels": "It has the labels {value}.",
+    "device_unit": "Its unit of measurement is {value}.",
+    "tool_action": "This tool performs the action {value}.",
+    "tool_domains": "It can be used with the Home Assistant domains {value}.",
+    "tool_expected_states": "The expected resulting states are {value}.",
+    "tool_description": "Use this tool when {value}.",
+    "memory_content": "Content: {content}"
+  },
   "Error messages": {
     "backend_error": "Sorry, there was a problem talking to the backend.",
     "max_retries_exhausted": "Sorry, I ran out of attempts to handle your request.",

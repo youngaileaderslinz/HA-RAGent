@@ -11,6 +11,7 @@ from custom_components.ha_ragent.src.models.embedding.tool_metadata import (
     ToolMetadata,
     split_canonical_name,
 )
+from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 @dataclass
 class LlmTool(SerializableModel, EmbeddableModel):
@@ -170,18 +171,19 @@ class LlmTool(SerializableModel, EmbeddableModel):
             parameters=parameters,
         )
 
-    def to_embedding_text(self) -> str:
+    def to_embedding_text(self, translations: RAGentTranslations | None = None) -> str:
         """Return a compact action concept for multilingual semantic search."""
+        translations = self._translations(translations)
         parts = []
 
-        self.append_if_exists(parts, "This tool performs the action {}.", self.canonical_action)
-        self.append_if_exists(parts, "It can be used with the Home Assistant domains {}.", list(self.canonical_supported_domains))
+        self.append_if_exists(parts, translations.embedding("tool_action", value="{}"), self.canonical_action)
+        self.append_if_exists(parts, translations.embedding("tool_domains", value="{}"), list(self.canonical_supported_domains))
 
         if self.metadata:
             expected_states = self.metadata.get("expected_states", ()) if isinstance(self.metadata, dict) else self.metadata.expected_states
-            self.append_if_exists(parts, "The expected resulting states are {}.", list(expected_states or ()))
+            self.append_if_exists(parts, translations.embedding("tool_expected_states", value="{}"), list(expected_states or ()))
 
-        self.append_if_exists(parts, "Use this tool when {}.", self.description)
+        self.append_if_exists(parts, translations.embedding("tool_description", value="{}"), self.description)
 
         return " ".join(parts)
 

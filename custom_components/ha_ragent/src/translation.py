@@ -52,6 +52,11 @@ class RAGentTranslations:
     def tool(self, key: str) -> str:
         return str(self._section("Tools")[key])
 
+    def embedding(self, key: str, **values: Any) -> str:
+        """Render a translated embedding-text format."""
+        text = str(self._section("Embedding")[key])
+        return text.format(**values)
+
     def has_tool(self, key: str) -> bool:
         """Return whether the integration owns a translation for a tool."""
         return key in self._section("Tools")

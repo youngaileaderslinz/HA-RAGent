@@ -343,7 +343,10 @@ class ToolExtractor:
                     return
 
                 collection_name = f"tools_{subentry_id}"
-                tool_embeddings = await self._entry.embedder_backend.async_embed_object(dict(subentry.data), exposed_tools)
+                tool_embeddings = await self._entry.embedder_backend.async_embed_object(
+                    dict(subentry.data), exposed_tools,
+                    getattr(self._entry, "translations", None),
+                )
 
                 if tool_embeddings:
                     embedding_len = len(tool_embeddings[0].vector_embedding)

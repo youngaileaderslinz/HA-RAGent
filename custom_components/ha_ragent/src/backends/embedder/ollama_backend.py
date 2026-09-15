@@ -22,6 +22,7 @@ from custom_components.ha_ragent.src.const import (
     RETRY_BACKOFF_MULTIPLIER,
 )
 from custom_components.ha_ragent.src.backends.embedder.base_backend import ABaseEmbedder
+from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 _logger = logging.getLogger(__name__)
 
@@ -134,14 +135,14 @@ class OllamaEmbedder(ABaseEmbedder):
         embeddings = await self._async_embed_batch(config_subentry, [text], keep_alive=keep_alive)
         return embeddings[0] if embeddings else []
 
-    async def async_embed_object(self, config_subentry: dict, objects: List[EmbeddableModel]) -> List[EmbeddingRecord]:
+    async def async_embed_object(self, config_subentry: dict, objects: List[EmbeddableModel], translations: RAGentTranslations | None = None) -> List[EmbeddingRecord]:
         if not objects:
             return []
 
         object_embeddings: List[EmbeddingRecord] = []
         for i in range(0, len(objects), RAGENT_EMBEDDING_BATCH_SIZE):
             chunk = objects[i:i + RAGENT_EMBEDDING_BATCH_SIZE]
-            texts = [obj.to_embedding_text() for obj in chunk]
+            texts = [obj.to_embedding_text(translations) for obj in chunk]
             vectors = await self._async_embed_batch(config_subentry, texts)
             object_embeddings.extend(self.build_embedding_records(chunk, vectors))
         return object_embeddings

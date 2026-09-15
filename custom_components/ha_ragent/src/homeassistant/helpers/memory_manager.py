@@ -72,7 +72,9 @@ class MemoryManager:
             content=normalized_content,
             created_at=dt_util.utcnow().isoformat(),
         )
-        vector = await entry.embedder_backend.async_embed_text(config, memory.to_embedding_text())
+        vector = await entry.embedder_backend.async_embed_text(
+            config, memory.to_embedding_text(entry.translations),
+        )
         if not vector:
             _logger.error("The embedding backend returned an empty memory embedding.")
             return None

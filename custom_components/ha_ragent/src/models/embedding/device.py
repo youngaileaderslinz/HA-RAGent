@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from custom_components.ha_ragent.src.const import DEVICE_ATTRIBUTES_MAX_JSON_LENGTH, DEVICE_ATTRIBUTES_TO_EXCLUDE
 from custom_components.ha_ragent.src.models.base.serializeable_model import SerializableModel
 from custom_components.ha_ragent.src.models.base.embeddable_model import EmbeddableModel
+from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 @dataclass
 class Device(SerializableModel, EmbeddableModel):
@@ -60,24 +61,25 @@ class Device(SerializableModel, EmbeddableModel):
             device_class=data.get("device_class", None)
         )
 
-    def to_embedding_text(self) -> str:
+    def to_embedding_text(self, translations: RAGentTranslations | None = None) -> str:
         """Return a string representation of the device for embedding purposes."""
+        translations = self._translations(translations)
         parts = []
 
-        self.append_if_exists(parts, "The device is named {}.", self.friendly_name)
-        self.append_if_exists(parts, "It is also known as {}.", self.aliases)
+        self.append_if_exists(parts, translations.embedding("device_name", value="{}"), self.friendly_name)
+        self.append_if_exists(parts, translations.embedding("device_aliases", value="{}"), self.aliases)
 
-        self.append_if_exists(parts, "It is located in the area {}.", self.area_name)
-        self.append_if_exists(parts, "The area is also known as {}.", self.area_aliases)
+        self.append_if_exists(parts, translations.embedding("device_area", value="{}"), self.area_name)
+        self.append_if_exists(parts, translations.embedding("device_area_aliases", value="{}"), self.area_aliases)
 
-        self.append_if_exists(parts, "It is located on the floor {}.", self.floor_name)
-        self.append_if_exists(parts, "The floor is also known as {}.", self.floor_aliases)
+        self.append_if_exists(parts, translations.embedding("device_floor", value="{}"), self.floor_name)
+        self.append_if_exists(parts, translations.embedding("device_floor_aliases", value="{}"), self.floor_aliases)
 
-        self.append_if_exists(parts, "Its Home Assistant domain is {}.", self.domain)
-        self.append_if_exists(parts, "Its device class is {}.", self.device_class)
+        self.append_if_exists(parts, translations.embedding("device_domain", value="{}"), self.domain)
+        self.append_if_exists(parts, translations.embedding("device_class", value="{}"), self.device_class)
 
-        self.append_if_exists(parts, "It has the labels {}.", self.device_labels)
-        self.append_if_exists(parts, "Its unit of measurement is {}.", self.unit_of_measurement)
+        self.append_if_exists(parts, translations.embedding("device_labels", value="{}"), self.device_labels)
+        self.append_if_exists(parts, translations.embedding("device_unit", value="{}"), self.unit_of_measurement)
 
         return " ".join(parts)
 

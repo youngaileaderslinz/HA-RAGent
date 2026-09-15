@@ -23,6 +23,7 @@ from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_embedding import LlmToolEmbedding
 from custom_components.ha_ragent.src.models.embedding.memory import Memory
 from custom_components.ha_ragent.src.models.embedding.memory_embedding import MemoryEmbedding
+from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 
 class ABaseEmbedder(ABC):
@@ -113,6 +114,6 @@ class ABaseEmbedder(ABC):
         raise NotImplementedError()
     
     @abstractmethod
-    async def async_embed_object(self, config_subentry: dict, objects: List[EmbeddableModel]) -> List[EmbeddingRecord]:
+    async def async_embed_object(self, config_subentry: dict, objects: List[EmbeddableModel], translations: RAGentTranslations | None = None) -> List[EmbeddingRecord]:
         """Embed a list of objects and return the vector embeddings."""
         raise NotImplementedError()

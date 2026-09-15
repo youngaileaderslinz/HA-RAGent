@@ -5,6 +5,7 @@ from typing import Any
 
 from custom_components.ha_ragent.src.models.base.serializeable_model import SerializableModel
 from custom_components.ha_ragent.src.models.base.embeddable_model import EmbeddableModel
+from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 @dataclass
 class Memory(SerializableModel, EmbeddableModel):
@@ -32,6 +33,6 @@ class Memory(SerializableModel, EmbeddableModel):
             retrieval_count=data.get("retrieval_count", 0)
         )
 
-    def to_embedding_text(self) -> str:
+    def to_embedding_text(self, translations: RAGentTranslations | None = None) -> str:
         """Return the semantic text sent to the embedding model."""
-        return f"Content: {self.content}"
+        return self._translations(translations).embedding("memory_content", content=self.content)

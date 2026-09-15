@@ -127,7 +127,10 @@ class DeviceExtractor:
                     self._entry.vector_db_backend.cache_collection_objects(collection_name, [])
                     _logger.info("Cleared device embeddings for empty subentry %s", subentry_id)
                     return
-                device_embeddings = await self._entry.embedder_backend.async_embed_object(dict(subentry.data), device_list)
+                device_embeddings = await self._entry.embedder_backend.async_embed_object(
+                    dict(subentry.data), device_list,
+                    getattr(self._entry, "translations", None),
+                )
 
                 if device_embeddings:
                     embedding_len = len(device_embeddings[0].vector_embedding)
