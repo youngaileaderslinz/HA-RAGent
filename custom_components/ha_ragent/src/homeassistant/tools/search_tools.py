@@ -31,7 +31,7 @@ from custom_components.ha_ragent.src.models.embedding.tool_embedding import LlmT
 from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
 from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
 from custom_components.ha_ragent.src.translation import RAGentTranslations
-from custom_components.ha_ragent.src.debug import log_debug_payload
+from custom_components.ha_ragent.src.logging import log_debug_payload
 from custom_components.ha_ragent.src.utils import get_setting_value
 
 _logger = logging.getLogger(__name__)
@@ -331,10 +331,15 @@ class RAGentSemanticSearchTool(llm.Tool):
         self,
         model_search_query: str,
         devices: list[Device | dict[str, object]],
+        requested_capability: object = None,
         *,
         focused: bool = False,
     ) -> str:
-        """Keep each explicit query independent of the compound request."""
+        """Build tool intent independently from the natural-language target."""
+        if requested_capability:
+            return RetrievalHelper.build_tool_search_query(
+                "", model_search_query, devices, requested_capability,
+            )[:RAGENT_MAX_SEARCH_QUERY_CHARS]
         if focused:
             return model_search_query[:RAGENT_MAX_SEARCH_QUERY_CHARS]
         return RetrievalHelper.build_tool_search_query(
@@ -477,9 +482,6 @@ class RAGentSemanticSearchTool(llm.Tool):
                     device_embedding = QueryEmbedding(
                         lambda query=device_query: self._embed_query_for_subentry(entry, subentry, query)
                     )
-                    tool_embedding = device_embedding if tool_query == device_query else QueryEmbedding(
-                        lambda query=tool_query: self._embed_query_for_subentry(entry, subentry, query)
-                    )
                     if search_devices and device_limit > 0:
                         collection_name = f"devices_{subentry_id}"
                         candidate_limit = RetrievalHelper.adaptive_candidate_limit(device_limit)
@@ -551,9 +553,15 @@ class RAGentSemanticSearchTool(llm.Tool):
                         # tool query: domain/state/location context is a ranking
                         # input, not just prompt decoration.
                         tool_query = self._tool_search_query(
-                            model_query, query_devices, focused=focused,
+                            model_query, query_devices, requested_capability,
+                            focused=focused,
                         )
                         tool_queries.append(tool_query)
+                        tool_embedding = QueryEmbedding(
+                            lambda query=tool_query: self._embed_query_for_subentry(
+                                entry, subentry, query,
+                            )
+                        )
                         collection_name = f"tools_{subentry_id}"
                         candidate_limit = RetrievalHelper.adaptive_candidate_limit(tool_limit)
                         scored_tools, all_tools = await RetrievalHelper.async_retrieve_sources(

@@ -62,19 +62,24 @@ class Device(SerializableModel, EmbeddableModel):
 
     def to_embedding_text(self) -> str:
         """Return a string representation of the device for embedding purposes."""
-        parts = [ f"Device ID: {self.id}" ]
-        self.append_if_exists(parts, "Friendly Name", self.friendly_name)
-        self.append_if_exists(parts, "Aliases", self.aliases)
-        self.append_if_exists(parts, "Area", self.area_name)
-        self.append_if_exists(parts, "Floor", self.floor_name)
-        self.append_if_exists(parts, "Area Aliases", self.area_aliases)
-        self.append_if_exists(parts, "Floor Aliases", self.floor_aliases)
-        self.append_if_exists(parts, "Domain", self.domain)
-        self.append_if_exists(parts, "Device Labels", self.device_labels)
-        self.append_if_exists(parts, "Unit of Measurement", self.unit_of_measurement)
-        self.append_if_exists(parts, "Device Class", self.device_class)
+        parts = []
 
-        return " | ".join(parts)
+        self.append_if_exists(parts, "The device is named {}.", self.friendly_name)
+        self.append_if_exists(parts, "It is also known as {}.", self.aliases)
+
+        self.append_if_exists(parts, "It is located in the area {}.", self.area_name)
+        self.append_if_exists(parts, "The area is also known as {}.", self.area_aliases)
+
+        self.append_if_exists(parts, "It is located on the floor {}.", self.floor_name)
+        self.append_if_exists(parts, "The floor is also known as {}.", self.floor_aliases)
+
+        self.append_if_exists(parts, "Its Home Assistant domain is {}.", self.domain)
+        self.append_if_exists(parts, "Its device class is {}.", self.device_class)
+
+        self.append_if_exists(parts, "It has the labels {}.", self.device_labels)
+        self.append_if_exists(parts, "Its unit of measurement is {}.", self.unit_of_measurement)
+
+        return " ".join(parts)
 
     @staticmethod
     def clean_attributes(attributes: dict[str, Any]) -> dict[str, Any]:

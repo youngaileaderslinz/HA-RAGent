@@ -13,7 +13,6 @@ from custom_components.ha_ragent.src.const import (
     RETRIEVAL_METHOD_AUTOMATIC,
     RETRIEVAL_METHOD_LEXICAL,
     RETRIEVAL_METHOD_VECTOR,
-    RETRIEVAL_TOOL_SIGNAL_WEIGHTS,
     DEVICE_CONFIDENCE_NEAR_TIE_MARGIN,
     TOOL_CONFIDENCE_NEAR_TIE_MARGIN,
     DEVICE_SELECTION_ABSOLUTE_FLOOR,
@@ -30,7 +29,7 @@ from custom_components.ha_ragent.src.models.embedding.tool_metadata import (
 
 from custom_components.ha_ragent.src.models.retrieval.lexical_index import lexical_index, match_features, match_score
 from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
-from custom_components.ha_ragent.src.debug import log_debug_payload
+from custom_components.ha_ragent.src.logging import log_debug_payload
 from custom_components.ha_ragent.src.utils import get_setting_value
 
 T = TypeVar("T")
@@ -360,8 +359,36 @@ class RetrievalHelper:
         trusted_query: str,
         fallback_query: str,
         devices: Iterable[Any],
+        capability: object = None,
     ) -> str:
-        """Preserve the request and corrective intent without generated aliases."""
+        """Build a language-neutral tool query from action and target metadata.
+
+        Device/entity retrieval owns the natural-language request. Once a
+        structured capability is available, tool retrieval only needs the
+        canonical action and the domains of independently resolved targets.
+        """
+        requested = RetrievalHelper.normalize_requested_capability(capability)
+        if requested:
+            action = str(requested.get("action", "") or "")
+            domains = tuple(requested.get("domains", ()) or ())
+            resolved_domains = sorted(
+                {
+                    str(value).casefold()
+                    for device in devices
+                    for value in (
+                        RetrievalHelper._device_value(device, "domain", []) or []
+                    )
+                    if value
+                }
+            )
+            all_domains = tuple(dict.fromkeys((*domains, *resolved_domains)))
+            query = f"Canonical action: {action}"
+            if all_domains:
+                query += f"\nTarget domains: {', '.join(all_domains)}"
+            return query
+
+        # Legacy callers without structured intent retain their existing
+        # behavior, but production structured searches never take this path.
         query = trusted_query or fallback_query
         if trusted_query and fallback_query and fallback_query != trusted_query:
             query += f"\nSearch intent: {fallback_query}"
@@ -1408,11 +1435,12 @@ class RetrievalHelper:
 
     @staticmethod
     def tool_signal_score(signals: dict[str, float]) -> float:
-        """Combine named tool-ranking signals using centralized weights."""
-        return sum(
-            RETRIEVAL_TOOL_SIGNAL_WEIGHTS.get(name, 0.0) * value
-            for name, value in signals.items()
-        )
+        """Expose semantic similarity for diagnostics outside rank fusion.
+
+        Production ranking below never combines this raw value with the rank
+        from the same embedding retriever.
+        """
+        return max(0.0, signals.get("semantic_similarity", 0.0))
 
     @staticmethod
     def rank_tool_candidates(
@@ -1444,38 +1472,53 @@ class RetrievalHelper:
 
         corpus_names = sorted(candidate_by_name)
         corpus_tools = [candidate_by_name[name] for name in corpus_names]
+        # Action lexical retrieval has its own compact corpus. Device names,
+        # aliases, areas, and floors remain exclusively entity-retrieval data.
         documents = tuple(
-            tuple(str(value) for value in (getattr(tool, "canonical_search_parts", ()) or (
-                getattr(tool, "name", ""), getattr(tool, "description", ""),
-            )) if value)
+            (str(getattr(tool, "canonical_action_document", "") or getattr(tool, "canonical_action", "") or getattr(tool, "name", "")),)
             for tool in corpus_tools
         )
         index = lexical_index(documents)
         corpus_scores = dict(zip(corpus_names, index.scores(query)))
-        field_scores = index.match_scores(query)
-        matches_by_name = {
-            name: field_scores.get(position, (0.0, 0.0))
-            for position, name in enumerate(corpus_names)
+        lexical_ranking = RetrievalHelper._rank_positive_scores(corpus_scores, 0.01)
+        compatibility_scores = {
+            name: RetrievalHelper.tool_capability_compatibility(tool, requested_capability)
+            for name, tool in candidate_by_name.items()
         }
+        compatibility_ranking = RetrievalHelper._rank_positive_scores(
+            {name: score for name, score in compatibility_scores.items() if score > 0}, 0.0,
+        )
+        device_scores = {
+            name: RetrievalHelper.tool_device_compatibility(tool, devices)
+            for name, tool in candidate_by_name.items()
+        }
+        device_ranking = RetrievalHelper._rank_positive_scores(device_scores, 0.0)
+        continuity_scores = {
+            name: continuity_score(tool) if continuity_score else 0.0
+            for name, tool in candidate_by_name.items()
+        }
+        continuity_ranking = RetrievalHelper._rank_positive_scores(continuity_scores, 0.0)
+        semantic_ranking = [
+            name for name, _ in sorted(semantic_ranks.items(), key=lambda item: item[1])
+        ]
+        fused = RetrievalHelper.reciprocal_rank_fusion((
+            semantic_ranking, lexical_ranking, compatibility_ranking,
+            device_ranking, continuity_ranking,
+        ))
         scored: list[tuple[float, int, str, T]] = []
         signals_by_name: dict[str, dict[str, float]] = {}
         for name, tool in candidate_by_name.items():
-            continuity = continuity_score(tool) if continuity_score else 0.0
-            signals = RetrievalHelper.tool_ranking_signals(
-                tool,
-                query,
-                devices,
-                semantic_rank=semantic_ranks.get(name),
-                semantic_score=semantic_scores.get(name),
-                continuity=continuity,
-                lexical_match=matches_by_name[name],
-                requested_capability=requested_capability,
-            )
-            signals["lexical_corpus"] = corpus_scores[name]
-            signals_by_name[name] = signals
+            signals_by_name[name] = {
+                "semantic_rank": float(semantic_ranks.get(name, 0)),
+                "tfidf": corpus_scores[name],
+                "capability": compatibility_scores[name],
+                "device_compatibility": device_scores[name],
+                "continuity": continuity_scores[name],
+                "rrf": fused.get(name, 0.0),
+            }
             scored.append(
                 (
-                    RetrievalHelper.tool_signal_score(signals),
+                    fused.get(name, 0.0),
                     semantic_ranks.get(name, len(semantic_ranks) + 1),
                     name,
                     tool,
@@ -1483,11 +1526,11 @@ class RetrievalHelper:
             )
         scored.sort(key=lambda item: (-item[0], item[1], item[2]))
         if requested_capability and any(
-            signals["capability"] >= 0 for signals in signals_by_name.values()
+            score >= 0 for score in compatibility_scores.values()
         ):
             scored = [
                 item for item in scored
-                if signals_by_name[item[2]]["capability"] >= 0
+                if compatibility_scores[item[2]] >= 0
             ]
         # Near-identical tools must not monopolize a small result window. Keep
         # the best member of each declared/observable capability first, then
@@ -1521,7 +1564,8 @@ class RetrievalHelper:
                 vector_results=vector_results, lexical_tools=lexical_tools,
                 candidates=candidate_by_name, semantic_ranks=semantic_ranks,
                 semantic_scores=semantic_scores, corpus_scores=corpus_scores,
-                lexical_matches=matches_by_name, signals=signals_by_name,
+                lexical_ranking=lexical_ranking, compatibility_ranking=compatibility_ranking,
+                device_ranking=device_ranking, signals=signals_by_name, fused_scores=fused,
                 scored=[{"score": score, "semantic_rank": rank, "name": name}
                         for score, rank, name, _ in scored],
                 selected=result,

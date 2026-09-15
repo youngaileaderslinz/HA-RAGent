@@ -21,15 +21,15 @@ def normalize(text: str) -> str:
 
 
 def features(text: str) -> Counter[str]:
-    text = normalize(text)
-    terms = Counter("w:" + word for word in text.split())
-    # Character 3-5 grams retain robust matching for compounds, morphology,
-    # spelling variants, and scripts without word boundaries.
-    terms.update(
-        f"c{size}:" + text[index:index + size]
-        for size in range(3, 6)
-        for index in range(max(0, len(text) - size + 1))
-    )
+    """Return character ``char_wb`` 3--5 gram TF-IDF features."""
+    terms: Counter[str] = Counter()
+    for word in normalize(text).split():
+        padded = f" {word} "
+        for size in range(3, 6):
+            terms.update(
+                f"c{size}:" + padded[index:index + size]
+                for index in range(max(0, len(padded) - size + 1))
+            )
     return terms
 
 
@@ -113,7 +113,7 @@ class LexicalIndex:
 
     def _weights(self, counts: Counter[str]) -> dict[str, float]:
         weights = {
-            term: (1 + math.log(count)) * self.idf[term] * (1 if term.startswith("w:") else 0.35)
+            term: (1 + math.log(count)) * self.idf[term]
             for term, count in counts.items() if term in self.idf
         }
         norm = math.sqrt(sum(weight * weight for weight in weights.values()))

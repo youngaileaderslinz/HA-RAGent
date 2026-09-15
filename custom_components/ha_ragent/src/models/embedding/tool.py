@@ -171,28 +171,19 @@ class LlmTool(SerializableModel, EmbeddableModel):
         )
 
     def to_embedding_text(self) -> str:
-        """Return a string representation of the tool for embedding purposes."""
-        parts = [ f"Tool name: {self.name}" ]
-        self.append_if_exists(
-            parts,
-            "canonical parts",
-            " ".join(self.canonical_name_parts),
-        )
-        self.append_if_exists(parts, "action", self.canonical_action)
-        self.append_if_exists(
-            parts,
-            "supported domains",
-            ", ".join(self.canonical_supported_domains),
-        )
-        self.append_if_exists(
-            parts,
-            "expected states",
-            ", ".join(self.metadata.expected_states if self.metadata else ()),
-        )
-        self.append_if_exists(parts, "Description", self.description)
-        self.append_if_exists(parts, "schema", "; ".join(self.canonical_schema_parts))
+        """Return a compact action concept for multilingual semantic search."""
+        parts = []
 
-        return " | ".join(parts)
+        self.append_if_exists(parts, "This tool performs the action {}.", self.canonical_action)
+        self.append_if_exists(parts, "It can be used with the Home Assistant domains {}.", list(self.canonical_supported_domains))
+
+        if self.metadata:
+            expected_states = self.metadata.get("expected_states", ()) if isinstance(self.metadata, dict) else self.metadata.expected_states
+            self.append_if_exists(parts, "The expected resulting states are {}.", list(expected_states or ()))
+
+        self.append_if_exists(parts, "Use this tool when {}.", self.description)
+
+        return " ".join(parts)
 
     def to_tool_dict(self) -> Dict[str, Any]:
         """Return a dictionary representation of the tool suitable for use in an LLM context."""

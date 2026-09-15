@@ -82,7 +82,7 @@ from custom_components.ha_ragent.src.const import (
     TRANSLATION_ERROR_UNEXPECTED,
 )
 
-from custom_components.ha_ragent.src.debug import log_debug_payload
+from custom_components.ha_ragent.src.logging import log_debug_payload
 from custom_components.ha_ragent.src.utils import get_entry_language, get_setting_value
 
 _logger = logging.getLogger(__name__)

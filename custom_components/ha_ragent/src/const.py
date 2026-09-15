@@ -130,20 +130,6 @@ TOOL_SELECTION_RELATIVE_FLOOR = 0.60
 TOOL_SELECTION_GAP_THRESHOLD = 0.11
 
 CANONICAL_NAME_SPLIT_PATTERN = r"_|(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])"
-RETRIEVAL_TOOL_SIGNAL_WEIGHTS = {
-    "semantic_rank": 0.35,
-    "semantic_similarity": 0.75,
-
-    "lexical_exact": 1.00,
-    "lexical_fuzzy": 0.35,
-    "lexical_corpus": 0.50,
-
-    "device_relevance": 0.40,
-
-    "continuity": 0.20,
-}
-
-
 #-----------------------------------------------
 # Vector database backend constants
 #-----------------------------------------------

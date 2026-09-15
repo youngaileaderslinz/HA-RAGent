@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
-from custom_components.ha_ragent.src.debug import log_debug_payload
+from custom_components.ha_ragent.src.logging import log_debug_payload
 
 _logger = logging.getLogger(__name__)
 
