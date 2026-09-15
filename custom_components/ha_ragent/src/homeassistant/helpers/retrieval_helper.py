@@ -59,6 +59,8 @@ class ConfidenceAssessment:
     candidate_support: tuple[tuple[str, tuple[str, ...]], ...] = ()
     final_candidate_scores: tuple[tuple[str, float], ...] = ()
     continuity_boosts: tuple[tuple[str, float], ...] = ()
+    absolute_strength: float = 0.0
+    independent_signal_count: int = 0
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -234,6 +236,8 @@ class RetrievalHelper:
         *,
         profile: ConfidenceProfile,
         weak_signals: set[str] | None = None,
+        signal_families: dict[str, str] | None = None,
+        strength_signals: set[str] | None = None,
         confirmed_keys: set[str] | None = None,
         kind: str = "candidate",
     ) -> ConfidenceAssessment:
@@ -243,6 +247,10 @@ class RetrievalHelper:
             return ConfidenceAssessment(level="none")
 
         weak_signals = weak_signals or set()
+        signal_families = signal_families or {}
+        # Schema fields describe the same source of evidence. They can help
+        # rank candidates, but must not count as independent observations.
+        strength_signals = strength_signals or set(signal_scores)
         confirmed_keys = confirmed_keys or set()
         normalized = {
             name: values
@@ -275,6 +283,11 @@ class RetrievalHelper:
 
         agreeing: list[str] = []
         disagreeing: list[str] = []
+        absolute_strength = max(
+            (max(0.0, float(signal_scores[name].get(top_key, 0.0)))
+             for name in strength_signals if name in signal_scores),
+            default=0.0,
+        )
         for name, values in normalized.items():
             if name in weak_signals:
                 continue
@@ -289,6 +302,9 @@ class RetrievalHelper:
             else:
                 disagreeing.append(name)
 
+        independent_agreement = {
+            signal_families.get(name, name) for name in agreeing
+        }
         confirmed_top = top_key in confirmed_keys and not any(
             key in confirmed_keys for key in score_order[1:]
         )
@@ -296,7 +312,7 @@ class RetrievalHelper:
             level = "high"
             reason = "unique confirmed continuity target"
         elif len(ordered_keys) == 1:
-            if len(agreeing) >= 2:
+            if len(independent_agreement) >= 2 and absolute_strength > 0.2:
                 level = "high"
                 reason = "the only candidate is independently supported by multiple signals"
             else:
@@ -308,7 +324,12 @@ class RetrievalHelper:
         elif disagreeing and len(disagreeing) >= len(agreeing):
             level = "low"
             reason = "strong ranking signals disagree"
-        elif len(agreeing) >= 2 and margin > profile.near_tie_margin:
+        elif (
+            len(independent_agreement) >= 2
+            and margin > profile.near_tie_margin
+            and top_score >= 0.35
+            and absolute_strength > 0.2
+        ):
             level = "high"
             reason = "clear winner supported by independent signals"
         else:
@@ -338,6 +359,8 @@ class RetrievalHelper:
                 )
                 for key in score_order
             ),
+            absolute_strength=round(min(1.0, absolute_strength), 6),
+            independent_signal_count=len(independent_agreement),
         )
         log_debug_payload(
             _logger, f"retrieval.{kind}_confidence",
@@ -350,7 +373,10 @@ class RetrievalHelper:
             confidence_reason=assessment.reason,
             agreeing_signals=assessment.agreeing_signals,
             disagreeing_signals=assessment.disagreeing_signals,
+            raw_signals=signal_scores,
             normalized_signals=normalized,
+            absolute_strength=assessment.absolute_strength,
+            independent_signal_count=assessment.independent_signal_count,
         )
         return assessment
 
@@ -510,10 +536,16 @@ class RetrievalHelper:
                     continuity_raw.get(item_key, 0.0), confirmed_score(device),
                 )
         if text_parts:
-            signals["lexical"] = {
-                key(device): RetrievalHelper.field_match_score(query, text_parts(device))
+            # Match device confidence to the lexical TF-IDF signal used by
+            # device ranking; field matching remains an identity feature,
+            # not an independent confidence distribution.
+            documents = tuple(
+                tuple(str(value) for value in text_parts(device) if value)
                 for device in devices
-            }
+            )
+            signals["lexical"] = dict(zip(
+                keys, lexical_index(documents).scores(query),
+            ))
         assessment = RetrievalHelper.assess_distribution_confidence(
             keys,
             signals,
@@ -693,7 +725,6 @@ class RetrievalHelper:
             candidate_key
             for candidate_key, _score in confidence.candidate_scores
             if "identity_metadata" in support.get(candidate_key, ())
-            and candidate_key in preferred_area_candidates
         }
         eligible_keys: set[str] = set()
         previous_score = top_score
@@ -725,10 +756,22 @@ class RetrievalHelper:
         selected_keys: set[str] = set()
         previous_score = top_score
         candidate_keys = eligible_keys
+        # A direct, exact identity mention is stronger current-turn evidence
+        # than continuity. Preserve historical targets for ambiguous language,
+        # including false-high distributions, but never replace an explicitly
+        # requested new target such as "Current lamp".
+        has_explicit_current_target = any(
+            RetrievalHelper.device_target_score(query, device) >= 0.9
+            for device in devices
+        )
         preserved_keys = {
             candidate_key
             for candidate_key, device in devices_by_key.items()
-            if preserve_score is not None and preserve_score(device) > 0
+            if (
+                preserve_score is not None
+                and not has_explicit_current_target
+                and preserve_score(device) > 0
+            )
         }
         # Successful historical targets are continuity evidence, not current
         # identity evidence. Carry them through this final gate independently
@@ -1096,18 +1139,51 @@ class RetrievalHelper:
         return score
 
     @staticmethod
-    def reciprocal_rank_fusion(ranked_keys: Iterable[Iterable[str]], rank_constant: int = 60) -> dict[str, float]:
-        """Fuse independent rankings using reciprocal rank fusion."""
+    def reciprocal_rank_fusion(
+        ranked_keys: Iterable[Iterable[str] | dict[str, float]],
+        rank_constant: int = 60,
+    ) -> dict[str, float]:
+        """Fuse rankings, assigning equal evidence to equal-scored items."""
         scores: dict[str, float] = {}
         for ranking in ranked_keys:
-            for rank, key in enumerate(ranking, start=1):
-                scores[key] = scores.get(key, 0.0) + 1.0 / (rank_constant + rank)
+            if isinstance(ranking, dict):
+                # A score map is evidence only when it establishes positive
+                # relevance. In particular, zero/negative compatibility and
+                # similarity values must not create RRF votes.
+                ordered = sorted(
+                    (
+                        (key, float(value))
+                        for key, value in ranking.items()
+                        if math.isfinite(float(value)) and float(value) > 0.0
+                    ),
+                    key=lambda pair: (-pair[1], pair[0]),
+                )
+                previous_score: float | None = None
+                rank = 0
+                for position, (key, value) in enumerate(ordered, start=1):
+                    if previous_score is None or value < previous_score:
+                        # Competition ranking: ties receive the same vote and
+                        # the next distinct score reflects their positions.
+                        rank = position
+                    scores[key] = scores.get(key, 0.0) + 1.0 / (rank_constant + rank)
+                    previous_score = value
+            else:
+                for rank, key in enumerate(ranking, start=1):
+                    scores[key] = scores.get(key, 0.0) + 1.0 / (rank_constant + rank)
         return scores
 
     @staticmethod
     def _rank_positive_scores(scores: dict[str, float], minimum: float) -> list[str]:
-        ranked = sorted(scores.items(), key=lambda pair: pair[1], reverse=True)
+        ranked = sorted(scores.items(), key=lambda pair: (-pair[1], pair[0]))
         return [item_key for item_key, score in ranked if score > minimum]
+
+    @staticmethod
+    def _rank_only_if_separated(scores: dict[str, float], minimum: float) -> list[str]:
+        """Return a ranking only when the signal itself distinguishes items."""
+        positive = [score for score in scores.values() if score > minimum]
+        if len(set(positive)) <= 1:
+            return []
+        return RetrievalHelper._rank_positive_scores(scores, minimum)
 
     @staticmethod
     def _has_strong_current_match(
@@ -1143,6 +1219,19 @@ class RetrievalHelper:
             any(character.isdigit() for character in token)
             for token in RetrievalHelper._normalize(value).split()
         )
+
+    @staticmethod
+    def _has_textual_overlap(query: object, value: object) -> bool:
+        """Require non-numeric token overlap for numeric locations."""
+        query_tokens = {
+            token for token in RetrievalHelper._normalize(query).split()
+            if not any(character.isdigit() for character in token)
+        }
+        value_tokens = {
+            token for token in RetrievalHelper._normalize(value).split()
+            if not any(character.isdigit() for character in token)
+        }
+        return bool(query_tokens & value_tokens)
 
     @staticmethod
     def _trim_to_confident_keys(
@@ -1281,7 +1370,13 @@ class RetrievalHelper:
         )
 
         fused = RetrievalHelper.reciprocal_rank_fusion(
-            (vector_ranking, lexical_ranking, exact_ranking, fuzzy_ranking, metadata_ranking)
+            (
+                vector_ranking,
+                lexical_scores,
+                {item_key: scores[0] for item_key, scores in match_scores.items()},
+                {item_key: scores[1] for item_key, scores in match_scores.items()},
+                metadata_scores,
+            )
         )
         for rank, item_key in enumerate(continuity_ranking, start=1):
             fused[item_key] = fused.get(item_key, 0.0) + 0.25 / (60 + rank)
@@ -1509,6 +1604,33 @@ class RetrievalHelper:
         return max(0.0, signals.get("semantic_similarity", 0.0))
 
     @staticmethod
+    def tool_lexical_scores(tools: Iterable[Any], query: str) -> tuple[dict[str, float], dict[str, float]]:
+        """Return the action and broad TF-IDF scores used for tool retrieval."""
+        tools = list(tools)
+        names = [str(getattr(tool, "name", "")) for tool in tools]
+        action_documents = tuple(
+            (str(
+                getattr(tool, "canonical_action_document", "")
+                or getattr(tool, "canonical_action", "")
+                or getattr(tool, "name", ""),
+            ),)
+            for tool in tools
+        )
+        broad_documents = tuple(
+            tuple(str(part) for part in (
+                getattr(tool, "canonical_search_parts", ()) or (
+                    getattr(tool, "name", ""), getattr(tool, "description", ""),
+                )
+            ) if part)
+            for tool in tools
+        )
+        action_scores = dict(zip(names, lexical_index(action_documents).scores(query)))
+        broad_scores = dict(zip(names, lexical_index(broad_documents).scores(query)))
+        return action_scores, {
+            name: max(action_scores[name], broad_scores[name]) for name in names
+        }
+
+    @staticmethod
     def rank_tool_candidates(
         vector_results: Iterable[ScoredResult[T]],
         lexical_tools: Iterable[T],
@@ -1538,54 +1660,33 @@ class RetrievalHelper:
 
         corpus_names = sorted(candidate_by_name)
         corpus_tools = [candidate_by_name[name] for name in corpus_names]
-        # Action lexical retrieval has its own compact corpus. Device names,
-        # aliases, areas, and floors remain exclusively entity-retrieval data.
-        documents = tuple(
-            (str(getattr(tool, "canonical_action_document", "") or getattr(tool, "canonical_action", "") or getattr(tool, "name", "")),)
-            for tool in corpus_tools
-        )
-        index = lexical_index(documents)
-        corpus_scores = dict(zip(corpus_names, index.scores(query)))
-        # Custom integrations need not declare canonical actions. Their live
-        # descriptions and schemas are independent sources of lexical evidence.
-        # Combine text channels before fusion so repeated text gets one vote.
-        broad_documents = tuple(
-            tuple(str(part) for part in (
-                getattr(tool, "canonical_search_parts", ()) or (
-                    getattr(tool, "name", ""), getattr(tool, "description", ""),
-                )
-            ) if part)
-            for tool in corpus_tools
-        )
-        broad_scores = lexical_index(broad_documents).scores(query)
-        corpus_scores = {
-            name: max(corpus_scores[name], score)
-            for name, score in zip(corpus_names, broad_scores)
-        }
+        # The action-specific and broad description/schema corpora are one
+        # lexical signal; confidence consumes this exact same combined score.
+        _action_scores, corpus_scores = RetrievalHelper.tool_lexical_scores(corpus_tools, query)
         lexical_ranking = RetrievalHelper._rank_positive_scores(corpus_scores, 0.01)
         compatibility_scores = {
             name: RetrievalHelper.tool_capability_compatibility(tool, requested_capability)
             for name, tool in candidate_by_name.items()
         }
-        compatibility_ranking = RetrievalHelper._rank_positive_scores(
+        compatibility_ranking = RetrievalHelper._rank_only_if_separated(
             {name: score for name, score in compatibility_scores.items() if score > 0}, 0.0,
         )
         device_scores = {
             name: RetrievalHelper.tool_device_compatibility(tool, devices)
             for name, tool in candidate_by_name.items()
         }
-        device_ranking = RetrievalHelper._rank_positive_scores(device_scores, 0.0)
-        continuity_scores = {
-            name: continuity_score(tool) if continuity_score else 0.0
-            for name, tool in candidate_by_name.items()
-        }
-        continuity_ranking = RetrievalHelper._rank_positive_scores(continuity_scores, 0.0)
-        semantic_ranking = [
-            name for name, _ in sorted(semantic_ranks.items(), key=lambda item: item[1])
-        ]
+        device_ranking = RetrievalHelper._rank_only_if_separated(device_scores, 0.0)
+        # Target continuity belongs to device exposure. It must never make a
+        # previously used tool or action more relevant for this request.
+        continuity_scores = {name: 0.0 for name in candidate_by_name}
+        continuity_ranking: list[str] = []
         fused = RetrievalHelper.reciprocal_rank_fusion((
-            semantic_ranking, lexical_ranking, compatibility_ranking,
-            device_ranking, continuity_ranking,
+            # Preserve score ties from the vector backend. Converting these
+            # to a positional list made equal scores order-dependent.
+            semantic_scores,
+            corpus_scores,
+            compatibility_scores,
+            device_scores,
         ))
         scored: list[tuple[float, int, str, T]] = []
         signals_by_name: dict[str, dict[str, float]] = {}
@@ -1693,13 +1794,11 @@ class RetrievalHelper:
                 )
                 for tool in tools
             },
-            "lexical": {
-                str(getattr(tool, "name", "")): RetrievalHelper.field_match_score(
-                    query, getattr(tool, "canonical_search_parts", ()) or (),
-                )
-                for tool in tools
-            },
+            "lexical": {},
         }
+        # Confidence pruning uses the exact combined action/broad corpus that
+        # determines tool ranking, rather than a separate approximation.
+        _action_scores, signals["lexical"] = RetrievalHelper.tool_lexical_scores(tools, query)
         # Historical tool/action continuity is useful for ordering candidates,
         # but it is not evidence that the current request is relevant. Keep it
         # out of confidence classification so an old action cannot certify a
@@ -1709,6 +1808,13 @@ class RetrievalHelper:
             signals,
             profile=TOOL_CONFIDENCE_PROFILE,
             weak_signals={"lexical"},
+            signal_families={
+                "action_schema": "schema",
+                "domain_schema": "schema",
+            },
+            # A binary schema match is compatibility evidence, not a measure
+            # of how strongly the request matches a tool.
+            strength_signals={"vector", "lexical"},
             kind="tool",
         )
 
@@ -1797,6 +1903,33 @@ class RetrievalHelper:
         if RetrievalHelper._metadata_value(tool, "is_area_aware") and has_area:
             score += 0.25
         return score
+
+    @staticmethod
+    def rerank_devices_for_tools(devices: Iterable[T], tools: Iterable[Any]) -> list[T]:
+        """Refine device order from the selected tool schemas without filtering.
+
+        Retrieval remains recall-first: a tool with incomplete metadata cannot
+        remove devices. When selected tools explicitly declare compatible
+        domains/classes, however, that second retrieval direction breaks ties
+        in favour of targets those tools can actually operate.
+        """
+        devices = list(devices)
+        tools = list(tools)
+        compatibility = {
+            index: max(
+                (RetrievalHelper.tool_device_compatibility(tool, (device,))
+                 for tool in tools),
+                default=0.0,
+            )
+            for index, device in enumerate(devices)
+        }
+        if not any(score > 0.0 for score in compatibility.values()):
+            return devices
+        return [
+            device for index, device in sorted(
+                enumerate(devices), key=lambda item: (-compatibility[item[0]], item[0]),
+            )
+        ]
 
     @staticmethod
     def _tool_service_names(tool: Any) -> set[str]:

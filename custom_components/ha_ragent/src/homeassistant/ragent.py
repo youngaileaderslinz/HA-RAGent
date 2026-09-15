@@ -283,8 +283,12 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             str(device.area_name).casefold()
             for device in ranked_devices
             if device.area_name
-            and RetrievalHelper._normalize(device.area_name)
-            in RetrievalHelper._normalize(query)
+            and (
+                RetrievalHelper._normalize(device.area_name)
+                in RetrievalHelper._normalize(query)
+                if not RetrievalHelper._has_numeric_token(device.area_name)
+                else RetrievalHelper._has_textual_overlap(query, device.area_name)
+            )
         }
         return RetrievalHelper.select_device_candidates(
             query,
@@ -344,23 +348,60 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             query,
             devices or [],
             max(exposure_limit, RetrievalHelper.expanded_tool_limit(exposure_limit)),
-            continuity_score=continuity.tool_score,
         )
         if max_tools is None:
             return ranked_tools[:n_tools]
         confidence = RetrievalHelper.tool_search_confidence_details(
             ranked_tools, query, devices or [],
             vector_results=scored_tools,
-            continuity_score=continuity.tool_score,
         )
-        selected_names = set(RetrievalHelper.prune_confidence_band(
-            confidence,
-            max_tools,
-            absolute_floor=TOOL_SELECTION_ABSOLUTE_FLOOR,
-            relative_floor=TOOL_SELECTION_RELATIVE_FLOOR,
-            gap_threshold=TOOL_SELECTION_GAP_THRESHOLD,
-            preserve_signals=set(),
-        ))
+        if confidence.level in {"low", "none"}:
+            # Preserve a plausible alternative *action*, rather than merely
+            # a different tool signature. This leaves the model a way to
+            # correct an ambiguous on/off (or similar) interpretation.
+            target = min(max_tools, max(2, n_tools))
+            selected_names: set[str] = set()
+            seen_actions: set[str] = set()
+            action_scores, _lexical_scores = RetrievalHelper.tool_lexical_scores(
+                ranked_tools, query,
+            )
+            # Reserve a slot for the action most directly supported by the
+            # request before adding a competing action for recovery.
+            relevant = max(
+                ranked_tools,
+                key=lambda tool: (
+                    action_scores.get(tool.name, 0.0),
+                    -ranked_tools.index(tool),
+                ),
+                default=None,
+            )
+            if relevant is not None and action_scores.get(relevant.name, 0.0) > 0:
+                selected_names.add(relevant.name)
+                seen_actions.add(
+                    str(getattr(relevant, "canonical_action", "") or relevant.name).casefold()
+                )
+            for tool in ranked_tools:
+                action = str(getattr(tool, "canonical_action", "") or tool.name).casefold()
+                if action in seen_actions:
+                    continue
+                selected_names.add(tool.name)
+                seen_actions.add(action)
+                if len(selected_names) >= target:
+                    break
+            if len(selected_names) < target:
+                for tool in ranked_tools:
+                    selected_names.add(tool.name)
+                    if len(selected_names) >= target:
+                        break
+        else:
+            selected_names = set(RetrievalHelper.prune_confidence_band(
+                confidence,
+                max_tools,
+                absolute_floor=TOOL_SELECTION_ABSOLUTE_FLOOR,
+                relative_floor=TOOL_SELECTION_RELATIVE_FLOOR,
+                gap_threshold=TOOL_SELECTION_GAP_THRESHOLD,
+                preserve_signals=set(),
+            ))
         selected_tools = [tool for tool in ranked_tools if tool.name in selected_names][:max_tools]
         # Confidence pruning is allowed to reduce the optional set, but it
         # must not violate the configured minimum. Fill from the existing
@@ -389,6 +430,21 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             configured_minimum=n_tools,
             configured_maximum=max_tools,
             selected_tools=[tool.name for tool in selected_tools],
+            tool_decisions=[
+                {
+                    "tool": tool.name,
+                    "included": tool.name in selected_tool_names,
+                    "reason": (
+                        "included in ambiguous diverse set"
+                        if confidence.level in {"low", "none"}
+                        and tool.name in selected_tool_names
+                        else "included by confidence band"
+                        if tool.name in selected_tool_names
+                        else "excluded by confidence pruning"
+                    ),
+                }
+                for tool in ranked_tools
+            ],
         )
         return selected_tools
 
@@ -1182,6 +1238,11 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     devices=retrieved_devices,
                     max_tools=max_tools,
                 ) if llm_api else []
+                # Complete the retrieval loop: selected tool schemas refine
+                # device ordering without discarding uncertain targets.
+                retrieved_devices = RetrievalHelper.rerank_devices_for_tools(
+                    retrieved_devices, retrieved_tools,
+                )
                 log_timing("retrieval: tools")
                 log_debug_payload(
                     _logger, "conversation.retrieval_result",
