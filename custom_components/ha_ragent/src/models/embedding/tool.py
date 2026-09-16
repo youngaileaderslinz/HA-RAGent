@@ -11,6 +11,7 @@ from custom_components.ha_ragent.src.models.embedding.tool_metadata import (
     ToolMetadata,
     split_canonical_name,
 )
+from custom_components.ha_ragent.src.models.embedding.schema_constraints import root_property_values
 from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 @dataclass
@@ -46,52 +47,104 @@ class LlmTool(SerializableModel, EmbeddableModel):
                 values.update(LlmTool._schema_values(value))
         return values
 
-    @classmethod
-    def _schema_field_values(cls, schema: object, field: str) -> set[str]:
-        """Collect constrained values for a field throughout a nested schema."""
-        values: set[str] = set()
-        if isinstance(schema, dict):
-            for name, value in schema.items():
-                if name == field:
-                    values.update(cls._schema_values(value))
-                values.update(cls._schema_field_values(value, field))
-        elif isinstance(schema, list):
-            for value in schema:
-                values.update(cls._schema_field_values(value, field))
-        return values
+    @staticmethod
+    def _resolve_local_ref(schema: dict[str, Any], root: dict[str, Any]) -> dict[str, Any] | None:
+        """Resolve a local JSON pointer; external and invalid refs stay neutral."""
+        ref = schema.get("$ref")
+        if not isinstance(ref, str) or not ref.startswith("#/"):
+            return schema if "$ref" not in schema else None
+        value: object = root
+        for part in ref[2:].split("/"):
+            if not isinstance(value, dict):
+                return None
+            value = value.get(part.replace("~1", "/").replace("~0", "~"))
+        return value if isinstance(value, dict) else None
 
     @staticmethod
-    def _schema_search_parts(schema: object, path: str = "", depth: int = 0) -> tuple[str, ...]:
-        """Return bounded names, descriptions, required fields, types, and enums."""
-        if depth > 4 or not isinstance(schema, dict):
+    def _schema_search_parts(
+        schema: object, path: str = "", depth: int = 0,
+        root: dict[str, Any] | None = None, refs: frozenset[str] = frozenset(),
+    ) -> tuple[str, ...]:
+        """Return literal schema structure, resolving safe local definitions."""
+        if depth > 16 or not isinstance(schema, dict):
             return ()
+        root = root or schema
+        ref = schema.get("$ref")
+        if isinstance(ref, str):
+            if ref in refs:
+                return ()
+            resolved = LlmTool._resolve_local_ref(schema, root)
+            if resolved is None:
+                return ()
+            schema = {**resolved, **{key: value for key, value in schema.items() if key != "$ref"}}
+            refs = refs | {ref}
         parts: list[str] = []
-        description = schema.get("description")
-        schema_type = schema.get("type")
-        required = schema.get("required")
-        enum = schema.get("enum")
         if path:
-            parts.append(f"parameter {path}")
-        if isinstance(description, str) and description:
-            parts.append(description)
-        if schema_type:
-            parts.append(f"type {schema_type}")
-        if isinstance(required, list) and required:
-            parts.append("required " + " ".join(str(name) for name in required))
-        if isinstance(enum, list) and enum:
-            parts.append("choices " + " ".join(str(value) for value in enum))
-        if "const" in schema:
-            parts.append(f"constant {schema['const']}")
+            parts.append(path)
+        if isinstance(schema.get("description"), str) and schema["description"]:
+            parts.append(schema["description"])
+        for key in ("type", "enum", "const"):
+            value = schema.get(key)
+            if value not in (None, "", [], {}):
+                parts.append(",".join(str(item) for item in value) if isinstance(value, list) else str(value))
         for keyword in ("anyOf", "oneOf", "allOf"):
             for variant in schema.get(keyword, []):
-                parts.extend(LlmTool._schema_search_parts(variant, path, depth + 1))
+                parts.extend(LlmTool._schema_search_parts(variant, path, depth + 1, root, refs))
         for name, value in (schema.get("properties") or {}).items():
             child_path = f"{path}.{name}" if path else str(name)
-            parts.extend(LlmTool._schema_search_parts(value, child_path, depth + 1))
+            parts.extend(LlmTool._schema_search_parts(value, child_path, depth + 1, root, refs))
         items = schema.get("items")
         if isinstance(items, dict):
-            parts.extend(LlmTool._schema_search_parts(items, f"{path} item".strip(), depth + 1))
-        return tuple(parts[:80])
+            parts.extend(LlmTool._schema_search_parts(items, f"{path} item".strip(), depth + 1, root, refs))
+        return tuple(parts)
+
+    @staticmethod
+    def _schema_embedding_parts(
+        schema: object, path: str = "", depth: int = 0,
+        root: dict[str, Any] | None = None, refs: frozenset[str] = frozenset(),
+    ) -> tuple[str, ...]:
+        """Serialize bounded schema content in a stable structural form."""
+        if depth > 16 or not isinstance(schema, dict):
+            return ()
+        root = root or schema
+        ref = schema.get("$ref")
+        if isinstance(ref, str):
+            if ref in refs:
+                return ()
+            resolved = LlmTool._resolve_local_ref(schema, root)
+            if resolved is None:
+                return ()
+            schema = {**resolved, **{key: value for key, value in schema.items() if key != "$ref"}}
+            refs = refs | {ref}
+        parts: list[str] = []
+        if path:
+            parts.append(f"schema.path={path}")
+        for key in ("description", "type", "enum", "const"):
+            value = schema.get(key)
+            if value not in (None, "", [], {}):
+                encoded = ",".join(str(item) for item in value) if isinstance(value, list) else str(value)
+                parts.append(f"schema.{key}={encoded}")
+        for keyword in ("anyOf", "oneOf", "allOf"):
+            for index, variant in enumerate(schema.get(keyword, ())):
+                parts.extend(LlmTool._schema_embedding_parts(variant, f"{path}.{keyword}.{index}".strip("."), depth + 1, root, refs))
+        for name, value in (schema.get("properties") or {}).items():
+            parts.extend(LlmTool._schema_embedding_parts(value, f"{path}.{name}".strip("."), depth + 1, root, refs))
+        if isinstance(schema.get("items"), dict):
+            parts.extend(LlmTool._schema_embedding_parts(schema["items"], f"{path}.items".strip("."), depth + 1, root, refs))
+        return tuple(parts)
+
+    @staticmethod
+    def _bounded_schema_parts(schema: dict[str, Any], embedding: bool = False) -> tuple[str, ...]:
+        """Allocate the schema budget across root parameters fairly."""
+        properties = schema.get("properties")
+        walker = LlmTool._schema_embedding_parts if embedding else LlmTool._schema_search_parts
+        if not isinstance(properties, dict) or not properties:
+            return walker(schema, root=schema)[:80]
+        budget = max(1, 80 // len(properties))
+        parts: list[str] = []
+        for name, value in properties.items():
+            parts.extend(walker(value, str(name), root=schema)[:budget])
+        return tuple(dict.fromkeys(parts))[:80]
 
     @property
     def canonical_schema_parts(self) -> tuple[str, ...]:
@@ -107,9 +160,9 @@ class LlmTool(SerializableModel, EmbeddableModel):
             snapshot = deepcopy(parameters)
             cached = (
                 snapshot,
-                self._schema_search_parts(snapshot),
-                frozenset(self._schema_field_values(snapshot, "domain")),
-                frozenset(self._schema_field_values(snapshot, "device_class")),
+                self._bounded_schema_parts(snapshot),
+                frozenset(root_property_values(snapshot, "domain")),
+                frozenset(root_property_values(snapshot, "device_class")),
             )
             self._cached_schema_features = cached
         return cached
@@ -213,6 +266,13 @@ class LlmTool(SerializableModel, EmbeddableModel):
             self.append_if_exists(parts, translations.embedding("tool_expected_states", value="{}"), list(expected_states or ()))
 
         self.append_if_exists(parts, translations.embedding("tool_description", value="{}"), self.description)
+        # Keep schema structure literal and stable: it is both useful content
+        # for a custom integration and does not require a query-time model.
+        parts.extend(value for value in (
+            self.name,
+            " ".join(self.canonical_name_parts),
+            *self._bounded_schema_parts(self.parameters or {}, embedding=True),
+        ) if value)
 
         return " ".join(parts)
 

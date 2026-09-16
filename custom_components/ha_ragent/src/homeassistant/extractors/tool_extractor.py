@@ -29,6 +29,7 @@ from custom_components.ha_ragent.src.models.embedding.tool_metadata import (
     split_canonical_name,
 )
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
+from custom_components.ha_ragent.src.models.embedding.schema_constraints import root_property_values
 from custom_components.ha_ragent.src.homeassistant.ragent_api import resolve_llm_api_id
 from custom_components.ha_ragent.src.homeassistant.ragent_config_entry import RAGentConfigEntry
 
@@ -55,7 +56,18 @@ class ToolExtractor:
         if isinstance(validator, vol.In):
             return cls._normalize_strings(validator.container), False
 
-        if isinstance(validator, vol.All) or isinstance(validator, vol.Any):
+        if isinstance(validator, vol.All):
+            constrained: list[set[str]] = []
+            for nested in validator.validators:
+                nested_values, nested_universal = cls._extract_values_from_validator(nested)
+                if nested_values:
+                    constrained.append(nested_values)
+                universal = universal or nested_universal
+            # A free-form conjunct is neutral; multiple literal conjuncts
+            # narrow their intersection rather than broadening a domain list.
+            return (set.intersection(*constrained) if constrained else set()), universal
+
+        if isinstance(validator, vol.Any):
             for nested in validator.validators:
                 nested_values, nested_universal = cls._extract_values_from_validator(nested)
                 values.update(nested_values)
@@ -143,7 +155,10 @@ class ToolExtractor:
         domains = cls._metadata_value(source, "supported_domains", "domains", "domain", default=())
         if isinstance(domains, str):
             domains = (domains,)
-        schema_domains = cls._schema_values(properties.get("domain", {}))
+        # Metadata restrictions and ranking use the same conservative schema
+        # interpreter.  Literal values in an unrestricted alternative remain
+        # searchable schema content, but are not a supported-domain claim.
+        schema_domains = root_property_values(parameters, "domain")
         # Keep the original voluptuous schema as a fallback. Some HA/API
         # adapters flatten constrained fields while converting to OpenAPI and
         # silently drop the enum, even though the source schema still has it.
@@ -158,7 +173,10 @@ class ToolExtractor:
                 raw_schema, "domain",
             )
             if has_domain:
-                schema_domains.update(raw_domains)
+                # Voluptuous can express a union with a free-form string.  In
+                # that case the source schema is likewise neutral.
+                if not _universal:
+                    schema_domains.update(raw_domains)
         metadata.supported_domains = tuple(sorted({
             *(str(value).casefold() for value in (domains or ())),
             *schema_domains,

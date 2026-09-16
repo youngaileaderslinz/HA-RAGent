@@ -21,9 +21,10 @@ def normalize(text: str) -> str:
 
 
 def features(text: str) -> Counter[str]:
-    """Return character ``char_wb`` 3--5 gram TF-IDF features."""
+    """Return word and character TF-IDF features without a language lexicon."""
     terms: Counter[str] = Counter()
     for word in canonical_normalize(text).split():
+        terms[f"w:{word}"] += 1
         padded = f" {word} "
         for size in range(3, 6):
             terms.update(
@@ -102,14 +103,30 @@ class LexicalIndex:
     def __init__(self, documents: tuple[tuple[str, ...], ...]) -> None:
         self.documents = documents
         self._field_indexes: dict[int, FieldIndex] = {3: FieldIndex(documents)}
-        counts = [features(" ".join(parts)) for parts in documents]
-        frequency = Counter(term for document in counts for term in document)
-        self.idf = {term: math.log(1 + len(counts) / count) for term, count in frequency.items()}
-        self.postings: dict[str, list[tuple[int, float]]] = defaultdict(list)
-        for index, document in enumerate(counts):
-            weights = self._weights(document)
-            for term, weight in weights.items():
-                self.postings[term].append((index, weight))
+        # A name, location, description, and schema value are separate
+        # fields.  Flattening them made long schemas reduce the score of a
+        # short exact identity match.  Per-field normalization preserves the
+        # strongest evidence without a language-specific vocabulary.
+        self.counts = [[features(part) for part in parts if part] for parts in documents]
+        frequency = Counter(
+            term for document in self.counts for field in document for term in field
+        )
+        field_count = sum(len(document) for document in self.counts)
+        self.idf = {
+            term: math.log(1 + field_count / count)
+            for term, count in frequency.items()
+        }
+        # Posting lists keep long collections from scanning every field for a
+        # query.  They are built with the collection and reused by its cache.
+        self.postings: dict[str, list[tuple[int, int, float]]] = defaultdict(list)
+        self.field_weights: list[list[dict[str, float]]] = [
+            [self._weights(field) for field in document]
+            for document in self.counts
+        ]
+        for document_id, document in enumerate(self.field_weights):
+            for field_id, weights in enumerate(document):
+                for term, weight in weights.items():
+                    self.postings[term].append((document_id, field_id, weight))
 
     def _weights(self, counts: Counter[str]) -> dict[str, float]:
         weights = {
@@ -127,9 +144,22 @@ class LexicalIndex:
             for index, (exact, fuzzy) in self.match_scores(query).items():
                 scores[index] = max(exact, 0.35 * fuzzy)
             return scores
-        for term, weight in self._weights(features(query)).items():
-            for index, document_weight in self.postings[term]:
-                scores[index] += weight * document_weight
+        query_weights = self._weights(features(query))
+        field_scores: dict[tuple[int, int], float] = defaultdict(float)
+        for term, query_weight in query_weights.items():
+            for document_id, field_id, field_weight in self.postings.get(term, ()):
+                field_scores[(document_id, field_id)] += query_weight * field_weight
+        by_document: dict[int, list[float]] = defaultdict(list)
+        for (document_id, _field_id), score in field_scores.items():
+            by_document[document_id].append(score)
+        for document_id, values in by_document.items():
+            values.sort(reverse=True)
+            # A short exact identifier remains dominant, but corroborating
+            # identity, room, and description fields can lift a candidate.
+            scores[document_id] = min(
+                1.0,
+                values[0] + sum(value * 0.25 for value in values[1:3]),
+            )
         return scores
 
     def match_scores(self, query: str) -> dict[int, tuple[float, float]]:

@@ -253,6 +253,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 + continuity.ambiguous_entity_score(device)
             )
 
+        device_ranking_evidence: dict[str, dict[str, float]] = {}
         ranked_devices = await asyncio.to_thread(
             RetrievalHelper.rank_scored_candidates,
             scored_devices,
@@ -265,6 +266,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             continuity_score=device_continuity_score,
             preserve_score=continuity.successful_target_score,
             trim_confident=False,
+            ranking_evidence=device_ranking_evidence,
         )
         confidence = RetrievalHelper.device_search_confidence(
             ranked_devices,
@@ -278,6 +280,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             },
             continuity_score=device_continuity_score,
             confirmed_score=continuity.successful_target_score,
+            ranking_evidence=device_ranking_evidence,
         )
         query_areas = {
             str(device.area_name).casefold()
@@ -308,27 +311,20 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         continuity: ContinuityContext,
         devices: list[Device] | None = None,
         max_tools: int | None = None,
+        sources: tuple[list[Any], list[LlmTool]] | None = None,
     ) -> List[LlmTool]:
         """Retrieve relevant tools from vector database based on query embedding."""
         exposure_limit = max(n_tools, max_tools or n_tools)
         if exposure_limit <= 0:
             return []
-        collection_name = f"tools_{self.subentry_id}"
-        try:
-            candidate_limit = RetrievalHelper.adaptive_candidate_limit(exposure_limit)
-            options = {**self.entry.options, **self.subentry.data}
-            scored_tools, all_tools = await RetrievalHelper.async_retrieve_sources(
-                self.entry.vector_db_backend, LlmToolEmbedding, options,
-                collection_name, query_embedding, candidate_limit, query=query,
+        candidate_limit = RetrievalHelper.adaptive_candidate_limit(exposure_limit)
+        if sources is None:
+            sources = await self._async_retrieve_tool_sources(
+                query_embedding, query, candidate_limit,
             )
-            get_lexical = getattr(self.entry.vector_db_backend, "async_get_lexical_objects", None)
-            if not all_tools and callable(get_lexical):
-                all_tools = await get_lexical(
-                    LlmToolEmbedding, options, collection_name,
-                )
-        except Exception as e:
-            _logger.error(f"Error retrieving tools from vector DB: {e}", exc_info=True)
+        if sources is None:
             return []
+        scored_tools, all_tools = sources
 
         # Required tools are always exposed separately and must not consume
         # slots from the configured optional retrieval budget.
@@ -341,6 +337,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             tool for tool in all_tools
             if tool.name not in required_names
         ]
+        tool_ranking_evidence: dict[str, dict[str, float]] = {}
         ranked_tools = await asyncio.to_thread(
             RetrievalHelper.rank_tool_candidates,
             scored_tools,
@@ -348,12 +345,14 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             query,
             devices or [],
             max(exposure_limit, RetrievalHelper.expanded_tool_limit(exposure_limit)),
+            ranking_evidence=tool_ranking_evidence,
         )
         if max_tools is None:
             return ranked_tools[:n_tools]
         confidence = RetrievalHelper.tool_search_confidence_details(
             ranked_tools, query, devices or [],
             vector_results=scored_tools,
+            ranking_evidence=tool_ranking_evidence,
         )
         if confidence.level in {"low", "none"}:
             # Preserve a plausible alternative *action*, rather than merely
@@ -447,6 +446,27 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             ],
         )
         return selected_tools
+
+    async def _async_retrieve_tool_sources(
+        self,
+        query_embedding: List[float] | QueryEmbedding,
+        query: str,
+        candidate_limit: int,
+    ) -> tuple[list[Any], list[LlmTool]] | None:
+        """Fetch tool candidates independently of device resolution."""
+        try:
+            options = {**self.entry.options, **self.subentry.data}
+            scored_tools, all_tools = await RetrievalHelper.async_retrieve_sources(
+                self.entry.vector_db_backend, LlmToolEmbedding, options,
+                f"tools_{self.subentry_id}", query_embedding, candidate_limit, query=query,
+            )
+            get_lexical = getattr(self.entry.vector_db_backend, "async_get_lexical_objects", None)
+            if not all_tools and callable(get_lexical):
+                all_tools = await get_lexical(LlmToolEmbedding, options, f"tools_{self.subentry_id}")
+            return list(scored_tools), list(all_tools)
+        except Exception as err:
+            _logger.error("Error retrieving tools from vector DB: %s", err, exc_info=True)
+            return None
 
     async def _async_retrieve_memories(self, query_embedding: List[float] | QueryEmbedding, n_memories: int) -> List[Memory]:
         """Retrieve relevant persistent memories for this agent."""
@@ -1225,6 +1245,13 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                             max_devices=max_devices,
                         )
                     )
+                    tool_task = retrieval_tasks.create_task(
+                        self._async_retrieve_tool_sources(
+                            query_embedding,
+                            retrieval_query,
+                            RetrievalHelper.adaptive_candidate_limit(max(min_tools, max_tools)),
+                        )
+                    ) if llm_api and max(min_tools, max_tools) > 0 else None
 
                 retrieved_memories = memory_task.result()
                 retrieved_devices = device_task.result()
@@ -1237,6 +1264,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     continuity=continuity,
                     devices=retrieved_devices,
                     max_tools=max_tools,
+                    sources=tool_task.result() if tool_task else None,
                 ) if llm_api else []
                 # Complete the retrieval loop: selected tool schemas refine
                 # device ordering without discarding uncertain targets.

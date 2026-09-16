@@ -22,6 +22,7 @@ from custom_components.ha_ragent.src.models.retrieval.confidence_assessment impo
 from custom_components.ha_ragent.src.models.retrieval.confidence_profile import (
     ConfidenceProfile,
 )
+from custom_components.ha_ragent.src.models.embedding.schema_constraints import root_property_values
 from custom_components.ha_ragent.src.models.retrieval.continuity_context import ContinuityContext
 from custom_components.ha_ragent.src.models.retrieval.turn_context import TurnContext
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import (
@@ -415,6 +416,7 @@ class RetrievalHelper:
         structured_scores: dict[str, Callable[[T], float]] | None = None,
         continuity_score: Callable[[T], float] | None = None,
         confirmed_score: Callable[[T], float] | None = None,
+        ranking_evidence: dict[str, dict[str, float]] | None = None,
     ) -> ConfidenceAssessment:
         """Measure per-target confidence from its local candidate distribution."""
         devices = list(devices)
@@ -439,7 +441,12 @@ class RetrievalHelper:
                 continuity_raw[item_key] = max(
                     continuity_raw.get(item_key, 0.0), confirmed_score(device),
                 )
-        if text_parts:
+        if ranking_evidence and "lexical" in ranking_evidence:
+            signals["lexical"] = {
+                item_key: ranking_evidence["lexical"].get(item_key, 0.0)
+                for item_key in keys
+            }
+        elif text_parts:
             # Match device confidence to the lexical TF-IDF signal used by
             # device ranking; field matching remains an identity feature,
             # not an independent confidence distribution.
@@ -457,6 +464,21 @@ class RetrievalHelper:
             weak_signals={"lexical"},
             kind="device",
         )
+        # Keep raw fusion strictly as an ordering diagnostic.  Eligibility is
+        # based on the calibrated, locally normalized confidence values above;
+        # RRF scores are normally around 0.01--0.05 and are not thresholds.
+        if ranking_evidence and "fused" in ranking_evidence:
+            fused_scores = ranking_evidence["fused"]
+            fused_order = sorted(
+                keys, key=lambda item_key: (-fused_scores.get(item_key, 0.0), item_key),
+            )
+            assessment = replace(
+                assessment,
+                final_candidate_scores=tuple(
+                    (item_key, fused_scores.get(item_key, 0.0))
+                    for item_key in fused_order
+                ),
+            )
         current_scores = dict(assessment.candidate_scores)
         continuity_boosts = {
             item_key: min(
@@ -472,7 +494,7 @@ class RetrievalHelper:
         }
         original_positions = {
             item_key: index for index, (item_key, _score)
-            in enumerate(assessment.candidate_scores)
+            in enumerate(assessment.final_candidate_scores or assessment.candidate_scores)
         }
         final_order = sorted(
             final_scores,
@@ -1111,6 +1133,7 @@ class RetrievalHelper:
         continuity_score: Callable[[T], float] | None = None,
         preserve_score: Callable[[T], float] | None = None,
         trim_confident: bool = True,
+        ranking_evidence: dict[str, dict[str, float]] | None = None,
     ) -> list[T]:
         """Fuse rank-based signals and suppress stale continuity on strong matches."""
         if limit <= 0:
@@ -1187,10 +1210,11 @@ class RetrievalHelper:
 
         fused = RetrievalHelper.reciprocal_rank_fusion(
             (
-                vector_ranking,
-                lexical_scores,
-                {item_key: scores[0] for item_key, scores in match_scores.items()},
-                {item_key: scores[1] for item_key, scores in match_scores.items()},
+                {key(result.item): result.score for result in vector_results},
+                {
+                    item_key: max(lexical_scores.get(item_key, 0.0), exact, 0.5 * fuzzy)
+                    for item_key, (exact, fuzzy) in match_scores.items()
+                },
                 metadata_scores,
             )
         )
@@ -1199,9 +1223,7 @@ class RetrievalHelper:
         for item_key, (exact_score, fuzzy_score) in match_scores.items():
             fused[item_key] = (
                 fused.get(item_key, 0.0)
-                + (0.03 * lexical_scores.get(item_key, 0.0))
-                + (0.01 * exact_score)
-                + (0.01 * fuzzy_score)
+                + (0.03 * max(lexical_scores.get(item_key, 0.0), exact_score, 0.5 * fuzzy_score))
             )
         ordered_keys = sorted(
             candidates,
@@ -1243,6 +1265,9 @@ class RetrievalHelper:
             )
 
         result = [candidates[item_key] for item_key in selected_keys]
+        if ranking_evidence is not None:
+            ranking_evidence["lexical"] = lexical_scores
+            ranking_evidence["fused"] = fused
         log_debug_payload(
             _logger, "retrieval.device_ranking", query=query, limit=limit,
             vector_results=vector_results, lexical_items=lexical_items,
@@ -1277,6 +1302,10 @@ class RetrievalHelper:
         return values
 
     @staticmethod
+    def _schema_target_values(schema: object, field: str) -> set[str]:
+        return root_property_values(schema, field)
+
+    @staticmethod
     def _device_value(device: Any, name: str, default: Any = None) -> Any:
         if isinstance(device, dict):
             return device.get(name, default)
@@ -1309,9 +1338,9 @@ class RetrievalHelper:
 
     @staticmethod
     def _tool_declared_domains(tool: Any) -> set[str]:
-        properties = (getattr(tool, "parameters", None) or {}).get("properties") or {}
+        parameters = getattr(tool, "parameters", None) or {}
         schema_domains = getattr(tool, "schema_domains", None)
-        domains = set(schema_domains) if schema_domains is not None else RetrievalHelper._schema_values(properties.get("domain", {}))
+        domains = set(schema_domains) if schema_domains is not None else RetrievalHelper._schema_target_values(parameters, "domain")
         domains.update(RetrievalHelper._metadata_value(tool, "supported_domains", ()) or ())
         return {str(domain).casefold() for domain in domains if domain}
 
@@ -1350,8 +1379,8 @@ class RetrievalHelper:
     def tool_capability_compatibility(tool: Any, capability: object) -> float:
         """Deterministically compare requested and declared tool capabilities.
 
-        A negative value is an explicit contradiction. Missing metadata remains
-        neutral so incomplete device or tool metadata cannot suppress recovery.
+        Missing or inferred metadata remains neutral so incomplete device or
+        tool metadata cannot suppress recovery.
         """
         requested = RetrievalHelper.normalize_requested_capability(capability)
         if not requested:
@@ -1360,10 +1389,11 @@ class RetrievalHelper:
         requested_domains = set(requested.get("domains", ()) or ())
         tool_action = str(getattr(tool, "canonical_action", "") or "").casefold()
         tool_domains = RetrievalHelper._tool_declared_domains(tool)
-        if requested_action and tool_action and requested_action != tool_action:
-            return -1.0
-        if requested_domains and tool_domains and not requested_domains & tool_domains:
-            return -1.0
+        # Action IDs are integration-local declarations, not a universal
+        # ontology. A different ID is neutral rather than incompatibility.
+        # An inferred domain field is compatibility evidence, not a safe
+        # exclusion for arbitrary/custom integrations. Domain agreement can
+        # still provide a bounded positive signal below.
         score = 0.0
         if requested_action and tool_action == requested_action:
             score += 1.0
@@ -1453,6 +1483,7 @@ class RetrievalHelper:
         devices: Iterable[Any],
         limit: int,
         requested_capability: object = None,
+        ranking_evidence: dict[str, dict[str, float]] | None = None,
     ) -> list[T]:
         """Rank a broad tool pool without discarding uncertain candidates."""
         if limit <= 0:
@@ -1489,6 +1520,10 @@ class RetrievalHelper:
             name: RetrievalHelper.tool_device_compatibility(tool, devices)
             for name, tool in candidate_by_name.items()
         }
+        # Query relevance is the baseline.  Device compatibility is neither a
+        # fourth equal RRF vote nor an eligibility filter: selected devices can
+        # be incomplete or ambiguous.  It can only break close query ties when
+        # a device identifier/alias is strongly present in the request.
         device_ranking = RetrievalHelper._rank_only_if_separated(device_scores, 0.0)
         fused = RetrievalHelper.reciprocal_rank_fusion((
             # Preserve score ties from the vector backend. Converting these
@@ -1496,8 +1531,20 @@ class RetrievalHelper:
             semantic_scores,
             corpus_scores,
             compatibility_scores,
-            device_scores,
         ))
+        device_reliability = max(
+            (RetrievalHelper.device_target_score(query, device) for device in devices),
+            default=0.0,
+        )
+        if device_reliability >= 0.9 and device_ranking:
+            maximum_device_score = max(device_scores.values(), default=0.0)
+            if maximum_device_score > 0:
+                # At most one fifth of the smallest ordinary RRF vote: enough
+                # to settle close alternatives, never enough to displace a
+                # clearly better query-only candidate.
+                adjustment = 0.2 / (60 + len(candidate_by_name))
+                for name, score in device_scores.items():
+                    fused[name] = fused.get(name, 0.0) + adjustment * score / maximum_device_score
         scored: list[tuple[float, int, str, T]] = []
         signals_by_name: dict[str, dict[str, float]] = {}
         for name, tool in candidate_by_name.items():
@@ -1517,6 +1564,10 @@ class RetrievalHelper:
                 )
             )
         scored.sort(key=lambda item: (-item[0], item[1], item[2]))
+        if ranking_evidence is not None:
+            ranking_evidence["lexical"] = dict(corpus_scores)
+            ranking_evidence["fused"] = dict(fused)
+            ranking_evidence["vector"] = dict(semantic_scores)
         if requested_capability and any(
             score >= 0 for score in compatibility_scores.values()
         ):
@@ -1558,6 +1609,7 @@ class RetrievalHelper:
                 semantic_scores=semantic_scores, corpus_scores=corpus_scores,
                 lexical_ranking=lexical_ranking, compatibility_ranking=compatibility_ranking,
                 device_ranking=device_ranking, signals=signals_by_name, fused_scores=fused,
+                device_reliability=device_reliability,
                 scored=[{"score": score, "semantic_rank": rank, "name": name}
                         for score, rank, name, _ in scored],
                 selected=result,
@@ -1571,6 +1623,7 @@ class RetrievalHelper:
         devices: Iterable[Any],
         requested_capability: object = None,
         vector_results: Iterable[ScoredResult[Any]] = (),
+        ranking_evidence: dict[str, dict[str, float]] | None = None,
     ) -> ConfidenceAssessment:
         """Measure per-capability confidence from separation and schema evidence."""
         tools = list(tools)
@@ -1585,7 +1638,10 @@ class RetrievalHelper:
         requested_action = str(requested.get("action", "") or "")
         requested_domains = set(requested.get("domains", ()) or ())
         signals: dict[str, dict[str, float]] = {
-            "vector": semantic,
+            "vector": (
+                dict(ranking_evidence.get("vector", {}))
+                if ranking_evidence else semantic
+            ),
             "action_schema": {
                 str(getattr(tool, "name", "")): float(
                     bool(requested_action)
@@ -1604,8 +1660,13 @@ class RetrievalHelper:
         }
         # Confidence pruning uses the exact combined action/broad corpus that
         # determines tool ranking, rather than a separate approximation.
-        _action_scores, signals["lexical"] = RetrievalHelper.tool_lexical_scores(tools, query)
-        return RetrievalHelper.assess_distribution_confidence(
+        _action_scores, recomputed_lexical = RetrievalHelper.tool_lexical_scores(tools, query)
+        signals["lexical"] = (
+            {name: ranking_evidence["lexical"].get(name, 0.0) for name in names}
+            if ranking_evidence and "lexical" in ranking_evidence
+            else recomputed_lexical
+        )
+        assessment = RetrievalHelper.assess_distribution_confidence(
             names,
             signals,
             profile=TOOL_CONFIDENCE_PROFILE,
@@ -1619,6 +1680,16 @@ class RetrievalHelper:
             strength_signals={"vector", "lexical"},
             kind="tool",
         )
+        if ranking_evidence and "fused" in ranking_evidence:
+            fused = ranking_evidence["fused"]
+            order = sorted(names, key=lambda name: (-fused.get(name, 0.0), name))
+            assessment = replace(
+                assessment,
+                # Fusion is a rank-only score.  Do not overwrite normalized
+                # confidence: consumers use that scale for pruning.
+                final_candidate_scores=tuple((name, fused.get(name, 0.0)) for name in order),
+            )
+        return assessment
 
     @staticmethod
     def tool_search_confidence(
@@ -1671,14 +1742,14 @@ class RetrievalHelper:
         devices = list(devices)
         if not devices:
             return 0.0
-        properties = (tool.parameters or {}).get("properties") or {}
+        parameters = tool.parameters or {}
         domains = RetrievalHelper._device_domains(devices)
         device_classes = RetrievalHelper._device_classes(devices)
         score = 0.0
         allowed_domains = RetrievalHelper._tool_declared_domains(tool)
         allowed_classes = getattr(tool, "schema_device_classes", None)
         if allowed_classes is None:
-            allowed_classes = RetrievalHelper._schema_values(properties.get("device_class", {}))
+            allowed_classes = RetrievalHelper._schema_target_values(parameters, "device_class")
         if allowed_domains:
             score += 2.0 if domains & allowed_domains else 0.0
         if allowed_classes:
@@ -1705,7 +1776,10 @@ class RetrievalHelper:
         return score
 
     @staticmethod
-    def rerank_devices_for_tools(devices: Iterable[T], tools: Iterable[Any]) -> list[T]:
+    def rerank_devices_for_tools(
+        devices: Iterable[T], tools: Iterable[Any],
+        relevance_scores: dict[str, float] | None = None,
+    ) -> list[T]:
         """Refine device order from the selected tool schemas without filtering.
 
         Retrieval remains recall-first: a tool with incomplete metadata cannot
@@ -1715,6 +1789,10 @@ class RetrievalHelper:
         """
         devices = list(devices)
         tools = list(tools)
+        # Schema compatibility is only a tie-breaker.  Callers that do not
+        # supply retrieval relevance deliberately retain the original order.
+        if relevance_scores is None:
+            return devices
         compatibility = {
             index: max(
                 (RetrievalHelper.tool_device_compatibility(tool, (device,))
@@ -1725,11 +1803,20 @@ class RetrievalHelper:
         }
         if not any(score > 0.0 for score in compatibility.values()):
             return devices
-        return [
-            device for index, device in sorted(
-                enumerate(devices), key=lambda item: (-compatibility[item[0]], item[0]),
-            )
-        ]
+        ordered = list(enumerate(devices))
+        # Stable adjacent swaps restrict the secondary criterion to an actual
+        # close relevance band and preserve direct/high-confidence targets.
+        for index in range(len(ordered) - 1):
+            left_index, left = ordered[index]
+            right_index, right = ordered[index + 1]
+            left_key = str(RetrievalHelper._device_value(left, "id", "") or RetrievalHelper._device_value(left, "name", ""))
+            right_key = str(RetrievalHelper._device_value(right, "id", "") or RetrievalHelper._device_value(right, "name", ""))
+            if (
+                abs(relevance_scores.get(left_key, 0.0) - relevance_scores.get(right_key, 0.0)) <= 0.05
+                and compatibility[right_index] > compatibility[left_index]
+            ):
+                ordered[index], ordered[index + 1] = ordered[index + 1], ordered[index]
+        return [device for _index, device in ordered]
 
     @staticmethod
     def _tool_service_names(tool: Any) -> set[str]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
+import json
 from typing import Any
 
 import voluptuous as vol
@@ -122,19 +123,19 @@ class RAGentSemanticSearchTool(llm.Tool):
         sections: list[str] = []
         latest = cls._clean(latest_request)
         if latest:
-            sections.append(f"Current request: {latest}")
+            sections.append(latest)
 
         current_area = cls._clean(area)
         current_floor = cls._clean(floor)
         if current_area:
-            sections.append(f"Default area when the request has no explicit location: {current_area}")
+            sections.append(current_area)
         if current_floor:
-            sections.append(f"Default floor when the request has no explicit location: {current_floor}")
+            sections.append(current_floor)
 
         for candidate in candidates or []:
             summary = cls._candidate_summary(candidate)
             if summary:
-                sections.append(f"Current candidate: {summary}")
+                sections.append(summary)
 
         return "\n".join(sections)[:RAGENT_MAX_SEARCH_QUERY_CHARS].strip()
 
@@ -323,6 +324,22 @@ class RAGentSemanticSearchTool(llm.Tool):
             _logger.warning("Search embedding failed: %s", err)
             return []
 
+    def _shared_query_embedding(
+        self,
+        cache: dict[tuple[object, str, str], QueryEmbedding],
+        entry: Any,
+        subentry: Any,
+        query: str,
+    ) -> QueryEmbedding:
+        """Reuse an identical configured embedding request within this turn."""
+        configuration = json.dumps(getattr(subentry, "data", {}) or {}, sort_keys=True, default=str)
+        key = (id(getattr(entry, "embedder_backend", None)), configuration, query)
+        if key not in cache:
+            cache[key] = QueryEmbedding(
+                lambda: self._embed_query_for_subentry(entry, subentry, query)
+            )
+        return cache[key]
+
     def _device_search_query(
         self, model_search_query: str, fallback_query: str, *, focused: bool = False,
     ) -> str:
@@ -463,6 +480,7 @@ class RAGentSemanticSearchTool(llm.Tool):
             [] for _ in queries
         ]
         tool_confidence = "not_requested"
+        embedding_cache: dict[tuple[object, str, str], QueryEmbedding] = {}
 
         for searchable_entry in self._iter_searchable_entries():
             entry, subentry_id, subentry, min_devices, max_devices, min_tools, max_tools = searchable_entry
@@ -483,8 +501,8 @@ class RAGentSemanticSearchTool(llm.Tool):
                     device_query = self._device_search_query(model_query, queries[query_index], focused=focused)
                     if search_devices:
                         device_queries.append(device_query)
-                    device_embedding = QueryEmbedding(
-                        lambda query=device_query: self._embed_query_for_subentry(entry, subentry, query)
+                    device_embedding = self._shared_query_embedding(
+                        embedding_cache, entry, subentry, device_query,
                     )
                     if search_devices and device_limit > 0:
                         collection_name = f"devices_{subentry_id}"
@@ -515,6 +533,7 @@ class RAGentSemanticSearchTool(llm.Tool):
                         def device_metadata_score(device: Device) -> float:
                             return device_identity_score(device)
 
+                        device_ranking_evidence: dict[str, dict[str, float]] = {}
                         retrieved_devices = await asyncio.to_thread(
                             RetrievalHelper.rank_scored_candidates,
                             scored_devices,
@@ -525,6 +544,7 @@ class RAGentSemanticSearchTool(llm.Tool):
                             candidate_limit,
                             metadata_score=device_metadata_score,
                             trim_confident=False,
+                            ranking_evidence=device_ranking_evidence,
                         )
                         device_confidence = RetrievalHelper.device_search_confidence(
                             retrieved_devices,
@@ -535,6 +555,7 @@ class RAGentSemanticSearchTool(llm.Tool):
                             structured_scores={
                                 "identity_metadata": device_identity_score,
                             },
+                            ranking_evidence=device_ranking_evidence,
                         )
                         retrieved_devices = RetrievalHelper.select_device_candidates(
                             device_query,
@@ -561,10 +582,8 @@ class RAGentSemanticSearchTool(llm.Tool):
                             focused=focused,
                         )
                         tool_queries.append(tool_query)
-                        tool_embedding = QueryEmbedding(
-                            lambda query=tool_query: self._embed_query_for_subentry(
-                                entry, subentry, query,
-                            )
+                        tool_embedding = self._shared_query_embedding(
+                            embedding_cache, entry, subentry, tool_query,
                         )
                         collection_name = f"tools_{subentry_id}"
                         candidate_limit = RetrievalHelper.adaptive_candidate_limit(tool_limit)
@@ -580,6 +599,7 @@ class RAGentSemanticSearchTool(llm.Tool):
                             result.item.name: result.score
                             for result in scored_tools
                         }
+                        tool_ranking_evidence: dict[str, dict[str, float]] = {}
                         retrieved_tools = await asyncio.to_thread(
                             RetrievalHelper.rank_tool_candidates,
                             scored_tools,
@@ -588,6 +608,7 @@ class RAGentSemanticSearchTool(llm.Tool):
                             query_devices,
                             max(tool_limit, RetrievalHelper.expanded_tool_limit(tool_limit)),
                             requested_capability=requested_capability,
+                            ranking_evidence=tool_ranking_evidence,
                         )
                         # Required tools are injected into the normal prompt
                         # independently; they must not consume search result
@@ -613,6 +634,7 @@ class RAGentSemanticSearchTool(llm.Tool):
                             query_devices,
                             requested_capability,
                             scored_tools,
+                            tool_ranking_evidence,
                         )
                         query_confidence = confidence.level
                         tool_confidences.append(query_confidence)
