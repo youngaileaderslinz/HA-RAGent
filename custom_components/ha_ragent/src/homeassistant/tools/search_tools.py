@@ -51,16 +51,16 @@ class RAGentSemanticSearchTool(llm.Tool):
             ): vol.All(
                 [str], vol.Length(min=1, max=RAGENT_MAX_SEARCH_QUERIES)
             ),
-            vol.Required(
+            vol.Optional(
                 "capabilities",
                 description=(
-                    "Structured capability parallel to search_queries, for example "
+                    "Optional structured capability parallel to search_queries, for example "
                     "[{action: turn_on, domain: light}] or "
                     "[{action: fan_set_speed, domain: fan}]."
                 ),
             ): vol.All(
                 [{
-                    vol.Required(
+                    vol.Optional(
                         "action",
                         description=(
                             "Stable canonical action ID such as turn_on, turn_off, "
@@ -245,8 +245,8 @@ class RAGentSemanticSearchTool(llm.Tool):
             raw = [raw]
         return [
             RetrievalHelper.normalize_requested_capability(capability)
+            if isinstance(capability, dict) else {}
             for capability in raw
-            if isinstance(capability, dict)
         ]
 
     async def _validate_query(self, tool_input: llm.ToolInput) -> str | None:
@@ -454,12 +454,13 @@ class RAGentSemanticSearchTool(llm.Tool):
         if (
             "search_queries" in tool_input.tool_args
             and search_tools
+            and requested_capabilities
             and len(requested_capabilities) != len(model_search_queries)
         ):
             return {
                 "error": (
-                    "Each tool-search query requires one structured capability "
-                    "with a canonical action and optional domain."
+                    "When provided, structured capabilities must contain one item "
+                    "per tool-search query."
                 ),
                 "requested_capabilities": requested_capabilities,
             }

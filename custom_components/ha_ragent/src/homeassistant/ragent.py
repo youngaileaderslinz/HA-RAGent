@@ -355,43 +355,14 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             ranking_evidence=tool_ranking_evidence,
         )
         if confidence.level in {"low", "none"}:
-            # Preserve a plausible alternative *action*, rather than merely
-            # a different tool signature. This leaves the model a way to
-            # correct an ambiguous on/off (or similar) interpretation.
-            target = min(max_tools, max(2, n_tools))
-            selected_names: set[str] = set()
-            seen_actions: set[str] = set()
-            action_scores, _lexical_scores = RetrievalHelper.tool_lexical_scores(
-                ranked_tools, query,
-            )
-            # Reserve a slot for the action most directly supported by the
-            # request before adding a competing action for recovery.
-            relevant = max(
-                ranked_tools,
-                key=lambda tool: (
-                    action_scores.get(tool.name, 0.0),
-                    -ranked_tools.index(tool),
-                ),
-                default=None,
-            )
-            if relevant is not None and action_scores.get(relevant.name, 0.0) > 0:
-                selected_names.add(relevant.name)
-                seen_actions.add(
-                    str(getattr(relevant, "canonical_action", "") or relevant.name).casefold()
-                )
-            for tool in ranked_tools:
-                action = str(getattr(tool, "canonical_action", "") or tool.name).casefold()
-                if action in seen_actions:
-                    continue
-                selected_names.add(tool.name)
-                seen_actions.add(action)
-                if len(selected_names) >= target:
-                    break
-            if len(selected_names) < target:
-                for tool in ranked_tools:
-                    selected_names.add(tool.name)
-                    if len(selected_names) >= target:
-                        break
+            # Weak confidence means the request evidence does not justify
+            # hiding viable integrations. The ranked pool has already reserved
+            # strong matches and diversified duplicate capabilities, so expose
+            # its plausible alternatives up to the configured ceiling. Do not
+            # privilege canonical-action metadata: custom tools may have none.
+            selected_names = {
+                tool.name for tool in ranked_tools[:max_tools]
+            }
         else:
             selected_names = set(RetrievalHelper.prune_confidence_band(
                 confidence,

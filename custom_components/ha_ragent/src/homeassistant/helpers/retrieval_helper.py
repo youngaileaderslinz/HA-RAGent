@@ -1245,6 +1245,27 @@ class RetrievalHelper:
             )
 
         selected_keys = ordered_keys[:limit]
+        # A literal device identity is stronger evidence than agreement between
+        # two approximate retrievers.  In particular, a vector-only candidate
+        # must not displace an exact full name (or alias) merely because it is
+        # also present in the lexical corpus.  Reserve these identities before
+        # filling the remaining budget from fusion.
+        identity_keys = [
+            item_key
+            for item_key in ordered_keys
+            if (
+                match_scores[item_key][0] >= 0.9
+                or (
+                    match_scores[item_key][1] >= 0.9
+                    and not RetrievalHelper._has_numeric_token(query)
+                )
+            )
+        ]
+        if identity_keys:
+            selected_keys = [
+                *identity_keys[:limit],
+                *(item_key for item_key in ordered_keys if item_key not in identity_keys),
+            ][:limit]
         if preserve_score and not has_strong_current_match:
             preserved_keys = [
                 item_key
@@ -1355,12 +1376,10 @@ class RetrievalHelper:
 
     @staticmethod
     def normalize_requested_capability(capability: object) -> dict[str, object]:
-        """Normalize model-provided structured capability metadata."""
+        """Normalize optional model-provided capability hints."""
         if not isinstance(capability, dict):
             return {}
         action = str(capability.get("action", "") or "").strip().casefold()
-        if not action:
-            return {}
         domains = capability.get("domains", capability.get("domain", ())) or ()
         if isinstance(domains, str):
             domains = (domains,)
@@ -1370,10 +1389,11 @@ class RetrievalHelper:
             value.strip().casefold() for value in domains
             if isinstance(value, str) and value.strip()
         }))
-        return {
+        normalized = {
             "action": action,
             "domains": domains,
         }
+        return normalized if action or domains else {}
 
     @staticmethod
     def tool_capability_compatibility(tool: Any, capability: object) -> float:
@@ -1450,7 +1470,7 @@ class RetrievalHelper:
 
     @staticmethod
     def tool_lexical_scores(tools: Iterable[Any], query: str) -> tuple[dict[str, float], dict[str, float]]:
-        """Return the action and broad TF-IDF scores used for tool retrieval."""
+        """Return independent operation and description/schema TF-IDF scores."""
         tools = list(tools)
         names = [str(getattr(tool, "name", "")) for tool in tools]
         action_documents = tuple(
@@ -1463,17 +1483,14 @@ class RetrievalHelper:
         )
         broad_documents = tuple(
             tuple(str(part) for part in (
-                getattr(tool, "canonical_search_parts", ()) or (
-                    getattr(tool, "name", ""), getattr(tool, "description", ""),
-                )
-            ) if part)
+                getattr(tool, "description", ""),
+                *(getattr(tool, "canonical_schema_parts", ()) or ()),
+            ) if part) or (str(getattr(tool, "name", "")),)
             for tool in tools
         )
         action_scores = dict(zip(names, lexical_index(action_documents).scores(query)))
         broad_scores = dict(zip(names, lexical_index(broad_documents).scores(query)))
-        return action_scores, {
-            name: max(action_scores[name], broad_scores[name]) for name in names
-        }
+        return action_scores, broad_scores
 
     @staticmethod
     def rank_tool_candidates(
@@ -1505,9 +1522,14 @@ class RetrievalHelper:
 
         corpus_names = sorted(candidate_by_name)
         corpus_tools = [candidate_by_name[name] for name in corpus_names]
-        # The action-specific and broad description/schema corpora are one
-        # lexical signal; confidence consumes this exact same combined score.
-        _action_scores, corpus_scores = RetrievalHelper.tool_lexical_scores(corpus_tools, query)
+        # Keep operation matching distinct from descriptive/schema matching.
+        # A target word in a schema (for example, "light") is useful context,
+        # but cannot outweigh an explicit requested operation ("switch off").
+        action_scores, description_scores = RetrievalHelper.tool_lexical_scores(corpus_tools, query)
+        corpus_scores = {
+            name: max(action_scores[name], description_scores[name])
+            for name in corpus_names
+        }
         lexical_ranking = RetrievalHelper._rank_positive_scores(corpus_scores, 0.01)
         compatibility_scores = {
             name: RetrievalHelper.tool_capability_compatibility(tool, requested_capability)
@@ -1529,7 +1551,8 @@ class RetrievalHelper:
             # Preserve score ties from the vector backend. Converting these
             # to a positional list made equal scores order-dependent.
             semantic_scores,
-            corpus_scores,
+            action_scores,
+            description_scores,
             compatibility_scores,
         ))
         device_reliability = max(
@@ -1550,7 +1573,8 @@ class RetrievalHelper:
         for name, tool in candidate_by_name.items():
             signals_by_name[name] = {
                 "semantic_rank": float(semantic_ranks.get(name, 0)),
-                "tfidf": corpus_scores[name],
+                "action_tfidf": action_scores[name],
+                "description_schema_tfidf": description_scores[name],
                 "capability": compatibility_scores[name],
                 "device_compatibility": device_scores[name],
                 "rrf": fused.get(name, 0.0),
@@ -1566,6 +1590,8 @@ class RetrievalHelper:
         scored.sort(key=lambda item: (-item[0], item[1], item[2]))
         if ranking_evidence is not None:
             ranking_evidence["lexical"] = dict(corpus_scores)
+            ranking_evidence["action_lexical"] = dict(action_scores)
+            ranking_evidence["description_schema_lexical"] = dict(description_scores)
             ranking_evidence["fused"] = dict(fused)
             ranking_evidence["vector"] = dict(semantic_scores)
         if requested_capability and any(
@@ -1606,7 +1632,8 @@ class RetrievalHelper:
                 requested_capability=requested_capability, devices=devices,
                 vector_results=vector_results, lexical_tools=lexical_tools,
                 candidates=candidate_by_name, semantic_ranks=semantic_ranks,
-                semantic_scores=semantic_scores, corpus_scores=corpus_scores,
+                semantic_scores=semantic_scores, action_scores=action_scores,
+                description_scores=description_scores, corpus_scores=corpus_scores,
                 lexical_ranking=lexical_ranking, compatibility_ranking=compatibility_ranking,
                 device_ranking=device_ranking, signals=signals_by_name, fused_scores=fused,
                 device_reliability=device_reliability,
@@ -1670,7 +1697,6 @@ class RetrievalHelper:
             names,
             signals,
             profile=TOOL_CONFIDENCE_PROFILE,
-            weak_signals={"lexical"},
             signal_families={
                 "action_schema": "schema",
                 "domain_schema": "schema",
