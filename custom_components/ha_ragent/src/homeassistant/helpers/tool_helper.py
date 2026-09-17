@@ -358,33 +358,6 @@ class ToolHelper:
             if str(candidate.get("name", "")).casefold() in failed_names
         ]
 
-    @staticmethod
-    def validate_tool_arguments(tool_call: ToolInput, tool: LlmTool | None) -> None:
-        """Validate deterministic JSON-schema numeric and enum constraints."""
-        if tool is None or not tool.parameters:
-            return
-        properties = tool.parameters.get("properties") or {}
-        if not isinstance(properties, dict):
-            return
-        for name, value in tool_call.tool_args.items():
-            schema = properties.get(name)
-            if not isinstance(schema, dict):
-                continue
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                minimum = schema.get("minimum")
-                maximum = schema.get("maximum")
-                if minimum is not None and value < minimum:
-                    raise ValueError(f"{name} must be >= {minimum}; received {value}")
-                if maximum is not None and value > maximum:
-                    raise ValueError(f"{name} must be <= {maximum}; received {value}")
-            enum = schema.get("enum")
-            if isinstance(enum, list) and value not in enum:
-                raise ValueError(f"{name} must be one of {enum}; received {value!r}")
-
-    @staticmethod
-    def is_identical_failed_retry(tool_call: ToolInput, failed_signatures: set[str] | dict[str, Any]) -> bool:
-        """Return whether the same canonical call has already failed."""
-        return ToolHelper.tool_call_signature(tool_call) in failed_signatures
 
 
     @staticmethod

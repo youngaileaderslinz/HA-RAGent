@@ -65,6 +65,7 @@ from custom_components.ha_ragent.src.const import (
     RAGENT_PREFIXED_SCHEDULED_REQUEST_PROHIBITED_TOOL_NAMES,
     STARTUP_EMBEDDING_RUNNING_FLAG,
     RETRIEVAL_METHOD_LEXICAL,
+    RETRIEVAL_METHOD_AUTOMATIC,
     RAGENT_PLANNED_ACTION_TOOL_NAME,
     TRANSLATION_PROMPT_SCHEDULED_ACTION,
     TRANSLATION_PROMPT_PERSONA,
@@ -140,7 +141,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             return continuity
         current_vector: list[float] = []
         vectors: dict[str, list[float]] = {}
-        if contexts:
+        if contexts and RetrievalHelper.retrieval_method(self.runtime_options) != RETRIEVAL_METHOD_LEXICAL:
             current_vector = await query_embedding.get() if query_embedding else []
             embedded = await asyncio.gather(*(
                 self._async_embed_retrieval_text(
@@ -208,12 +209,13 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         try:
             candidate_limit = RetrievalHelper.adaptive_candidate_limit(exposure_limit)
             options = {**self.entry.options, **self.subentry.data}
+            method = RetrievalHelper.retrieval_method(options)
             scored_devices, all_devices = await RetrievalHelper.async_retrieve_sources(
                 self.entry.vector_db_backend, DeviceEmbedding, options,
                 collection_name, query_embedding, candidate_limit, query=query,
             )
             get_lexical = getattr(self.entry.vector_db_backend, "async_get_lexical_objects", None)
-            if not all_devices and callable(get_lexical):
+            if method == RETRIEVAL_METHOD_AUTOMATIC and not all_devices and callable(get_lexical):
                 all_devices = await get_lexical(
                     DeviceEmbedding, options, collection_name,
                 )
@@ -267,7 +269,10 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             preserve_score=continuity.successful_target_score,
             trim_confident=False,
             ranking_evidence=device_ranking_evidence,
+            retrieval_method=method,
         )
+        if method != RETRIEVAL_METHOD_AUTOMATIC:
+            return ranked_devices[:exposure_limit]
         confidence = RetrievalHelper.device_search_confidence(
             ranked_devices,
             scored_devices,
@@ -325,6 +330,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         if sources is None:
             return []
         scored_tools, all_tools = sources
+        method = RetrievalHelper.retrieval_method({**self.entry.options, **self.subentry.data})
 
         # Required tools are always exposed separately and must not consume
         # slots from the configured optional retrieval budget.
@@ -346,7 +352,10 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             devices or [],
             max(exposure_limit, RetrievalHelper.expanded_tool_limit(exposure_limit)),
             ranking_evidence=tool_ranking_evidence,
+            retrieval_method=method,
         )
+        if method != RETRIEVAL_METHOD_AUTOMATIC:
+            return ranked_tools[:max_tools if max_tools is not None else n_tools]
         if max_tools is None:
             return ranked_tools[:n_tools]
         confidence = RetrievalHelper.tool_search_confidence_details(
@@ -427,12 +436,13 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         """Fetch tool candidates independently of device resolution."""
         try:
             options = {**self.entry.options, **self.subentry.data}
+            method = RetrievalHelper.retrieval_method(options)
             scored_tools, all_tools = await RetrievalHelper.async_retrieve_sources(
                 self.entry.vector_db_backend, LlmToolEmbedding, options,
                 f"tools_{self.subentry_id}", query_embedding, candidate_limit, query=query,
             )
             get_lexical = getattr(self.entry.vector_db_backend, "async_get_lexical_objects", None)
-            if not all_tools and callable(get_lexical):
+            if method == RETRIEVAL_METHOD_AUTOMATIC and not all_tools and callable(get_lexical):
                 all_tools = await get_lexical(LlmToolEmbedding, options, f"tools_{self.subentry_id}")
             return list(scored_tools), list(all_tools)
         except Exception as err:

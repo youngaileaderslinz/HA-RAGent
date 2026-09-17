@@ -14,6 +14,9 @@ from custom_components.ha_ragent.src.const import (
     DEVICE_SELECTION_RELATIVE_FLOOR,
     DEVICE_SELECTION_GAP_THRESHOLD,
     DEVICE_CONTINUITY_MAX_BOOST,
+    RETRIEVAL_METHOD_AUTOMATIC,
+    RETRIEVAL_METHOD_LEXICAL,
+    RETRIEVAL_METHOD_VECTOR,
 )
 from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
 from custom_components.ha_ragent.src.models.retrieval.confidence_assessment import (
@@ -33,16 +36,14 @@ from custom_components.ha_ragent.src.models.retrieval.lexical_index import lexic
 from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
 from custom_components.ha_ragent.src.homeassistant.helpers.source_retriever import SourceRetriever
 from custom_components.ha_ragent.src.homeassistant.helpers.history_retriever import HistoryRetriever
+from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_confidence import RetrievalConfidence
+from custom_components.ha_ragent.src.homeassistant.helpers.source_ranker import SourceRanker
 from custom_components.ha_ragent.src.logging import log_debug_payload
 
 T = TypeVar("T")
 _logger = logging.getLogger(__name__)
 
 
-# These profiles are deliberately separate and dimensionless. Scores are
-# normalized against each request's local distribution. The emitted diagnostics
-# make these initial values calibratable from real deployments without tying
-# confidence to backend-specific raw score scales.
 DEVICE_CONFIDENCE_PROFILE = ConfidenceProfile(
     DEVICE_CONFIDENCE_NEAR_TIE_MARGIN,
 )
@@ -50,7 +51,7 @@ TOOL_CONFIDENCE_PROFILE = ConfidenceProfile(
     TOOL_CONFIDENCE_NEAR_TIE_MARGIN,
 )
 
-class RetrievalHelper:
+class RetrievalHelper(RetrievalConfidence):
     """Stateless helpers for building and reranking retrieval queries."""
 
     @staticmethod
@@ -94,200 +95,6 @@ class RetrievalHelper:
         """Normalize spelling representation without conflating distinct intents."""
         return " ".join(unicodedata.normalize("NFC", str(query or "")).casefold().split())
 
-    @staticmethod
-    def prune_confidence_band(
-        confidence: ConfidenceAssessment,
-        maximum: int,
-        *,
-        absolute_floor: float,
-        relative_floor: float,
-        gap_threshold: float,
-        preserve_signals: set[str] | None = None,
-    ) -> list[str]:
-        """Select a confidence band from final hybrid scores, not raw vectors."""
-        ranked = list(confidence.candidate_scores)
-        if maximum <= 0 or not ranked:
-            return []
-        support = dict(confidence.candidate_support)
-        preserve_signals = preserve_signals or set()
-        best = ranked[0][1]
-        selected: list[str] = []
-        previous = best
-        for index, (key, score) in enumerate(ranked):
-            preserved = bool(set(support.get(key, ())) & preserve_signals)
-            if index and previous - score >= gap_threshold and not preserved:
-                break
-            if not preserved and (score < absolute_floor or score < best * relative_floor):
-                break
-            selected.append(key)
-            previous = score
-            if len(selected) >= maximum:
-                break
-        return selected or [ranked[0][0]]
-
-    @staticmethod
-    def _normalize_confidence_signal(values: dict[str, float]) -> dict[str, float]:
-        """Normalize one signal against its local candidate distribution."""
-        finite = {
-            key: max(0.0, float(value))
-            for key, value in values.items()
-            if math.isfinite(float(value))
-        }
-        maximum = max(finite.values(), default=0.0)
-        if maximum <= 0:
-            return {}
-        return {key: value / maximum for key, value in finite.items()}
-
-    @staticmethod
-    def assess_distribution_confidence(
-        ordered_keys: Iterable[str],
-        signal_scores: dict[str, dict[str, float]],
-        *,
-        profile: ConfidenceProfile,
-        weak_signals: set[str] | None = None,
-        signal_families: dict[str, str] | None = None,
-        strength_signals: set[str] | None = None,
-        confirmed_keys: set[str] | None = None,
-        kind: str = "candidate",
-    ) -> ConfidenceAssessment:
-        """Classify confidence from separation and independent signal agreement."""
-        ordered_keys = list(dict.fromkeys(ordered_keys))
-        if not ordered_keys:
-            return ConfidenceAssessment(level="none")
-
-        weak_signals = weak_signals or set()
-        signal_families = signal_families or {}
-        # Schema fields describe the same source of evidence. They can help
-        # rank candidates, but must not count as independent observations.
-        strength_signals = strength_signals or set(signal_scores)
-        confirmed_keys = confirmed_keys or set()
-        normalized = {
-            name: values
-            for name, raw_values in signal_scores.items()
-            if (values := RetrievalHelper._normalize_confidence_signal(raw_values))
-        }
-        weights = {
-            name: (0.2 if name in weak_signals else 1.0)
-            for name in normalized
-        }
-        totals = {key: 0.0 for key in ordered_keys}
-        total_weight = sum(weights.values()) or 1.0
-        for name, values in normalized.items():
-            for key in ordered_keys:
-                totals[key] += weights[name] * values.get(key, 0.0)
-        totals = {key: value / total_weight for key, value in totals.items()}
-
-        original_positions = {key: index for index, key in enumerate(ordered_keys)}
-        score_order = sorted(
-            ordered_keys,
-            key=lambda key: (-totals.get(key, 0.0), original_positions[key]),
-        )
-        top_key = score_order[0]
-        top_score = totals.get(top_key, 0.0)
-        second_score = totals.get(score_order[1], 0.0) if len(score_order) > 1 else 0.0
-        margin = max(0.0, top_score - second_score)
-        ratio = top_score / second_score if second_score > 1e-9 else (
-            float("inf") if top_score > 0 else 0.0
-        )
-
-        agreeing: list[str] = []
-        disagreeing: list[str] = []
-        absolute_strength = max(
-            (max(0.0, float(signal_scores[name].get(top_key, 0.0)))
-             for name in strength_signals if name in signal_scores),
-            default=0.0,
-        )
-        for name, values in normalized.items():
-            if name in weak_signals:
-                continue
-            ranked = sorted(values.items(), key=lambda item: (-item[1], item[0]))
-            if not ranked:
-                continue
-            source_margin = ranked[0][1] - (ranked[1][1] if len(ranked) > 1 else 0.0)
-            if source_margin <= profile.near_tie_margin:
-                continue
-            if ranked[0][0] == top_key:
-                agreeing.append(name)
-            else:
-                disagreeing.append(name)
-
-        independent_agreement = {
-            signal_families.get(name, name) for name in agreeing
-        }
-        confirmed_top = top_key in confirmed_keys and not any(
-            key in confirmed_keys for key in score_order[1:]
-        )
-        if confirmed_top:
-            level = "high"
-            reason = "unique confirmed continuity target"
-        elif len(ordered_keys) == 1:
-            if len(independent_agreement) >= 2 and absolute_strength > 0.2:
-                level = "high"
-                reason = "the only candidate is independently supported by multiple signals"
-            else:
-                level = "low"
-                reason = "the only candidate lacks independent corroboration"
-        elif margin <= profile.near_tie_margin:
-            level = "low"
-            reason = "top candidates are near-tied"
-        elif disagreeing and len(disagreeing) >= len(agreeing):
-            level = "low"
-            reason = "strong ranking signals disagree"
-        elif (
-            len(independent_agreement) >= 2
-            and margin > profile.near_tie_margin
-            and top_score >= 0.35
-            and absolute_strength > 0.2
-        ):
-            level = "high"
-            reason = "clear winner supported by independent signals"
-        else:
-            level = "low"
-            reason = "winner lacks sufficient independent separation"
-
-        assessment = ConfidenceAssessment(
-            level=level,
-            top_score=round(top_score, 6),
-            second_score=round(second_score, 6),
-            margin=round(margin, 6),
-            ratio=round(ratio, 6) if math.isfinite(ratio) else ratio,
-            agreeing_signals=tuple(sorted(agreeing)),
-            disagreeing_signals=tuple(sorted(disagreeing)),
-            reason=reason,
-            candidate_scores=tuple(
-                (key, round(totals.get(key, 0.0), 6)) for key in score_order
-            ),
-            candidate_support=tuple(
-                (
-                    key,
-                    tuple(sorted(
-                        name
-                        for name, values in normalized.items()
-                        if name not in weak_signals and values.get(key, 0.0) >= 0.5
-                    )),
-                )
-                for key in score_order
-            ),
-            absolute_strength=round(min(1.0, absolute_strength), 6),
-            independent_signal_count=len(independent_agreement),
-        )
-        log_debug_payload(
-            _logger, f"retrieval.{kind}_confidence",
-            top_candidate=top_key,
-            top_score=assessment.top_score,
-            second_score=assessment.second_score,
-            margin=assessment.margin,
-            ratio=assessment.ratio,
-            confidence=assessment.level,
-            confidence_reason=assessment.reason,
-            agreeing_signals=assessment.agreeing_signals,
-            disagreeing_signals=assessment.disagreeing_signals,
-            raw_signals=signal_scores,
-            normalized_signals=normalized,
-            absolute_strength=assessment.absolute_strength,
-            independent_signal_count=assessment.independent_signal_count,
-        )
-        return assessment
 
     @staticmethod
     def build_tool_search_query(
@@ -305,17 +112,12 @@ class RetrievalHelper:
         if requested:
             action = str(requested.get("action", "") or "")
             domains = tuple(requested.get("domains", ()) or ())
-            # Retrieved devices are hypotheses.  Their domains are useful to
-            # rank an already retrieved tool, but must not rewrite the query:
-            # a wrong device hit otherwise makes unrelated tools disappear.
-            # Domains declared by the model capability remain explicit intent.
+            # Only declared intent domains belong in the retrieval query.
             all_domains = domains
             return "\n".join(dict.fromkeys(
                 part for part in (trusted_query, fallback_query, action, *all_domains) if part
             ))
 
-        # Legacy callers without structured intent retain their existing
-        # behavior, but production structured searches never take this path.
         query = trusted_query or fallback_query
         if trusted_query and fallback_query and fallback_query != trusted_query:
             query += f"\n{fallback_query}"
@@ -411,10 +213,21 @@ class RetrievalHelper:
         continuity_score: Callable[[T], float] | None = None,
         confirmed_score: Callable[[T], float] | None = None,
         ranking_evidence: dict[str, dict[str, float]] | None = None,
+        retrieval_method: str = RETRIEVAL_METHOD_AUTOMATIC,
     ) -> ConfidenceAssessment:
         """Measure per-target confidence from its local candidate distribution."""
         devices = list(devices)
         keys = [key(device) for device in devices]
+        if retrieval_method != RETRIEVAL_METHOD_AUTOMATIC:
+            evidence = ranking_evidence if ranking_evidence is not None else {}
+            if retrieval_method not in evidence:
+                SourceRanker.rank(
+                    vector_results, devices, query, key, text_parts or (lambda item: ()),
+                    len(devices), retrieval_method, evidence,
+                )
+            return SourceRanker.confidence(
+                keys, retrieval_method, evidence, DEVICE_CONFIDENCE_PROFILE, "device",
+            )
         vector = {key(result.item): result.score for result in vector_results}
         signals: dict[str, dict[str, float]] = {"vector": vector}
         if metadata_score:
@@ -537,6 +350,7 @@ class RetrievalHelper:
         preferred_domains: Iterable[str] = (),
         preferred_areas: Iterable[str] = (),
         preserve_score: Callable[[T], float] | None = None,
+        retrieval_method: str = RETRIEVAL_METHOD_AUTOMATIC,
     ) -> list[T]:
         """Expose the plausible ambiguity cluster within the configured ceiling."""
         if min_limit <= 0 and (max_limit is None or max_limit <= 0):
@@ -546,6 +360,8 @@ class RetrievalHelper:
         ceiling = min_limit if max_limit is None else max(0, int(max_limit))
         if ceiling <= 0 or not devices:
             return []
+        if retrieval_method != RETRIEVAL_METHOD_AUTOMATIC:
+            return devices[:ceiling]
         if not isinstance(confidence, ConfidenceAssessment) or not confidence.candidate_scores:
             # Runtime retrieval supplies score diagnostics. Keep third-party
             # compatibility callers precise when those diagnostics are absent.
@@ -890,9 +706,6 @@ class RetrievalHelper:
     def build_retrieval_text(current_request: str) -> str:
         return HistoryRetriever.build_retrieval_text(current_request)
 
-    @staticmethod
-    def cosine_similarity(left: Iterable[float], right: Iterable[float]) -> float:
-        return HistoryRetriever.cosine_similarity(left, right)
 
     @staticmethod
     def select_history_contexts(
@@ -1128,10 +941,16 @@ class RetrievalHelper:
         preserve_score: Callable[[T], float] | None = None,
         trim_confident: bool = True,
         ranking_evidence: dict[str, dict[str, float]] | None = None,
+        retrieval_method: str = RETRIEVAL_METHOD_AUTOMATIC,
     ) -> list[T]:
         """Fuse rank-based signals and suppress stale continuity on strong matches."""
         if limit <= 0:
             return []
+        if retrieval_method != RETRIEVAL_METHOD_AUTOMATIC:
+            return SourceRanker.rank(
+                vector_results, lexical_items, query, key, text_parts,
+                limit, retrieval_method, ranking_evidence,
+            )
 
         vector_results = list(vector_results)
         lexical_items = list(lexical_items)
@@ -1425,8 +1244,27 @@ class RetrievalHelper:
         continuity: float = 0.0,
         lexical_match: tuple[float, float] | None = None,
         requested_capability: object = None,
+        retrieval_method: str = RETRIEVAL_METHOD_AUTOMATIC,
     ) -> dict[str, float]:
         """Return independent, extensible signals used to rank a tool."""
+        if retrieval_method != RETRIEVAL_METHOD_AUTOMATIC:
+            exact, fuzzy = (0.0, 0.0)
+            if retrieval_method == RETRIEVAL_METHOD_LEXICAL:
+                exact, fuzzy = lexical_match if lexical_match is not None else RetrievalHelper._match_scores(
+                    query, getattr(tool, "canonical_search_parts", ()) or (
+                        getattr(tool, "name", ""), getattr(tool, "description", ""),
+                    ),
+                )
+            vector = retrieval_method == RETRIEVAL_METHOD_VECTOR
+            return {
+                "semantic_rank": 1.0 / semantic_rank if vector and semantic_rank else 0.0,
+                "semantic_similarity": max(0.0, min(1.0, semantic_score or 0.0)) if vector else 0.0,
+                "lexical_exact": exact,
+                "lexical_fuzzy": fuzzy,
+                "capability": 0.0,
+                "device_relevance": 0.0,
+                "continuity": 0.0,
+            }
         devices = list(devices)
         exact, fuzzy = lexical_match if lexical_match is not None else RetrievalHelper._match_scores(
             query,
@@ -1455,16 +1293,12 @@ class RetrievalHelper:
 
     @staticmethod
     def tool_signal_score(signals: dict[str, float]) -> float:
-        """Expose semantic similarity for diagnostics outside rank fusion.
-
-        Production ranking below never combines this raw value with the rank
-        from the same embedding retriever.
-        """
+        """Return semantic similarity for retrieval diagnostics."""
         return max(0.0, signals.get("semantic_similarity", 0.0))
 
     @staticmethod
     def tool_lexical_scores(tools: Iterable[Any], query: str) -> tuple[dict[str, float], dict[str, float]]:
-        """Return independent operation and description/schema TF-IDF scores."""
+        """Return operation and description/schema TF-IDF scores."""
         tools = list(tools)
         names = [str(getattr(tool, "name", "")) for tool in tools]
         action_documents = tuple(
@@ -1495,10 +1329,20 @@ class RetrievalHelper:
         limit: int,
         requested_capability: object = None,
         ranking_evidence: dict[str, dict[str, float]] | None = None,
+        retrieval_method: str = RETRIEVAL_METHOD_AUTOMATIC,
     ) -> list[T]:
         """Rank a broad tool pool without discarding uncertain candidates."""
         if limit <= 0:
             return []
+        if retrieval_method != RETRIEVAL_METHOD_AUTOMATIC:
+            return SourceRanker.rank(
+                vector_results, lexical_tools, query,
+                lambda tool: str(getattr(tool, "name", "")),
+                lambda tool: getattr(tool, "canonical_search_parts", ()) or (
+                    getattr(tool, "name", ""), getattr(tool, "description", ""),
+                ),
+                limit, retrieval_method, ranking_evidence,
+            )
         devices = list(devices)
         vector_results = list(vector_results)
         lexical_tools = list(lexical_tools)
@@ -1516,13 +1360,8 @@ class RetrievalHelper:
 
         corpus_names = sorted(candidate_by_name)
         corpus_tools = [candidate_by_name[name] for name in corpus_names]
-        # Keep operation matching distinct from descriptive/schema matching.
-        # A target word in a schema (for example, "light") is useful context,
-        # but cannot outweigh an explicit requested operation ("switch off").
         action_scores, description_scores = RetrievalHelper.tool_lexical_scores(corpus_tools, query)
-        # Action and description/schema scores are correlated lexical evidence,
-        # not independent votes.  Keep the stronger field for unknown/custom
-        # tools, but ignore trace overlap that does not establish relevance.
+        # Correlated lexical fields share one vote; trace overlap is neutral.
         lexical_minimum = 0.05
         corpus_scores = {
             name: max(action_scores[name], description_scores[name])
@@ -1653,12 +1492,23 @@ class RetrievalHelper:
         requested_capability: object = None,
         vector_results: Iterable[ScoredResult[Any]] = (),
         ranking_evidence: dict[str, dict[str, float]] | None = None,
+        retrieval_method: str = RETRIEVAL_METHOD_AUTOMATIC,
     ) -> ConfidenceAssessment:
         """Measure per-capability confidence from separation and schema evidence."""
         tools = list(tools)
         if not tools:
             return ConfidenceAssessment(level="none")
         names = [str(getattr(tool, "name", "")) for tool in tools]
+        if retrieval_method != RETRIEVAL_METHOD_AUTOMATIC:
+            evidence = ranking_evidence if ranking_evidence is not None else {}
+            if retrieval_method not in evidence:
+                RetrievalHelper.rank_tool_candidates(
+                    vector_results, tools, query, (), len(tools),
+                    ranking_evidence=evidence, retrieval_method=retrieval_method,
+                )
+            return SourceRanker.confidence(
+                names, retrieval_method, evidence, TOOL_CONFIDENCE_PROFILE, "tool",
+            )
         semantic = {
             str(getattr(result.item, "name", "")): result.score
             for result in vector_results
@@ -1742,27 +1592,6 @@ class RetrievalHelper:
             [], tools, query, devices, len(tools), requested_capability=requested_capability,
         )
 
-    @staticmethod
-    def build_tool_candidate_pool(
-        vector_results: Iterable[ScoredResult[T]],
-        lexical_tools: Iterable[T],
-        query: str,
-        devices: Iterable[Any] = (),
-    ) -> tuple[list[ScoredResult[T]], list[T]]:
-        """Build a complete tool pool while preserving vector-rank metadata."""
-        vector_results = list(vector_results)
-        candidate_by_name = {
-            str(getattr(tool, "name", "")): tool
-            for tool in lexical_tools
-        }
-        for result in vector_results:
-            candidate_by_name.setdefault(str(getattr(result.item, "name", "")), result.item)
-        candidate_tools = RetrievalHelper.rank_tools_for_query(
-            candidate_by_name.values(),
-            query,
-            devices,
-        )
-        return vector_results, candidate_tools
 
     @staticmethod
     def tool_device_compatibility(tool: Any, devices: Iterable[Any]) -> float:
