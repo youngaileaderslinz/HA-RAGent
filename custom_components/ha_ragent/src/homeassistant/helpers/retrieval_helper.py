@@ -296,7 +296,7 @@ class RetrievalHelper:
         devices: Iterable[Any],
         capability: object = None,
     ) -> str:
-        """Combine the supplied query with available action and domain IDs.
+        """Combine the supplied query with declared action/domain evidence.
 
         Retain the original query for tools whose description or schema is
         their only capability information. Add no language-specific labels.
@@ -305,19 +305,13 @@ class RetrievalHelper:
         if requested:
             action = str(requested.get("action", "") or "")
             domains = tuple(requested.get("domains", ()) or ())
-            resolved_domains = sorted(
-                {
-                    str(value).casefold()
-                    for device in devices
-                    for value in (
-                        RetrievalHelper._device_value(device, "domain", []) or []
-                    )
-                    if value
-                }
-            )
-            all_domains = tuple(dict.fromkeys((*domains, *resolved_domains)))
+            # Retrieved devices are hypotheses.  Their domains are useful to
+            # rank an already retrieved tool, but must not rewrite the query:
+            # a wrong device hit otherwise makes unrelated tools disappear.
+            # Domains declared by the model capability remain explicit intent.
+            all_domains = domains
             return "\n".join(dict.fromkeys(
-                part for part in (fallback_query, action, *all_domains) if part
+                part for part in (trusted_query, fallback_query, action, *all_domains) if part
             ))
 
         # Legacy callers without structured intent retain their existing
@@ -1526,9 +1520,17 @@ class RetrievalHelper:
         # A target word in a schema (for example, "light") is useful context,
         # but cannot outweigh an explicit requested operation ("switch off").
         action_scores, description_scores = RetrievalHelper.tool_lexical_scores(corpus_tools, query)
+        # Action and description/schema scores are correlated lexical evidence,
+        # not independent votes.  Keep the stronger field for unknown/custom
+        # tools, but ignore trace overlap that does not establish relevance.
+        lexical_minimum = 0.05
         corpus_scores = {
             name: max(action_scores[name], description_scores[name])
             for name in corpus_names
+        }
+        calibrated_lexical_scores = {
+            name: score if score >= lexical_minimum else 0.0
+            for name, score in corpus_scores.items()
         }
         lexical_ranking = RetrievalHelper._rank_positive_scores(corpus_scores, 0.01)
         compatibility_scores = {
@@ -1551,8 +1553,7 @@ class RetrievalHelper:
             # Preserve score ties from the vector backend. Converting these
             # to a positional list made equal scores order-dependent.
             semantic_scores,
-            action_scores,
-            description_scores,
+            calibrated_lexical_scores,
             compatibility_scores,
         ))
         device_reliability = max(
@@ -1590,6 +1591,7 @@ class RetrievalHelper:
         scored.sort(key=lambda item: (-item[0], item[1], item[2]))
         if ranking_evidence is not None:
             ranking_evidence["lexical"] = dict(corpus_scores)
+            ranking_evidence["calibrated_lexical"] = dict(calibrated_lexical_scores)
             ranking_evidence["action_lexical"] = dict(action_scores)
             ranking_evidence["description_schema_lexical"] = dict(description_scores)
             ranking_evidence["fused"] = dict(fused)

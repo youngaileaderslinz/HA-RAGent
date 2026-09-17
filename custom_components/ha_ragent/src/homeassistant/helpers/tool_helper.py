@@ -442,6 +442,22 @@ class ToolHelper:
             str(candidate.get("friendly_name", "")).casefold(),
             *(str(value).casefold() for value in (candidate.get("aliases") or [])),
         }), None)
+        # Only tools that explicitly expose Home Assistant target semantics
+        # receive this guard.  Vendor/custom arguments remain opaque and are
+        # passed through unchanged.  In particular, a number from prior chat
+        # context is never an entity identity.
+        if (
+            metadata and metadata.is_domain_aware and requested
+            and ("name" in args or "entity_id" in args)
+            and match is None
+        ):
+            raw_target = args.get("name", args.get("entity_id"))
+            if isinstance(raw_target, (int, float)) or str(raw_target).strip().isdigit():
+                raise ValueError("A numeric value is not a valid entity target")
+            if candidates:
+                raise ValueError("Target is not among the retrieved current entity candidates")
+            if not self._hass.states.get(str(raw_target)):
+                raise ValueError("Target is not a current Home Assistant entity")
         if match is not None:
             args["name"] = match.get("friendly_name") or match.get("name")
             if metadata and metadata.is_domain_aware:

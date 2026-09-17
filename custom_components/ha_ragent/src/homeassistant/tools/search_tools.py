@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import asyncio
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import voluptuous as vol
@@ -359,7 +360,9 @@ class RAGentSemanticSearchTool(llm.Tool):
         """Build tool intent independently from the natural-language target."""
         if requested_capability:
             return RetrievalHelper.build_tool_search_query(
-                "", model_search_query, devices, requested_capability,
+                # The request is the retrieval baseline. Device candidates are
+                # deliberately excluded here and are used only by ranking.
+                self._latest_request, model_search_query, (), requested_capability,
             )[:RAGENT_MAX_SEARCH_QUERY_CHARS]
         if focused:
             return model_search_query[:RAGENT_MAX_SEARCH_QUERY_CHARS]
@@ -702,12 +705,41 @@ class RAGentSemanticSearchTool(llm.Tool):
                     errors.append(f"Failed to search subentry {subentry.title}: {err}")
                     if search_tools:
                         tool_confidences.append("none")
+                        # Device source failures are not tool source failures.
+                        # Re-run this bounded local search in tools-only mode;
+                        # it retains the request baseline and any trusted
+                        # context, while deliberately treating devices as
+                        # absent ranking evidence.
+                        if search_devices:
+                            fallback_args = dict(tool_input.tool_args)
+                            fallback_args["scope"] = "tools"
+                            fallback = await self.async_call(
+                                SimpleNamespace(tool_args=fallback_args)
+                            )
+                            fallback_errors = list(fallback.get("error", []))
+                            fallback_errors.insert(0, errors[-1])
+                            fallback["error"] = fallback_errors
+                            return fallback
 
         if search_tools:
             tools = self._merge_query_candidates(tool_candidate_batches, result_tool_limit)
             # A strong result for one task does not establish coverage of another.
             confidence_rank = {"none": 0, "low": 1, "medium": 2, "high": 3}
             tool_confidence = min(tool_confidences, key=confidence_rank.get) if tool_confidences else "none"
+        capability_coverage = []
+        if search_tools:
+            exposed_names = {str(tool.get("name", "")) for tool in tools}
+            for index, capability in enumerate(requested_capabilities):
+                batch = tool_candidate_batches[index] if index < len(tool_candidate_batches) else []
+                covered_by = [
+                    str(candidate.get("name", "")) for candidate in batch
+                    if str(candidate.get("name", "")) in exposed_names
+                ]
+                capability_coverage.append({
+                    "capability_index": index,
+                    "covered": bool(covered_by),
+                    "candidate_tools": covered_by,
+                })
         devices = self._merge_query_candidates(device_candidate_batches, device_limit)
         if devices:
             self.refresh_candidates(devices)
@@ -730,6 +762,7 @@ class RAGentSemanticSearchTool(llm.Tool):
             "search_query": query,
             "search_queries": queries,
             "requested_capabilities": requested_capabilities,
+            "capability_coverage": capability_coverage,
             "device_search_query": device_queries[0] if device_queries else "",
             "device_search_queries": device_queries,
             "tool_search_query": tool_queries[0] if search_tools and tool_queries else "",

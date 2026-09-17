@@ -1060,33 +1060,16 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             if index not in fulfilled_capability_indexes
         ]
         if len(tool_calls_overall) > 0:
-            str_tools = [f"{input.tool_name}({', '.join(str(x) for x in input.tool_args.values())})" for input, response in tool_calls_overall]
-            tools_str = '\n'.join(str_tools)
-            if unresolved_capabilities:
-                tools_str += f"\nUnresolved requested capabilities: {unresolved_capabilities}"
-            intent_response.async_set_card(title="Changes", content=f"Ran the following tools:\n{tools_str}")
+            # Tool result messages already contain structured execution
+            # outcomes for the normal response round. Keep implementation
+            # names and capability IDs out of the user-facing card/speech.
+            intent_response.async_set_card(title="Changes", content="Actions were processed.")
 
         continue_conversation = False
         if final_model_speech:
-            if unresolved_capabilities:
-                final_model_speech += (
-                    "\nUnresolved requested capabilities: "
-                    + ", ".join(
-                        str(capability.get("action", capability))
-                        for capability in unresolved_capabilities
-                    )
-                )
             intent_response.async_set_speech(final_model_speech)
             has_question = final_model_speech.endswith(("?", "\uff1f"))
             continue_conversation = get_setting_value(CONF_ALLOW_QUESTIONS, self.runtime_options) and has_question
-        elif unresolved_capabilities:
-            intent_response.async_set_speech(
-                "Unresolved requested capabilities: "
-                + ", ".join(
-                    str(capability.get("action", capability))
-                    for capability in unresolved_capabilities
-                )
-            )
         else:
             intent_response.async_set_speech(self.entry.translations.error(TRANSLATION_ERROR_NO_SPEECH))
 
