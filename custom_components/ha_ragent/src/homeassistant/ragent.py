@@ -801,10 +801,12 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                 selected_metadata = tool_metadata_dict.get(tool_name)
                                 execution_call = tool_helper.sanitize_tool_call(
                                     tool_call, selected_metadata, active_candidate_context,
+                                    selected_tool,
                                 )
-                                tool_helper.validate_tool_arguments(
-                                    execution_call, selected_tool,
-                                )
+                                # Keep parsing permissive. The native tool and
+                                # Home Assistant service own schema validation;
+                                # local pre-validation can reject valid custom
+                                # coercions or templated integration arguments.
                                 if (isinstance(llm_api, RAGentAugmentedAPIInstance)
                                     and tool_name.rsplit("__", 1)[-1] == RAGENT_PLANNED_ACTION_TOOL_NAME):
                                     llm_api.set_scheduling_context(

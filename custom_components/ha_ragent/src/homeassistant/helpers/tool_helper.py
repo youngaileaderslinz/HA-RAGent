@@ -416,7 +416,11 @@ class ToolHelper:
         return tool_result
 
     @staticmethod
-    def to_home_assistant_tool_call(tool_call: ToolInput, metadata: ToolMetadata | None = None) -> ToolInput:
+    def to_home_assistant_tool_call(
+        tool_call: ToolInput,
+        metadata: ToolMetadata | None = None,
+        tool: LlmTool | None = None,
+    ) -> ToolInput:
         """Create the Home Assistant call with parser metadata removed."""
         args = dict(tool_call.tool_args)
         if metadata and not any((
@@ -425,15 +429,28 @@ class ToolHelper:
             metadata.is_device_class_aware,
         )):
             return ToolHelper._copy_tool_input(tool_call, tool_call.tool_name, args)
-        args.pop("original_name", None)
+        original_name = args.pop("original_name", None)
         friendly_name = args.pop("friendly_name", None)
+        # Some integrations (notably scripts) explicitly declare entity_id.
+        # That is a service argument, not the Home Assistant intent's friendly
+        # target name. Preserve the original entity ID so templates receive a
+        # valid target rather than a display label such as "Media Player".
+        properties = (tool.parameters or {}).get("properties", {}) if tool else {}
+        if isinstance(properties, dict) and "entity_id" in properties and original_name:
+            args.pop("name", None)
+            args["entity_id"] = original_name
+            return ToolHelper._copy_tool_input(tool_call, tool_call.tool_name, args)
         if friendly_name is not None:
             args["name"] = friendly_name
         return ToolHelper._copy_tool_input(tool_call, tool_call.tool_name, args)
 
     @staticmethod
-    def sanitize_tool_call(tool_call: ToolInput, metadata: ToolMetadata | None,
-                           candidates: list[dict[str, object]]) -> ToolInput:
+    def sanitize_tool_call(
+        tool_call: ToolInput,
+        metadata: ToolMetadata | None,
+        candidates: list[dict[str, object]],
+        tool: LlmTool | None = None,
+    ) -> ToolInput:
         """Build execution arguments from trusted retrieved candidate metadata."""
         args = dict(tool_call.tool_args)
         requested = str(args.get("name", args.get("entity_id", "")) or "").casefold()
@@ -442,24 +459,12 @@ class ToolHelper:
             str(candidate.get("friendly_name", "")).casefold(),
             *(str(value).casefold() for value in (candidate.get("aliases") or [])),
         }), None)
-        # Only tools that explicitly expose Home Assistant target semantics
-        # receive this guard.  Vendor/custom arguments remain opaque and are
-        # passed through unchanged.  In particular, a number from prior chat
-        # context is never an entity identity.
-        if (
-            metadata and metadata.is_domain_aware and requested
-            and ("name" in args or "entity_id" in args)
-            and match is None
-        ):
-            raw_target = args.get("name", args.get("entity_id"))
-            if isinstance(raw_target, (int, float)) or str(raw_target).strip().isdigit():
-                raise ValueError("A numeric value is not a valid entity target")
-            if candidates:
-                raise ValueError("Target is not among the retrieved current entity candidates")
-            if not self._hass.states.get(str(raw_target)):
-                raise ValueError("Target is not a current Home Assistant entity")
         if match is not None:
             args["name"] = match.get("friendly_name") or match.get("name")
+            # An entity_id schema requires the canonical current entity ID,
+            # even when the model supplied its friendly name.
+            if tool and "entity_id" in ((tool.parameters or {}).get("properties", {}) or {}):
+                args["original_name"] = match.get("name")
             if metadata and metadata.is_domain_aware:
                 domains = match.get("domain") or []
                 args["domain"] = list(domains) if isinstance(domains, (list, tuple)) else [domains]
@@ -473,7 +478,7 @@ class ToolHelper:
                 else:
                     args.pop("device_class", None)
         return ToolHelper.to_home_assistant_tool_call(
-            ToolHelper._copy_tool_input(tool_call, tool_call.tool_name, args), metadata,
+            ToolHelper._copy_tool_input(tool_call, tool_call.tool_name, args), metadata, tool,
         )
 
     @staticmethod
