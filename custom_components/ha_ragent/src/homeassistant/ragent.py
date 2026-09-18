@@ -14,23 +14,19 @@ from homeassistant.components import conversation
 from homeassistant.config_entries import ConfigSubentry
 from homeassistant.core import HomeAssistant
 from homeassistant.const import CONF_LLM_HASS_API
-from homeassistant.exceptions import TemplateError, HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import chat_session, intent, llm
 from homeassistant.helpers.template import Template
 from homeassistant.helpers.llm import LLMContext
 from homeassistant.helpers import area_registry as ar, device_registry as dr, floor_registry as fr
-from probatio import to_openapi
 
 from custom_components.ha_ragent.src.homeassistant.helpers.history_manager import HistoryManager
 from custom_components.ha_ragent.src.homeassistant.helpers.message_helper import MessageHelper
 from custom_components.ha_ragent.src.homeassistant.helpers.tool_helper import ToolHelper
-from custom_components.ha_ragent.src.homeassistant.helpers.memory_manager import MemoryManager
 from custom_components.ha_ragent.src.homeassistant.helpers.conversation_retriever import ConversationRetriever
 from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
 from custom_components.ha_ragent.src.homeassistant.helpers.source_retriever import SourceRetriever
-from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
 from custom_components.ha_ragent.src.models.retrieval.scheduled_context import ScheduledContext
-from custom_components.ha_ragent.src.models.embedding.device_embedding import DeviceEmbedding
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.chat.chat_message import ChatMessage
 from custom_components.ha_ragent.src.models.embedding.memory import Memory
@@ -57,16 +53,12 @@ from custom_components.ha_ragent.src.const import (
     CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
     CONF_PROMPT,
     CONF_RETRIEVAL_METHOD,
-    DEFAULT_PROMPT,
     CONF_MAX_TOOL_CALL_ITERATIONS,
     DOMAIN,
     CONF_ALLOW_QUESTIONS,
-    RAGENT_PREFIXED_REQUIRED_TOOL_NAMES,
     RAGENT_SCHEDULED_REQUEST_PREFIX,
     RAGENT_PREFIXED_SCHEDULED_REQUEST_PROHIBITED_TOOL_NAMES,
-    STARTUP_EMBEDDING_RUNNING_FLAG,
     RETRIEVAL_METHOD_LEXICAL,
-    RETRIEVAL_METHOD_AUTOMATIC,
     RAGENT_PLANNED_ACTION_TOOL_NAME,
     TRANSLATION_PROMPT_SCHEDULED_ACTION,
     TRANSLATION_PROMPT_PERSONA,
@@ -84,8 +76,7 @@ from custom_components.ha_ragent.src.const import (
     TRANSLATION_ERROR_UNEXPECTED,
 )
 
-from custom_components.ha_ragent.src.logging.helper import log_debug_payload
-from custom_components.ha_ragent.src.utils import get_entry_language, get_setting_value
+from custom_components.ha_ragent.src.utils import get_setting_value
 
 _logger = BaseLogger(__name__)
 
@@ -114,7 +105,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         try:
             embedding = await self.entry.embedder_backend.async_embed_text(dict(self.subentry.data), retrieval_text)
         except Exception as err:
-            _logger.error(f"Error embedding retrieval query: {err}", exc_info=True)
+            _logger.log_string(level=logging.ERROR, message=f"Error embedding retrieval query: {err}")
             return None
 
         return embedding or None
@@ -130,14 +121,12 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         contexts = history_manager.structured_turn_contexts(chat_log)
         remember_num = get_setting_value(CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS, self.runtime_options)
         remember_time = get_setting_value(CONF_REMEMBER_CONVERSATION_TIME_MINUTES, self.runtime_options)
-        log_debug_payload(
-            _logger, "continuity.raw_history", contexts=contexts,
+        _logger.log_payload("continuity.raw_history", contexts=contexts,
             remember_interactions=remember_num, remember_minutes=remember_time,
         )
         if not remember_num and not remember_time:
             continuity = ContinuityContext()
-            log_debug_payload(
-                _logger, "continuity.disabled", continuity=continuity,
+            _logger.log_payload("continuity.disabled", continuity=continuity,
             )
             return continuity
         current_vector: list[float] = []
@@ -164,144 +153,13 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         )
         return RetrievalHelper.build_continuity_context(selected)
 
-    async def _async_retrieve_devices(
-        self,
-        query_embedding: List[float] | QueryEmbedding,
-        query: str,
-        n_devices: int,
-        continuity: ContinuityContext,
-        current_area: str = "",
-        current_floor: str = "",
-        max_devices: int | None = None,
-    ) -> List[Device]:
-        """Retrieve relevant devices from vector database based on query embedding."""
-        exposure_limit = max(n_devices, max_devices or n_devices)
-        if exposure_limit <= 0:
-            return []
-        collection_name = f"devices_{self.subentry_id}"
-        try:
-            candidate_limit = RetrievalHelper.adaptive_candidate_limit(exposure_limit)
-            options = {**self.entry.options, **self.subentry.data}
-            method = SourceRetriever.retrieval_method(options)
-            scored_devices, all_devices = await RetrievalHelper.async_retrieve_sources(
-                self.entry.vector_db_backend, DeviceEmbedding, options,
-                collection_name, query_embedding, candidate_limit, query=query,
-            )
-            get_lexical = getattr(self.entry.vector_db_backend, "async_get_lexical_objects", None)
-            if method == RETRIEVAL_METHOD_AUTOMATIC and not all_devices and callable(get_lexical):
-                all_devices = await get_lexical(
-                    DeviceEmbedding, options, collection_name,
-                )
-        except Exception as e:
-            _logger.error(f"Error retrieving devices from vector DB: {e}", exc_info=True)
-            return []
-
-        def device_text_parts(device: Device) -> tuple[object, ...]:
-            return (
-                device.id,
-                device.friendly_name,
-                *(device.aliases or []),
-                device.area_name,
-                device.floor_name,
-                *(device.area_aliases or []),
-                *(device.floor_aliases or []),
-                *(device.domain or []),
-                device.device_class,
-                *(device.device_labels or []),
-            )
-
-        def device_identity_score(device: Device) -> float:
-            return 2.0 * RetrievalHelper.device_target_score(query, device)
-
-        def device_location_score(device: Device) -> float:
-            return RetrievalHelper.trusted_location_score(
-                device, current_area, current_floor,
-            )
-
-        def device_metadata_score(device: Device) -> float:
-            return device_identity_score(device) + 0.5 * device_location_score(device)
-
-        def device_continuity_score(device: Device) -> float:
-            return (
-                continuity.entity_score(device)
-                + continuity.area_score(device)
-                + continuity.ambiguous_entity_score(device)
-            )
-
-        device_ranking_evidence: dict[str, dict[str, float]] = {}
-        ranked_devices = await asyncio.to_thread(
-            RetrievalHelper.rank_scored_candidates,
-            scored_devices,
-            all_devices,
-            query,
-            lambda device: device.id,
-            device_text_parts,
-            candidate_limit,
-            metadata_score=device_metadata_score,
-            continuity_score=device_continuity_score,
-            preserve_score=continuity.successful_target_score,
-            trim_confident=False,
-            ranking_evidence=device_ranking_evidence,
-            retrieval_method=method,
-        )
-        if method != RETRIEVAL_METHOD_AUTOMATIC:
-            return ranked_devices[:exposure_limit]
-        confidence = RetrievalHelper.device_search_confidence(
-            ranked_devices,
-            scored_devices,
-            query=query,
-            key=lambda device: device.id,
-            text_parts=device_text_parts,
-            structured_scores={
-                "identity_metadata": device_identity_score,
-                "area_floor": device_location_score,
-            },
-            continuity_score=device_continuity_score,
-            confirmed_score=continuity.successful_target_score,
-            ranking_evidence=device_ranking_evidence,
-        )
-        query_areas = {
-            str(device.area_name).casefold()
-            for device in ranked_devices
-            if device.area_name
-            and (
-                RetrievalHelper._normalize(device.area_name)
-                in RetrievalHelper._normalize(query)
-                if not RetrievalHelper._has_numeric_token(device.area_name)
-                else RetrievalHelper._has_textual_overlap(query, device.area_name)
-            )
-        }
-        return RetrievalHelper.select_device_candidates(
-            query,
-            ranked_devices,
-            n_devices,
-            max_devices,
-            confidence,
-            preferred_areas=query_areas,
-            preserve_score=continuity.successful_target_score,
-        )
-
-    async def _async_retrieve_memories(self, query_embedding: List[float] | QueryEmbedding, n_memories: int) -> List[Memory]:
-        """Retrieve relevant persistent memories for this agent."""
-        if n_memories <= 0 or not query_embedding:
-            return []
-        try:
-            return await MemoryManager(
-                self.hass,
-                self.entry_id,
-                self.subentry_id,
-            ).async_recall(query_embedding, n_memories)
-        except Exception as err:
-            _logger.error(f"Error retrieving memories from vector DB: {err}", exc_info=True)
-            return []
-
     async def _async_render_system_prompt(
         self,
         devices: List[Device],
         memories: List[Memory],
         area_name: str | None,
         floor_name: str | None,
-        scheduled_request: bool = False,
+        is_scheduled_request: bool = False,
         scheduled_context: ScheduledContext | None = None,
     ) -> str | None:
         """Render the system prompt with retrieved device context."""
@@ -317,62 +175,17 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 "floor_name": floor_name,
                 "max_retries": get_setting_value(CONF_MAX_TOOL_CALL_ITERATIONS, self.runtime_options),
             })
-            if scheduled_request:
-                rendered_prompt += "\n\n" + self.entry.translations.prompt(
-                    TRANSLATION_PROMPT_SCHEDULED_ACTION,
-                )
+
+            if is_scheduled_request:
+                rendered_prompt += "\n\n" + self.entry.translations.prompt(TRANSLATION_PROMPT_SCHEDULED_ACTION)
+
             if scheduled_context:
                 rendered_prompt += scheduled_context.prompt_context()
+
             return rendered_prompt
         except Exception as err:
             _logger.error(f"Error rendering prompt: {err}", exc_info=True)
             return None
-
-    def _convert_api_tool(self, api_tool: Any, llm_api: llm.APIInstance | None) -> LlmTool | None:
-        """Convert a Home Assistant LLM tool into the local tool schema."""
-        tool_name = getattr(api_tool, "name", None)
-        if not tool_name:
-            return None
-
-        parameters = {}
-        if hasattr(api_tool, "parameters") and api_tool.parameters:
-            try:
-                parameters = to_openapi(api_tool.parameters, custom_serializer=llm_api.custom_serializer if llm_api else None)
-                if not isinstance(parameters, dict):
-                    _logger.warning(f"Could not convert parameters for tool {tool_name}: converter returned {type(parameters).__name__}")
-                    parameters = {}
-            except Exception as err:
-                _logger.warning(f"Could not convert parameters for tool {tool_name}: {err}")
-                parameters = {}
-
-        return LlmTool(
-            name=tool_name,
-            description=getattr(api_tool, "description", ""),
-            parameters=parameters,
-            metadata=ToolExtractor.extract_tool_metadata(api_tool, parameters),
-        )
-
-    def _ensure_required_tools_exposed(self, tool_list: List[LlmTool], llm_api: llm.APIInstance | None) -> List[LlmTool]:
-        """Expose required tools before tools selected by semantic retrieval."""
-        if not llm_api or not hasattr(llm_api, "tools"):
-            return tool_list
-
-        required_names = set(RAGENT_PREFIXED_REQUIRED_TOOL_NAMES)
-        required_tools = [tool for tool in tool_list if tool.name in required_names]
-        searched_tools = [tool for tool in tool_list if tool.name not in required_names]
-        seen_tool_names = {tool.name for tool in tool_list}
-
-        for api_tool in llm_api.tools:
-            tool_name = getattr(api_tool, "name", None)
-            if tool_name not in required_names or tool_name in seen_tool_names:
-                continue
-
-            converted_tool = self._convert_api_tool(api_tool, llm_api)
-            if converted_tool:
-                required_tools.append(converted_tool)
-                seen_tool_names.add(tool_name)
-
-        return [*required_tools, *searched_tools]
 
     @staticmethod
     def _exclude_prohibited_scheduled_request_tools(tool_list: List[LlmTool], scheduled_request: bool) -> List[LlmTool]:
@@ -480,9 +293,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             executed_signatures_in_iteration: set[str] = set()
             try:
                 _logger.debug(f"Sending prompt to LLM (Iteration {idx + 1}/{max_tool_call_iterations}).")
-                log_debug_payload(
-                    _logger,
-                    "conversation.llm_request",
+                _logger.log_payload("conversation.llm_request",
                     level="debug",
                     iteration=idx + 1,
                     messages=formatted_messages,
@@ -507,8 +318,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     ) or call
                     for call in tool_calls_in_iteration
                 ]
-                log_debug_payload(
-                    _logger, "conversation.llm_response",
+                _logger.log_payload("conversation.llm_response",
                     iteration=idx + 1, raw_response=assistant_content,
                     parsed_tool_calls=tool_calls_in_iteration,
                     exposed_tool_names=sorted(exposed_tool_names),
@@ -748,8 +558,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                     tool_result=stored_tool_result,
                                 )
                                 history_manager.append_message(tool_result_msg)
-                                log_debug_payload(
-                                    _logger, "conversation.tool_result",
+                                _logger.log_payload("conversation.tool_result",
                                     iteration=idx + 1, requested_call=tool_call,
                                     execution_call=execution_call,
                                     raw_result=tool_result,
@@ -783,8 +592,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                             )
                             history_manager.append_message(tool_result_msg)
                             failed_signatures.add(call_signature)
-                            log_debug_payload(
-                                _logger, "conversation.tool_failure",
+                            _logger.log_payload("conversation.tool_failure",
                                 iteration=idx + 1, requested_call=tool_call,
                                 error=repr(tool_err), failure_message=tool_result_msg,
                                 failed_signatures=failed_signatures,
@@ -837,8 +645,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         else:
             intent_response.async_set_speech(self.entry.translations.error(TRANSLATION_ERROR_NO_SPEECH))
 
-        log_debug_payload(
-            _logger, "conversation.final_result",
+        _logger.log_payload("conversation.final_result",
             conversation_id=user_input.conversation_id,
             final_model_speech=final_model_speech,
             tool_calls=tool_calls_overall,
@@ -911,7 +718,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
 
                 continuity: ContinuityContext | None = None
                 if not is_scheduled_request:
-                    continuity = self._async_build_continuity_context(
+                    continuity = await self._async_build_continuity_context(
                         history_manager,
                         chat_log,
                         retrieval_query,
@@ -972,14 +779,13 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                             maximum=max_tools,
                             limit=RetrievalHelper.adaptive_candidate_limit(max(min_tools, max_tools)),
                             retrieval_method=retrieval_method,
+                            llm_api=llm_api,
                         )
                     ) if llm_api and max_tools > 0 else None
                 
                 retrieved_memories = memory_task.result() if memory_task else []
                 retrieved_devices = device_task.result() if device_task else []
                 retrieved_tools = tool_task.result() if tool_task else []
-
-                retrieved_tools = self._ensure_required_tools_exposed(retrieved_tools, llm_api)
                 retrieved_tools = self._exclude_prohibited_scheduled_request_tools(retrieved_tools, is_scheduled_request)
 
                 timing_logger.log_timed_string(level=logging.DEBUG, message="Retrieval completed")
@@ -1009,8 +815,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     device_list.append(device)
 
                 candidate_context = self._candidate_context_from_devices(device_list)
-                log_debug_payload(
-                    _logger, "conversation.prompt_context",
+                _logger.log_payload("conversation.prompt_context",
                     conversation_id=user_input.conversation_id,
                     devices=device_list, memories=retrieved_memories,
                     continuity=continuity, candidate_context=candidate_context,
@@ -1028,7 +833,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     retrieved_memories,
                     area_name=current_area_name,
                     floor_name=current_floor_name,
-                    scheduled_request=is_scheduled_request,
+                    is_scheduled_request=is_scheduled_request,
                     scheduled_context=scheduled_context,
                 )
                 timing_logger.log_timed_string(level=logging.DEBUG, message="System prompt rendering")

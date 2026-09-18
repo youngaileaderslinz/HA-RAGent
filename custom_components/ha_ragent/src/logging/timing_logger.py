@@ -1,5 +1,4 @@
 
-import logging
 import time
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger, LogLevel, TRACE
 

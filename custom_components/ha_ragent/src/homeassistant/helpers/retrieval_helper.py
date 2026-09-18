@@ -1628,49 +1628,6 @@ class RetrievalHelper(RetrievalConfidence):
         return score
 
     @staticmethod
-    def rerank_devices_for_tools(
-        devices: Iterable[T], tools: Iterable[Any],
-        relevance_scores: dict[str, float] | None = None,
-    ) -> list[T]:
-        """Refine device order from the selected tool schemas without filtering.
-
-        Retrieval remains recall-first: a tool with incomplete metadata cannot
-        remove devices. When selected tools explicitly declare compatible
-        domains/classes, however, that second retrieval direction breaks ties
-        in favour of targets those tools can actually operate.
-        """
-        devices = list(devices)
-        tools = list(tools)
-        # Schema compatibility is only a tie-breaker.  Callers that do not
-        # supply retrieval relevance deliberately retain the original order.
-        if relevance_scores is None:
-            return devices
-        compatibility = {
-            index: max(
-                (RetrievalHelper.tool_device_compatibility(tool, (device,))
-                 for tool in tools),
-                default=0.0,
-            )
-            for index, device in enumerate(devices)
-        }
-        if not any(score > 0.0 for score in compatibility.values()):
-            return devices
-        ordered = list(enumerate(devices))
-        # Stable adjacent swaps restrict the secondary criterion to an actual
-        # close relevance band and preserve direct/high-confidence targets.
-        for index in range(len(ordered) - 1):
-            left_index, left = ordered[index]
-            right_index, right = ordered[index + 1]
-            left_key = str(RetrievalHelper._device_value(left, "id", "") or RetrievalHelper._device_value(left, "name", ""))
-            right_key = str(RetrievalHelper._device_value(right, "id", "") or RetrievalHelper._device_value(right, "name", ""))
-            if (
-                abs(relevance_scores.get(left_key, 0.0) - relevance_scores.get(right_key, 0.0)) <= 0.05
-                and compatibility[right_index] > compatibility[left_index]
-            ):
-                ordered[index], ordered[index + 1] = ordered[index + 1], ordered[index]
-        return [device for _index, device in ordered]
-
-    @staticmethod
     def _tool_service_names(tool: Any) -> set[str]:
         """Map canonical tool actions to Home Assistant service names."""
         action = str(getattr(tool, "canonical_action", "") or "").casefold()
