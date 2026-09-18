@@ -27,10 +27,11 @@ from custom_components.ha_ragent.src.const import (
 from custom_components.ha_ragent.src.models.embedding.device import Device
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
-from custom_components.ha_ragent.src.homeassistant.helpers.candidate_retriever import CandidateRetriever
+from custom_components.ha_ragent.src.homeassistant.helpers.source_retriever import SourceRetriever
+from custom_components.ha_ragent.src.homeassistant.helpers.conversation_retriever import ConversationRetriever
 from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
 from custom_components.ha_ragent.src.translation import RAGentTranslations
-from custom_components.ha_ragent.src.logging import log_debug_payload
+from custom_components.ha_ragent.src.logging.helper import log_debug_payload
 from custom_components.ha_ragent.src.utils import get_setting_value
 
 _logger = logging.getLogger(__name__)
@@ -305,7 +306,7 @@ class RAGentSemanticSearchTool(llm.Tool):
     async def _embed_query_for_subentry(self, entry: Any, subentry: Any, query: str) -> list[float]:
         """Embed a search query for a specific subentry."""
         options = {**(getattr(entry, "options", {}) or {}), **subentry.data}
-        if RetrievalHelper.retrieval_method(options) == RETRIEVAL_METHOD_LEXICAL:
+        if SourceRetriever.retrieval_method(options) == RETRIEVAL_METHOD_LEXICAL:
             return []
         try:
             return await entry.embedder_backend.async_embed_text(dict(subentry.data), query) or []
@@ -474,6 +475,7 @@ class RAGentSemanticSearchTool(llm.Tool):
 
         for searchable_entry in self._iter_searchable_entries():
             entry, subentry_id, subentry, min_devices, max_devices, min_tools, max_tools = searchable_entry
+            retriever = ConversationRetriever(self.hass, entry, self.entry_id, subentry_id, subentry)
             device_limit = max_devices
             tool_limit = max_tools
             result_tool_limit = max(result_tool_limit, max_tools)
@@ -495,10 +497,10 @@ class RAGentSemanticSearchTool(llm.Tool):
                         embedding_cache, entry, subentry, device_query,
                     )
                     if search_devices and device_limit > 0:
-                        query_devices = await CandidateRetriever.async_retrieve_devices(
-                            entry.vector_db_backend, options,
-                            f"devices_{subentry_id}", device_embedding, device_query,
-                            min_devices, max_devices,
+                        query_devices = await retriever.async_retrieve_search_devices(
+                            device_embedding, device_query,
+                            minimum=min_devices, maximum=max_devices,
+                            retrieval_method=SourceRetriever.retrieval_method(options),
                         )
                         device_candidate_batches[query_index].extend(
                             self._device_candidate(device)
@@ -515,10 +517,11 @@ class RAGentSemanticSearchTool(llm.Tool):
                             embedding_cache, entry, subentry, tool_query,
                         )
                         retrieved_tools, scored_tools, tool_ranking_evidence = (
-                            await CandidateRetriever.async_retrieve_tools(
-                                entry.vector_db_backend, options,
-                                f"tools_{subentry_id}", tool_embedding, tool_query,
-                                query_devices, tool_limit, requested_capability,
+                            await retriever.async_retrieve_search_tools(
+                                tool_embedding, tool_query,
+                                devices=query_devices, maximum=tool_limit,
+                                requested_capability=requested_capability,
+                                retrieval_method=SourceRetriever.retrieval_method(options),
                             )
                         )
                         semantic_ranks = {
@@ -536,7 +539,7 @@ class RAGentSemanticSearchTool(llm.Tool):
                             requested_capability,
                             scored_tools,
                             tool_ranking_evidence,
-                            retrieval_method=RetrievalHelper.retrieval_method(options),
+                            retrieval_method=SourceRetriever.retrieval_method(options),
                         )
                         query_confidence = confidence.level
                         tool_confidences.append(query_confidence)
@@ -573,7 +576,7 @@ class RAGentSemanticSearchTool(llm.Tool):
                                 semantic_rank=semantic_ranks.get(tool.name),
                                 semantic_score=semantic_scores.get(tool.name),
                                 requested_capability=requested_capability,
-                                retrieval_method=RetrievalHelper.retrieval_method(options),
+                                retrieval_method=SourceRetriever.retrieval_method(options),
                             )
                             tool_candidate_batches[query_index].append(
                                 {
