@@ -11,7 +11,7 @@ from homeassistant.components.conversation.models import AbstractConversationAge
 from homeassistant.components import conversation
 from homeassistant.config_entries import ConfigSubentry
 from homeassistant.core import HomeAssistant
-from homeassistant.const import CONF_LLM_HASS_API, MATCH_ALL
+from homeassistant.const import CONF_LLM_HASS_API
 from homeassistant.exceptions import TemplateError, HomeAssistantError
 from homeassistant.helpers import chat_session, intent, llm
 from homeassistant.helpers.template import Template
@@ -23,6 +23,7 @@ from custom_components.ha_ragent.src.homeassistant.helpers.history_manager impor
 from custom_components.ha_ragent.src.homeassistant.helpers.message_helper import MessageHelper
 from custom_components.ha_ragent.src.homeassistant.helpers.tool_helper import ToolHelper
 from custom_components.ha_ragent.src.homeassistant.helpers.memory_manager import MemoryManager
+from custom_components.ha_ragent.src.homeassistant.helpers.conversation_retriever import ConversationRetriever
 from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
 from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
 from custom_components.ha_ragent.src.models.retrieval.scheduled_context import ScheduledContext
@@ -106,7 +107,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
     @property
     def supported_languages(self) -> list[str]:
         """Return a list of supported languages."""
-        return MATCH_ALL
+        return RAGentTranslations.supported_languages()
 
     async def _async_embed_retrieval_text(self, retrieval_text: str) -> list[float] | None:
         """Embed retrieval text and handle backend failures consistently."""
@@ -610,16 +611,11 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         scheduled_request: bool = False
     ) -> ConversationResult:
         """Process a prompt through the RAGent."""
-        tool_helper = ToolHelper(self.hass)
-        max_tool_call_iterations = max(1, get_setting_value(CONF_MAX_TOOL_CALL_ITERATIONS, self.runtime_options))
+        tool_helper = ToolHelper(self.hass, tool_list)
+        max_tool_call_iterations = get_setting_value(CONF_MAX_TOOL_CALL_ITERATIONS, self.runtime_options)
 
         tool_calls_overall: List[Tuple[llm.ToolInput, Any]] = []
         final_model_speech = ""
-        tool_metadata_dict = {
-            tool.name: tool.metadata
-            for tool in tool_list
-            if tool.metadata
-        }
         formatted_messages: list[ChatMessage] = []
         formatted_index = 0
         active_candidate_context = list(candidate_context)
@@ -671,13 +667,11 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 _logger.debug(f"RAGent timing: LLM iteration {idx + 1}: {time.perf_counter() - iteration_start:.3f}s")
 
                 helper_start = time.perf_counter()
-                tool_calls_in_iteration = tool_helper.parse_tool_calls(assistant_content, tool_metadata_dict)
+                tool_calls_in_iteration = tool_helper.parse_tool_calls(assistant_content)
                 exposed_tool_names = {tool.name for tool in tool_list}
                 tool_calls_in_iteration = [
                     tool_helper.normalize_exposed_tool_call(
-                        call,
-                        exposed_tool_names,
-                        tool_metadata_dict,
+                        call, exposed_tool_names,
                     ) or call
                     for call in tool_calls_in_iteration
                 ]
@@ -686,7 +680,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     iteration=idx + 1, raw_response=assistant_content,
                     parsed_tool_calls=tool_calls_in_iteration,
                     exposed_tool_names=sorted(exposed_tool_names),
-                    tool_metadata=tool_metadata_dict,
                 )
                 _logger.debug(f"RAGent timing: parse_tool_calls: {time.perf_counter() - helper_start:.3f}s")
 
@@ -766,52 +759,10 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                             else []
                         )
                         selected_tool = tools_by_name.get(tool_name)
-                        capability_scores = [
-                            RetrievalHelper.tool_capability_compatibility(selected_tool, capability)
-                            for capability in requested_capabilities
-                        ] if selected_tool else []
-                        if capability_scores and max(capability_scores) < 0:
-                            rediscovery_result = await llm_api.async_rediscover_capabilities(
-                                requested_capabilities,
-                            )
-                            existing_names = {tool.name for tool in tool_list}
-                            discovered_tools = tool_helper.discovered_tools(
-                                rediscovery_result, existing_names,
-                            )
-                            tool_list.extend(discovered_tools)
-                            tools_by_name.update({tool.name: tool for tool in discovered_tools})
-                            exposed_tool_names.update(tool.name for tool in discovered_tools)
-                            tool_metadata_dict.update({
-                                tool.name: tool.metadata
-                                for tool in discovered_tools
-                                if tool.metadata
-                            })
-                            history_manager.append_message(conversation.ToolResultContent(
-                                agent_id=user_input.agent_id,
-                                tool_call_id=tool_call.id,
-                                tool_name=tool_name,
-                                tool_result={
-                                    "success": False,
-                                    "execution_status": {
-                                        "requested_capabilities": requested_capabilities,
-                                        "executed_capability": getattr(selected_tool, "canonical_action", ""),
-                                        "target": tool_helper.successful_target_names(tool_call, {}),
-                                        "tool_succeeded": False,
-                                        "fulfillment_status": "capability_mismatch",
-                                        "rediscovery_required": True,
-                                        "rediscovered_tools": [tool.name for tool in discovered_tools],
-                                    },
-                                },
-                            ))
-                            failed_signatures.add(call_signature)
-                            continue
-
                         try:
                             if llm_api:
-                                selected_metadata = tool_metadata_dict.get(tool_name)
                                 execution_call = tool_helper.sanitize_tool_call(
-                                    tool_call, selected_metadata, active_candidate_context,
-                                    selected_tool,
+                                    tool_call, active_candidate_context, selected_tool,
                                 )
                                 # Keep parsing permissive. The native tool and
                                 # Home Assistant service own schema validation;
@@ -843,18 +794,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                 parsed_tool_result = tool_helper.parse_tool_results(tool_result)
                                 tool_succeeded = MessageHelper.tool_result_succeeded(parsed_tool_result)
                                 if tool_succeeded and tool_helper.is_semantic_search_tool(tool_name):
-                                    existing_names = {tool.name for tool in tool_list}
-                                    discovered_tools = tool_helper.discovered_tools(parsed_tool_result, existing_names)
-                                    tool_list.extend(discovered_tools)
-                                    tools_by_name.update({tool.name: tool for tool in discovered_tools})
-                                    exposed_tool_names.update(tool.name for tool in discovered_tools)
-                                    tool_metadata_dict.update(
-                                        {
-                                            tool.name: tool.metadata
-                                            for tool in discovered_tools
-                                            if tool.metadata
-                                        }
-                                    )
                                     discovered_candidates = tool_helper.candidate_devices(parsed_tool_result)
                                     if discovered_candidates:
                                         active_candidate_context = tool_helper.merge_candidates(active_candidate_context, discovered_candidates)
@@ -901,7 +840,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                     tool_call, parsed_tool_result, active_candidate_context,
                                 )
                                 fulfillment_status = "failed"
-                                rediscovery_required = not tool_succeeded
+                                retry_blocked = not tool_succeeded
                                 observed_states: dict[str, str | None] = {}
                                 device_classes: set[str] = set()
                                 if tool_succeeded:
@@ -944,7 +883,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                             fulfillment_status = "verified"
                                         else:
                                             fulfillment_status = "state_mismatch"
-                                            rediscovery_required = True
+                                            retry_blocked = True
                                 execution_status = {
                                     "requested_capabilities": requested_capabilities,
                                     "executed_capability": getattr(selected_tool, "canonical_action", ""),
@@ -954,34 +893,15 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                     "observed_states": observed_states,
                                     "device_classes": sorted(device_classes),
                                     "unresolved_targets": unresolved_targets,
-                                    "rediscovery_required": rediscovery_required,
+                                    "retry_blocked": retry_blocked,
                                     "unresolved_capabilities": [
                                         capability
                                         for index, capability in enumerate(requested_capabilities)
                                         if index not in fulfilled_capability_indexes
                                     ],
                                 }
-                                if rediscovery_required:
+                                if retry_blocked:
                                     failed_signatures.add(call_signature)
-                                    if isinstance(llm_api, RAGentAugmentedAPIInstance):
-                                        rediscovery_result = await llm_api.async_rediscover_capabilities(
-                                            requested_capabilities,
-                                        )
-                                        existing_names = {tool.name for tool in tool_list}
-                                        discovered_tools = tool_helper.discovered_tools(
-                                            rediscovery_result, existing_names,
-                                        )
-                                        tool_list.extend(discovered_tools)
-                                        tools_by_name.update({tool.name: tool for tool in discovered_tools})
-                                        exposed_tool_names.update(tool.name for tool in discovered_tools)
-                                        tool_metadata_dict.update({
-                                            tool.name: tool.metadata
-                                            for tool in discovered_tools
-                                            if tool.metadata
-                                        })
-                                        execution_status["rediscovered_tools"] = [
-                                            tool.name for tool in discovered_tools
-                                        ]
                                 if isinstance(stored_tool_result, dict):
                                     stored_tool_result["execution_status"] = execution_status
                                 else:
@@ -1153,6 +1073,9 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     runtime_options=self.runtime_options,
                 )
                 retrieval_method = RetrievalHelper.retrieval_method(self.runtime_options)
+                retriever = ConversationRetriever(
+                    self.hass, self.entry, self.entry_id, self.subentry_id, self.subentry,
+                )
                 memory_limit = 0 if scheduled_request else get_setting_value(CONF_NUM_MEMORIES_TO_EXTRACT, self.runtime_options)
                 needs_embedding = retrieval_method != RETRIEVAL_METHOD_LEXICAL or memory_limit > 0
                 retrieval_query = (
@@ -1196,40 +1119,49 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 # remains neutral, so context can boost compatible capabilities
                 # without suppressing recovery.
                 async with asyncio.TaskGroup() as retrieval_tasks:
-                    memory_task = retrieval_tasks.create_task(self._async_retrieve_memories(query_embedding, memory_limit))
+                    memory_task = (
+                        retrieval_tasks.create_task(retriever.async_retrieve_memories(
+                            query_embedding, limit=memory_limit,
+                            retrieval_method=retrieval_method,
+                        ))
+                        if memory_limit > 0 else None
+                    )
                     min_devices, max_devices, min_tools, max_tools = self._configured_retrieval_ranges(
                         self.runtime_options
                     )
-                    device_task = retrieval_tasks.create_task(
-                        self._async_retrieve_devices(
+                    device_task = (
+                        retrieval_tasks.create_task(retriever.async_retrieve_devices(
                             query_embedding,
                             retrieval_query,
-                            n_devices=min_devices,
+                            minimum=min_devices,
+                            maximum=max_devices,
                             continuity=continuity,
+                            retrieval_method=retrieval_method,
                             current_area=current_area,
                             current_floor=current_floor,
-                            max_devices=max_devices,
-                        )
+                        ))
+                        if max_devices > 0 else None
                     )
                     tool_task = retrieval_tasks.create_task(
-                        self._async_retrieve_tool_sources(
+                        retriever.async_retrieve_tool_sources(
                             query_embedding,
                             retrieval_query,
-                            RetrievalHelper.adaptive_candidate_limit(max(min_tools, max_tools)),
+                            limit=RetrievalHelper.adaptive_candidate_limit(max(min_tools, max_tools)),
+                            retrieval_method=retrieval_method,
                         )
                     ) if llm_api and max(min_tools, max_tools) > 0 else None
 
-                retrieved_memories = memory_task.result()
-                retrieved_devices = device_task.result()
+                retrieved_memories = memory_task.result() if memory_task else []
+                retrieved_devices = device_task.result() if device_task else []
                 log_timing("retrieval: devices and memories")
 
-                retrieved_tools = await self._async_retrieve_tools(
+                retrieved_tools = await retriever.async_retrieve_tools(
                     query_embedding,
                     retrieval_query,
-                    n_tools=min_tools,
-                    continuity=continuity,
+                    minimum=min_tools,
+                    maximum=max_tools,
                     devices=retrieved_devices,
-                    max_tools=max_tools,
+                    retrieval_method=retrieval_method,
                     sources=tool_task.result() if tool_task else None,
                 ) if llm_api else []
                 # Complete the retrieval loop: selected tool schemas refine

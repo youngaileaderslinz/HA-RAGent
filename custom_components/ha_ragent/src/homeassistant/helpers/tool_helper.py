@@ -18,8 +18,14 @@ from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper impo
 _logger = logging.getLogger(__name__)
 
 class ToolHelper:
-    def __init__(self, hass: HomeAssistant) -> None:
+    def __init__(self, hass: HomeAssistant, tools: list[LlmTool] | None = None) -> None:
         self._hass = hass
+        self._tool_metadata_index = {
+            tool.name: tool.metadata
+            for tool in tools or []
+            if isinstance(tool.metadata, ToolMetadata)
+        }
+
 
     @staticmethod
     def _copy_tool_input(tool_call: ToolInput, tool_name: str, arguments: dict[str, Any]) -> ToolInput:
@@ -149,6 +155,7 @@ class ToolHelper:
             tool_metadata.is_device_class_aware,
         )):
             return
+        
         is_domain_aware = tool_metadata.is_domain_aware if tool_metadata else False
         is_area_aware = tool_metadata.is_area_aware if tool_metadata else False
 
@@ -175,14 +182,9 @@ class ToolHelper:
             if floor_name:
                 parameters["floor"] = floor_name
 
-    def parse_tool_calls(
-        self,
-        llm_response: str,
-        tool_metadata_dic: Dict[str, ToolMetadata] | None = None,
-    ) -> List[ToolInput]:
-        """Parse tool calls from LLM response."""
+    def parse_tool_calls(self, llm_response: str) -> List[ToolInput]:
+        """Parse tool calls from LLM response using indexed tool metadata."""
         parsed_calls = []
-        tool_metadata_dic = tool_metadata_dic or {}
         
         for match in TOOL_REGEX_PATTERN.finditer(llm_response):
             tool_json = self._tool_string_to_dict(match.group(1))
@@ -204,7 +206,7 @@ class ToolHelper:
                 _logger.debug(f"Empty tool arguments: {tool_json.get('arguments')}")
                 continue
 
-            self._parse_parameters(parameters, tool_metadata_dic.get(tool_name))
+            self._parse_parameters(parameters, self._tool_metadata_index.get(tool_name))
             parsed_call = ToolInput(tool_name=tool_name, tool_args=parameters)
             parsed_calls.append(parsed_call)
 
@@ -263,7 +265,6 @@ class ToolHelper:
         self,
         tool_call: ToolInput,
         exposed_names: set[str],
-        metadata_by_name: dict[str, ToolMetadata] | None = None,
     ) -> ToolInput | None:
         """Return a call using an exposed name, or reject an invented name."""
         tool_name = ToolHelper.resolve_exposed_tool_name(tool_call.tool_name, exposed_names)
@@ -272,7 +273,7 @@ class ToolHelper:
         if tool_name == tool_call.tool_name:
             return tool_call
         arguments = dict(tool_call.tool_args)
-        self._parse_parameters(arguments, (metadata_by_name or {}).get(tool_name))
+        self._parse_parameters(arguments, self._tool_metadata_index.get(tool_name))
         return self._copy_tool_input(tool_call, tool_name, arguments)
 
     @staticmethod
@@ -284,34 +285,6 @@ class ToolHelper:
         if not isinstance(candidates, list):
             return []
         return [candidate for candidate in candidates if isinstance(candidate, dict)]
-
-    @staticmethod
-    def discovered_tools(result: object, existing_names: set[str]) -> list[LlmTool]:
-        """Convert newly discovered candidate tools for the next iteration."""
-        if not isinstance(result, dict):
-            return []
-        candidates = result.get("candidate_tools", result.get("tools", []))
-        if not isinstance(candidates, list):
-            return []
-
-        discovered: list[LlmTool] = []
-        for candidate in candidates:
-            if not isinstance(candidate, dict):
-                continue
-            name = str(candidate.get("name", "") or "")
-            if not name or name in existing_names:
-                continue
-            metadata = candidate.get("metadata")
-            discovered.append(
-                LlmTool(
-                    name=name,
-                    description=str(candidate.get("description", "") or ""),
-                    parameters=candidate.get("parameters") or {},
-                    metadata=ToolMetadata.from_dict(metadata) if isinstance(metadata, dict) else ToolMetadata(),
-                )
-            )
-            existing_names.add(name)
-        return discovered
 
     @staticmethod
     def successful_target_names(tool_call: ToolInput, result: object) -> list[str]:
@@ -388,13 +361,13 @@ class ToolHelper:
 
         return tool_result
 
-    @staticmethod
     def to_home_assistant_tool_call(
+        self,
         tool_call: ToolInput,
-        metadata: ToolMetadata | None = None,
         tool: LlmTool | None = None,
     ) -> ToolInput:
-        """Create the Home Assistant call with parser metadata removed."""
+        """Create the Home Assistant call with indexed parser metadata removed."""
+        metadata = self._tool_metadata_index.get(tool_call.tool_name)
         args = dict(tool_call.tool_args)
         if metadata and not any((
             metadata.is_domain_aware,
@@ -417,14 +390,14 @@ class ToolHelper:
             args["name"] = friendly_name
         return ToolHelper._copy_tool_input(tool_call, tool_call.tool_name, args)
 
-    @staticmethod
     def sanitize_tool_call(
+        self,
         tool_call: ToolInput,
-        metadata: ToolMetadata | None,
         candidates: list[dict[str, object]],
         tool: LlmTool | None = None,
     ) -> ToolInput:
         """Build execution arguments from trusted retrieved candidate metadata."""
+        metadata = self._tool_metadata_index.get(tool_call.tool_name)
         args = dict(tool_call.tool_args)
         requested = str(args.get("name", args.get("entity_id", "")) or "").casefold()
         match = next((candidate for candidate in candidates if requested in {
@@ -450,8 +423,8 @@ class ToolHelper:
                     args["device_class"] = match["device_class"]
                 else:
                     args.pop("device_class", None)
-        return ToolHelper.to_home_assistant_tool_call(
-            ToolHelper._copy_tool_input(tool_call, tool_call.tool_name, args), metadata, tool,
+        return self.to_home_assistant_tool_call(
+            self._copy_tool_input(tool_call, tool_call.tool_name, args), tool,
         )
 
     @staticmethod
