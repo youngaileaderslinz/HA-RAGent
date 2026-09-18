@@ -38,7 +38,7 @@ from custom_components.ha_ragent.src.homeassistant.helpers.source_retriever impo
 from custom_components.ha_ragent.src.homeassistant.helpers.history_retriever import HistoryRetriever
 from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_confidence import RetrievalConfidence
 from custom_components.ha_ragent.src.homeassistant.helpers.source_ranker import SourceRanker
-from custom_components.ha_ragent.src.logging import log_debug_payload
+from custom_components.ha_ragent.src.logging.helper import log_debug_payload
 
 T = TypeVar("T")
 _logger = logging.getLogger(__name__)
@@ -53,11 +53,6 @@ TOOL_CONFIDENCE_PROFILE = ConfidenceProfile(
 
 class RetrievalHelper(RetrievalConfidence):
     """Stateless helpers for building and reranking retrieval queries."""
-
-    @staticmethod
-    def retrieval_method(options: dict) -> str:
-        """Return the configured source-retrieval mode."""
-        return SourceRetriever.retrieval_method(options)
 
     @staticmethod
     async def async_retrieve_sources(

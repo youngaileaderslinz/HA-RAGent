@@ -6,7 +6,7 @@ from functools import wraps
 
 from homeassistant.core import HomeAssistant
 
-from custom_components.ha_ragent.src.logging import log_debug_payload
+from custom_components.ha_ragent.src.logging.helper import log_debug_payload
 from custom_components.ha_ragent.src.models.embedding.device import Device
 from custom_components.ha_ragent.src.models.embedding.device_embedding import DeviceEmbedding
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
