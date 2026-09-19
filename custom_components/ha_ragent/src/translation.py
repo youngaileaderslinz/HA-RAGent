@@ -7,10 +7,20 @@ from typing import Any
 
 class RAGentTranslations:
     _cache: dict[str, dict[str, Any]] = {}
+    _supported_languages: tuple[str, ...] = ()
+
+    def __init__(self, language: str = "en") -> None:
+            self.language = language.split("-")[0].lower()
+            self._data = self._cache.get(self.language, {"Prompts": {}, "Error messages": {}, "Tools": {}})
 
     @classmethod
     def supported_languages(cls) -> list[str]:
-        """Return languages with matching ``<code>.json`` and RAGent files."""
+        """Return the asynchronously discovered supported language codes."""
+        return list(cls._supported_languages)
+
+    @staticmethod
+    def _discover_supported_languages() -> tuple[str, ...]:
+        """Find language pairs without blocking Home Assistant's event loop."""
         try:
             directory = files("custom_components.ha_ragent").joinpath("translations")
             names = {
@@ -18,28 +28,25 @@ class RAGentTranslations:
                 for resource in directory.iterdir()
                 if resource.is_file() and resource.name.endswith(".json")
             }
-            ragent_languages = {
-                name[len("haragent_"):-len(".json")]
-                for name in names
-                if name.startswith("haragent_") and len(name) > len("haragent_.json")
-            }
-            languages = [
-                language for language in ragent_languages
-                if f"{language}.json" in names
-            ]
         except (FileNotFoundError, ModuleNotFoundError, OSError):
-            return []
-
-        return sorted(set(languages))
-
-    def __init__(self, language: str = "en") -> None:
-        self.language = language.split("-")[0].lower()
-        self._data = self._cache.get(self.language, {"Prompts": {}, "Error messages": {}, "Tools": {}})
-
+            return ()
+        
+        return tuple(sorted(
+            name[len("haragent_"):-len(".json")]
+            for name in names
+            if (
+                name.startswith("haragent_")
+                and len(name) > len("haragent_.json")
+                and f"{name[len('haragent_'):-len('.json')]}.json" in names
+            )
+        ))
+    
     @classmethod
     async def async_create(cls, hass: Any, language: str = "en") -> "RAGentTranslations":
         """Create a translation service without performing file I/O on the event loop."""
         normalized = language.split("-")[0].lower()
+        if not cls._supported_languages:
+            cls._supported_languages = await hass.async_add_executor_job(cls._discover_supported_languages,)
         if normalized not in cls._cache:
             cls._cache[normalized] = await hass.async_add_executor_job(cls._load, normalized)
         return cls(normalized)
