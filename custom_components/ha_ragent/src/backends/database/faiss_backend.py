@@ -1,3 +1,5 @@
+import logging
+
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 import os
 import asyncio
@@ -82,7 +84,7 @@ class FaissDbBackend(ABaseDbBackend):
         try:
             await self.hass.async_add_executor_job(self._flush_metadata)
         except Exception:
-            _logger.warning("Failed to persist memory retrieval counts", exc_info=True)
+            _logger.log_string(level=logging.ERROR, message="Failed to persist memory retrieval counts", exc_info=True)
 
     @serialized_storage
     def _flush_metadata(self) -> None:
@@ -125,7 +127,7 @@ class FaissDbBackend(ABaseDbBackend):
                         self._metadata[collection_name] = pickle.load(f)
 
                 except Exception as e:
-                    _logger.error(f"Failed to load collection {collection_name}: {e}")
+                    _logger.log_string(level=logging.ERROR, message=f"Failed to load collection {collection_name}: {e}", exc_info=True)
                     self._indices.pop(collection_name, None)
                     self._metadata.pop(collection_name, None)
                     raise
@@ -170,7 +172,7 @@ class FaissDbBackend(ABaseDbBackend):
         self._metadata[collection_name].extend(metadatas)
         
         self._save_to_disk(collection_name)
-        _logger.info(f"Saved {len(device_embeddings)} embeddings to local FAISS index: {collection_name}")
+        _logger.log_string(level=logging.INFO, message=f"Saved {len(device_embeddings)} embeddings to local FAISS index: {collection_name}")
 
     @serialized_storage
     def _query_scored_devices(self, collection_name: str, query_embedding: List[float], top_k: int):
@@ -274,7 +276,7 @@ class FaissDbBackend(ABaseDbBackend):
                 try:
                     os.remove(path)
                 except OSError as err:
-                    _logger.warning(f"Failed to remove stale FAISS file {path}: {err}")
+                    _logger.log_string(level=logging.WARNING, message=f"Failed to remove stale FAISS file {path}: {err}", exc_info=True)
 
     @serialized_storage
     def _list_objects(self, object_type, collection_name: str):
@@ -303,20 +305,20 @@ class FaissDbBackend(ABaseDbBackend):
         try:
             await self.hass.async_add_executor_job(self._cleanup_database)
         except Exception as e:
-             _logger.error(f"Error cleaning up database: {e}", exc_info=True)
+             _logger.log_string(level=logging.ERROR, message=f"Error cleaning up database: {e}", exc_info=True)
 
     @invalidates_cache
     async def async_reset_collection(self, config_subentry: dict, collection_name: str, embedding_length: int) -> None:
         try:
             await self.hass.async_add_executor_job(self._reset_collection, collection_name, embedding_length)
         except Exception as e:
-            _logger.error(f"Error resetting collection: {e}", exc_info=True)
+            _logger.log_string(level=logging.ERROR, message=f"Error resetting collection: {e}", exc_info=True)
 
     async def async_ensure_collection_exists(self, config_subentry: dict, collection_name: str, embedding_length: int) -> None:
         try:
             await self.hass.async_add_executor_job(self._ensure_collection, collection_name, embedding_length)
         except Exception as e:
-            _logger.error(f"Error ensuring collection: {e}", exc_info=True)
+            _logger.log_string(level=logging.ERROR, message=f"Error ensuring collection: {e}", exc_info=True)
             raise
     
     @invalidates_cache
@@ -324,14 +326,14 @@ class FaissDbBackend(ABaseDbBackend):
         try:
             await self.hass.async_add_executor_job(self._cleanup_collection, collection_name)
         except Exception as e:
-            _logger.error(f"Error cleaning up collection: {e}", exc_info=True)
+            _logger.log_string(level=logging.ERROR, message=f"Error cleaning up collection: {e}", exc_info=True)
 
     @invalidates_cache
     async def async_save_objects(self, config_subentry: dict, collection_name: str, device_embeddings: List[DeviceEmbedding | LlmToolEmbedding | MemoryEmbedding]) -> None:
         try:
             await self.hass.async_add_executor_job(self._save_device_embeddings, collection_name, device_embeddings)
         except Exception as e:
-            _logger.error(f"Error saving device embeddings: {e}", exc_info=True)
+            _logger.log_string(level=logging.ERROR, message=f"Error saving device embeddings: {e}", exc_info=True)
             raise
 
     @invalidates_cache
@@ -344,7 +346,7 @@ class FaissDbBackend(ABaseDbBackend):
                 object_embeddings,
             )
         except Exception as e:
-            _logger.error(f"Error upserting objects: {e}", exc_info=True)
+            _logger.log_string(level=logging.ERROR, message=f"Error upserting objects: {e}", exc_info=True)
             raise
 
     async def async_retrieve_scored_objects(self, object_type: type[DeviceEmbedding | LlmToolEmbedding | MemoryEmbedding], config_subentry: dict, collection_name: str, query_embedding: List[float], top_k: int = 10) -> List[ScoredResult[Device | LlmTool | Memory]]:
@@ -355,14 +357,14 @@ class FaissDbBackend(ABaseDbBackend):
                 for rank, (metadata, score) in enumerate(results, start=1)
             ], top_k)
         except Exception as err:
-            _logger.error(f"Error retrieving scored objects: {err}", exc_info=True)
+            _logger.log_string(level=logging.ERROR, message=f"Error retrieving scored objects: {err}", exc_info=True)
             return []
 
     async def async_list_objects(self, object_type: type[DeviceEmbedding | LlmToolEmbedding | MemoryEmbedding], config_subentry: dict, collection_name: str) -> List[Device | LlmTool | Memory]:
         try:
             return await self.hass.async_add_executor_job(self._list_objects, object_type, collection_name)
         except Exception as e:
-            _logger.error(f"Error listing objects: {e}", exc_info=True)
+            _logger.log_string(level=logging.ERROR, message=f"Error listing objects: {e}", exc_info=True)
             raise
 
     async def async_increment_memory_retrieval_counts(self, config_subentry: dict, collection_name: str, memory_ids: List[str]) -> None:
@@ -380,6 +382,6 @@ class FaissDbBackend(ABaseDbBackend):
         try:
             return await self.hass.async_add_executor_job(self._delete_objects, collection_name, id_field, object_ids)
         except Exception as e:
-            _logger.error(f"Error deleting objects: {e}", exc_info=True)
+            _logger.log_string(level=logging.ERROR, message=f"Error deleting objects: {e}", exc_info=True)
             raise
 

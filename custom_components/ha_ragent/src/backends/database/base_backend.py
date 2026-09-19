@@ -1,12 +1,12 @@
 import asyncio
 import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any, Dict, List
 from abc import ABC, abstractmethod
 from functools import wraps
 
 from homeassistant.core import HomeAssistant
 
-from custom_components.ha_ragent.src.logging.helper import log_debug_payload
 from custom_components.ha_ragent.src.models.embedding.device import Device
 from custom_components.ha_ragent.src.models.embedding.device_embedding import DeviceEmbedding
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
@@ -15,7 +15,7 @@ from custom_components.ha_ragent.src.models.embedding.memory import Memory
 from custom_components.ha_ragent.src.models.embedding.memory_embedding import MemoryEmbedding
 from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 
 def invalidates_cache(method):
@@ -55,9 +55,11 @@ class ABaseDbBackend(ABC):
         self._lexical_object_cache[collection_name] = tuple(objects)
         self._collection_presence[collection_name] = bool(objects)
         self._collection_revisions[collection_name] = self._collection_revisions.get(collection_name, 0) + 1
-        log_debug_payload(
-            _logger, "cache.replace", collection=collection_name,
-            revision=self._collection_revision(collection_name), objects=objects,
+        _logger.log_payload(
+            "cache.replace", 
+            collection=collection_name,
+            revision=self._collection_revision(collection_name), 
+            objects=objects
         )
 
     def _collection_revision(self, collection_name: str) -> tuple[int, int]:
@@ -83,12 +85,14 @@ class ABaseDbBackend(ABC):
             self._lexical_object_cache.pop(collection_name, None)
             if contents_changed:
                 self._collection_presence.pop(collection_name, None)
-        log_debug_payload(
-            _logger, "cache.invalidate", collection=collection_name,
-            contents_changed=contents_changed, previous=previous,
+        _logger.log_payload(
+            "cache.invalidate", 
+            collection=collection_name,
+            contents_changed=contents_changed, 
+            previous=previous,
             cache_revision=self._cache_revision,
             collection_revisions=self._collection_revisions,
-            cached_collections=list(self._lexical_object_cache),
+            cached_collections=list(self._lexical_object_cache)
         )
 
     async def async_collection_has_objects(self, config_subentry: dict, collection_name: str) -> bool:
@@ -101,9 +105,11 @@ class ABaseDbBackend(ABC):
                 if revision == self._collection_revision(collection_name):
                     self._collection_presence[collection_name] = present
             present = self._collection_presence[collection_name]
-            log_debug_payload(
-                _logger, "cache.presence", collection=collection_name,
-                present=present, presence_cache=self._collection_presence,
+            _logger.log_payload(
+                "cache.presence", 
+                collection=collection_name,
+                present=present, 
+                presence_cache=self._collection_presence
             )
             return present
 
@@ -139,10 +145,12 @@ class ABaseDbBackend(ABC):
                     else:
                         cached = self._lexical_object_cache.get(collection_name)
         objects = list(cached)
-        log_debug_payload(
-            _logger, "cache.lexical_snapshot", collection=collection_name,
-            cache_hit=cache_hit, revision=self._collection_revision(collection_name),
-            objects=objects,
+        _logger.log_payload(
+            "cache.lexical_snapshot", 
+            collection=collection_name,
+            cache_hit=cache_hit, 
+            revision=self._collection_revision(collection_name),
+            objects=objects
         )
         return objects
 
