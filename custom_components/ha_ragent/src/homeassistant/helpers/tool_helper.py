@@ -1,4 +1,4 @@
-import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 import json
 from typing import Any, Dict, List, Tuple
 
@@ -16,7 +16,7 @@ from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
 from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 class ToolHelper:
     def __init__(self, hass: HomeAssistant, tools: list[LlmTool] | None = None) -> None:

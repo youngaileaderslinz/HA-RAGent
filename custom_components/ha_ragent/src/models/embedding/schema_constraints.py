@@ -7,7 +7,6 @@ neutral, so it can never be used to exclude a tool.
 
 from __future__ import annotations
 
-from typing import Any
 
 
 def constrained_values(schema: object) -> set[str] | None:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from homeassistant.components import conversation
 
 from custom_components.ha_ragent.src.const import (

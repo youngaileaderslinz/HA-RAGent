@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from collections.abc import Callable
 from uuid import uuid4
 
@@ -28,7 +28,7 @@ from custom_components.ha_ragent.src.const import (
 from custom_components.ha_ragent.src.models.retrieval.scheduled_context import ScheduledContext
 from custom_components.ha_ragent.src.translation import RAGentTranslations
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 class RAGentPlannedActionTool(llm.Tool):
     name = RAGENT_PLANNED_ACTION_TOOL_NAME

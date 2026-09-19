@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any
 
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 
 class LexicalRetriever:

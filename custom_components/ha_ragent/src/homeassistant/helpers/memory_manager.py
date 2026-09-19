@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -18,7 +18,7 @@ from custom_components.ha_ragent.src.models.embedding.memory_embedding import Me
 from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
 from custom_components.ha_ragent.src.utils import get_setting_value
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 
 class MemoryManager:
