@@ -1,5 +1,4 @@
 import asyncio
-from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 import aiohttp
 from typing import Any, Dict, List
 
@@ -23,8 +22,6 @@ from custom_components.ha_ragent.src.const import (
 )
 from custom_components.ha_ragent.src.backends.embedder.base_backend import ABaseEmbedder
 from custom_components.ha_ragent.src.translation import RAGentTranslations
-
-_logger = BaseLogger(__name__)
 
 def _is_retryable_error(error: Exception) -> bool:
     if isinstance(error, (aiohttp.ClientSSLError, aiohttp.ServerFingerprintMismatch)):

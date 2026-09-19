@@ -1,5 +1,6 @@
 from functools import partial
 import json
+import logging
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from openai import AsyncOpenAI, BadRequestError
 from typing import Any, AsyncGenerator, Dict, List
@@ -126,20 +127,20 @@ class OpenAiLlmBackend(ALlmBaseBackend):
                 is_tool_model=None
             )
         except Exception as ex:
-            _logger.error(f"Error retrieving model info for {model_name}: {ex}", exc_info=True)
+            _logger.log_string(level=logging.ERROR, message=f"Error retrieving model info for {model_name}: {ex}", exc_info=True)
             raise
 
     async def async_preload_model(self, config_subentry: dict) -> None:
-        _logger.info("Preloading not supported for OpenAI Compatible LLM backend.")
+        _logger.log_string(level=logging.INFO, message="Preloading not supported for OpenAI Compatible LLM backend.")
 
     async def async_unload_model(self, config_subentry: dict) -> None:
-        _logger.info("Unloading not supported for OpenAI Compatible LLM backend.")
+        _logger.log_string(level=logging.INFO, message="Unloading not supported for OpenAI Compatible LLM backend.")
 
     async def async_close(self) -> None:
         if self._client is not None:
             await self._client.close()
             self._client = None
-        _logger.info("Closed OpenAI-compatible LLM client.")
+        _logger.log_string(level=logging.INFO, message="Closed OpenAI-compatible LLM client.")
 
     async def async_get_available_models(self) -> List[str]:
         client = await self._async_get_client()
@@ -168,7 +169,7 @@ class OpenAiLlmBackend(ALlmBaseBackend):
             request["tools"] = self.convert_tools_to_model_format(tools)
             request["tool_choice"] = "auto"
             required_tool_names, searched_tool_names = self.split_tool_names(tools)
-            _logger.debug(f"Added {len(tools)} tools to OpenAI-compatible request: required_tools={required_tool_names}, searched_tools={searched_tool_names}")
+            _logger.log_string(level=logging.DEBUG, message=f"Added {len(tools)} tools to OpenAI-compatible request: required_tools={required_tool_names}, searched_tools={searched_tool_names}")
 
         try:
             client = await self._async_get_client()
@@ -212,12 +213,12 @@ class OpenAiLlmBackend(ALlmBaseBackend):
                         raise
 
                     max_chars //= 2
-                    _logger.warning(f"LLM input is too large. Retrying with messages limited to {max_chars} characters.")
+                    _logger.log_string(level=logging.WARNING, message=f"LLM input is too large. Retrying with messages limited to {max_chars} characters.")
 
             # Tool-call arguments are often split across many SSE chunks.
             # Emit only after the complete JSON document has been assembled.
             if pending_tool_calls:
-                _logger.debug(f"LLM tool calls received from OpenAI-compatible backend: {list(pending_tool_calls.values())}")
+                _logger.log_string(level=logging.DEBUG, message=f"LLM tool calls received from OpenAI-compatible backend: {list(pending_tool_calls.values())}")
 
             for pending in pending_tool_calls.values():
                 if not pending["name"]:
