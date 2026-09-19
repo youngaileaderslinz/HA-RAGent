@@ -1,7 +1,5 @@
-import asyncio
-import time
 from typing import Any, Dict, List
-import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from pymongo import AsyncMongoClient
 from pymongo.errors import OperationFailure
 from pymongo.asynchronous.database import AsyncDatabase
@@ -27,7 +25,7 @@ from custom_components.ha_ragent.src.const import (
     CONF_VECTOR_DB_PASSWORD
 )
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 class MongoDbBackend(ABaseDbBackend):
     def __init__(self, hass: HomeAssistant, client_options: dict[str, Any]):

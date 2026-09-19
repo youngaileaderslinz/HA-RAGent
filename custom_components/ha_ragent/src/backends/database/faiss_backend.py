@@ -1,4 +1,4 @@
-import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 import os
 import asyncio
 from functools import wraps
@@ -25,7 +25,7 @@ from custom_components.ha_ragent.src.const import (
     CONF_VECTOR_DB_NAME
 )
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 
 def serialized_storage(method):

@@ -1,7 +1,7 @@
 import asyncio
 from contextlib import aclosing
 import json
-import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from functools import wraps
 import aiohttp
 from typing import Any, Dict, List, AsyncGenerator
@@ -28,7 +28,7 @@ from custom_components.ha_ragent.src.models.model_info import ModelInfo
 from custom_components.ha_ragent.src.models.chat.chat_message import ChatMessage
 from custom_components.ha_ragent.src.const import RAGENT_CHAT_TRUNCATE_MAX_CHARS, RAGENT_CHAT_TRUNCATE_RETRIES
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 def _is_retryable_error(error: Exception) -> bool:
     if isinstance(error, (aiohttp.ClientSSLError, aiohttp.ServerFingerprintMismatch)):

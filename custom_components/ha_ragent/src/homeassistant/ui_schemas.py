@@ -1,4 +1,4 @@
-import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any
 import voluptuous as vol
 from uuid import uuid4
@@ -43,7 +43,6 @@ from custom_components.ha_ragent.src.const import (
     CONF_MAX_TOKENS,
     CONF_MAX_TOOL_CALL_ITERATIONS,
     CONF_PROMPT,
-    CONF_RETRIEVAL_METHOD,
     RETRIEVAL_METHOD_OPTIONS,
     CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
     CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
@@ -84,7 +83,7 @@ from custom_components.ha_ragent.src.utils import get_value, get_setting_value
 
 from custom_components.ha_ragent.src.homeassistant.ragent import RAGent
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 
 def _backend_connection_defaults(backend_type: str, *, ollama_port: int, openai_port: int) -> tuple[int, bool]:

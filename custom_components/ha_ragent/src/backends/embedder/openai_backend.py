@@ -1,5 +1,5 @@
 from functools import partial
-import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any, Dict, List
 from openai import AsyncOpenAI, InternalServerError
 
@@ -24,7 +24,7 @@ from custom_components.ha_ragent.src.models.base.embedding_record import Embeddi
 from custom_components.ha_ragent.src.backends.embedder.base_backend import ABaseEmbedder
 from custom_components.ha_ragent.src.translation import RAGentTranslations
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
     
 class OpenAiEmbedder(ABaseEmbedder):
     def __init__(self, hass: HomeAssistant, client_options: dict[str, Any]):

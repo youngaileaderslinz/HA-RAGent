@@ -1,7 +1,8 @@
 import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import area_registry, device_registry, entity_registry, floor_registry, label_registry, llm
+from homeassistant.helpers import area_registry, device_registry, entity_registry, floor_registry, label_registry
 from homeassistant.helpers import service as service_helper
 from homeassistant.components.homeassistant.exposed_entities import async_should_expose
 
@@ -9,7 +10,7 @@ from custom_components.ha_ragent.src.models.embedding.device import Device
 from custom_components.ha_ragent.src.homeassistant.ragent_config_entry import RAGentConfigEntry
 from custom_components.ha_ragent.src.const import HOME_ASSISTANT_SCRIPT_DOMAIN as SCRIPT_DOMAIN
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 class DeviceExtractor:
     def __init__(self, hass: HomeAssistant, entry: RAGentConfigEntry):

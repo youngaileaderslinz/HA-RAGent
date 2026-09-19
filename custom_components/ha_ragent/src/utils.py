@@ -1,5 +1,4 @@
 import socket
-import logging
 from typing import Any
 
 from custom_components.ha_ragent.src.backends.database.faiss_backend import FaissDbBackend
@@ -23,8 +22,6 @@ from custom_components.ha_ragent.src.const import (
     CONF_SELECTED_LANGUAGE,
     DEFAULT_SETTINGS
 )
-
-_logger = logging.getLogger(__name__)
 
 def get_value(value: object, default: object) -> object:
     """Returns the value when not null, otherwise the default parameter."""

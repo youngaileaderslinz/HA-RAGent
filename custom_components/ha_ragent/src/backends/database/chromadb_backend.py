@@ -1,5 +1,4 @@
-import logging
-import asyncio
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -23,7 +22,7 @@ from custom_components.ha_ragent.src.const import (
     CONF_VECTOR_DB_SSL,
 )
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 class ChromaDbBackend(ABaseDbBackend):
     def __init__(self, hass: HomeAssistant, client_options: dict[str, Any]):

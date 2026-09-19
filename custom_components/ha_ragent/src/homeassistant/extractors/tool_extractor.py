@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from collections.abc import Iterable
 from typing import Any, List, Tuple
 
@@ -33,7 +34,7 @@ from custom_components.ha_ragent.src.models.embedding.schema_constraints import 
 from custom_components.ha_ragent.src.homeassistant.ragent_api import resolve_llm_api_id
 from custom_components.ha_ragent.src.homeassistant.ragent_config_entry import RAGentConfigEntry
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 class ToolExtractor:
     _timer_handlers: dict[int, tuple[Any, int]] = {}

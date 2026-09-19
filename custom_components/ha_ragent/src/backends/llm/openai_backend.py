@@ -1,6 +1,6 @@
 from functools import partial
 import json
-import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from openai import AsyncOpenAI, BadRequestError
 from typing import Any, AsyncGenerator, Dict, List
 
@@ -24,7 +24,7 @@ from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.model_info import ModelInfo
 from custom_components.ha_ragent.src.models.chat.chat_message import ChatMessage
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 class OpenAiLlmBackend(ALlmBaseBackend):
     def __init__(self, hass: HomeAssistant, client_options: dict[str, Any]):

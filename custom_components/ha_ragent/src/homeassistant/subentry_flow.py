@@ -1,10 +1,8 @@
-import logging
-import os
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any
 import voluptuous as vol
 from types import SimpleNamespace
 
-from homeassistant.const import CONF_LLM_HASS_API
 from homeassistant.config_entries import (
     ConfigEntryState,
     ConfigSubentryFlow,
@@ -45,7 +43,7 @@ from custom_components.ha_ragent.src.homeassistant.ui_schemas import (
 from custom_components.ha_ragent.src.homeassistant.ragent import RAGent
 from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 class RagentSubentryFlowHandler(ConfigSubentryFlow):
     def __init__(self) -> None:
