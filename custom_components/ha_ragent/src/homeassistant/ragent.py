@@ -116,7 +116,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         self,
         history_manager: HistoryManager,
         chat_log: conversation.ChatLog,
-        retrieval_query: str = "",
         query_embedding: QueryEmbedding | None = None,
     ) -> ContinuityContext:
         """Retain bounded recent structured history with semantic signals."""
@@ -514,12 +513,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
 
                 continuity: ContinuityContext | None = None
                 if not is_scheduled_request:
-                    continuity = await self._async_build_continuity_context(
-                        history_manager,
-                        chat_log,
-                        retrieval_query,
-                        query_embedding
-                    )
+                    continuity = await self._async_build_continuity_context(history_manager, chat_log, query_embedding)
 
                 _logger.log_payload(
                     event="conversation.retrieval_request",
