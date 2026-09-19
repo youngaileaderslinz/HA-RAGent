@@ -197,6 +197,21 @@ class MessageHelper:
         )
 
     @staticmethod
+    def create_tool_result_message(
+        agent_id: str | None,
+        tool_call_id: str | None,
+        tool_name: str,
+        result: object,
+    ) -> conversation.ToolResultContent:
+        """Create a tool-result message for a successful tool call."""
+        return conversation.ToolResultContent(
+            agent_id=agent_id,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            tool_result=MessageHelper.compact_tool_result_value(tool_name, result),
+        )
+
+    @staticmethod
     def create_tool_failure_message(
         agent_id: str | None,
         tool_call_id: str | None,

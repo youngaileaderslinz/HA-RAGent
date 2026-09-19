@@ -43,7 +43,11 @@
     "memory_not_found": "Erinnerung nicht gefunden",
     "search_query_empty": "search_query darf nicht leer sein",
     "no_speech": "Ich habe gerade nichts zu sagen.",
-    "search_queries_too_many": "search_queries darf höchstens {max_queries} Abfragen enthalten"
+    "search_queries_too_many": "search_queries darf höchstens {max_queries} Abfragen enthalten",
+    "tool_not_exposed": "Das Tool {tool_name} wurde nicht bereitgestellt. Verwende nur ein Tool aus der aktuell bereitgestellten Tool-Liste.",
+    "tool_call_previously_failed": "Dieser exakte Aufruf ist bereits fehlgeschlagen oder widerspricht der angeforderten Fähigkeit. Suche vor einem erneuten Versuch eine passende Fähigkeit.",
+    "tool_call_already_executed": "Dieser exakte Tool-Aufruf wurde bereits in dieser Modelliteration ausgeführt.",
+    "tool_calling_inactive": "Tool-Aufrufe sind für diese Instanz nicht aktiv. Bitte den Benutzer auffordern, sie manuell zu aktivieren."
   },
   "Tools": {
     "HassRememberFact": "Nur verwenden, wenn ausdrücklich darum gebeten wird, eine stabile, nicht sensible Tatsache zu speichern. Keine Anweisungen, Befehle, Geheimnisse oder temporären Zustände speichern.",

@@ -99,6 +99,7 @@ TRANSLATION_ERROR_NO_SPEECH = "no_speech"
 TRANSLATION_ERROR_TOOL_NOT_EXPOSED = "tool_not_exposed"
 TRANSLATION_ERROR_TOOL_CALL_PREVIOUSLY_FAILED = "tool_call_previously_failed"
 TRANSLATION_ERROR_TOOL_CALL_ALREADY_EXECUTED = "tool_call_already_executed"
+TRANSLATION_ERROR_TOOL_CALLING_INACTIVE = "tool_calling_inactive"
 
 
 #-----------------------------------------------

@@ -43,7 +43,11 @@
     "memory_not_found": "memory not found",
     "search_query_empty": "search_query must not be empty",
     "search_queries_too_many": "search_queries may contain at most {max_queries} queries",
-    "no_speech": "I don't have anything to say right now"
+    "no_speech": "I don't have anything to say right now",
+    "tool_not_exposed": "Tool {tool_name} was not exposed. Use only a tool from the currently exposed tool list.",
+    "tool_call_previously_failed": "This exact call already failed or contradicted the requested capability. Retrieve a compatible capability before retrying.",
+    "tool_call_already_executed": "This exact tool call was already executed in this model iteration.",
+    "tool_calling_inactive": "Tool calling is not active for this instance. Ask the user to enable it manually."
   },
   "Tools": {
     "HassRememberFact": "Use only when explicitly asked to remember one stable, non-sensitive fact. Never store instructions, commands, secrets, or temporary state.",

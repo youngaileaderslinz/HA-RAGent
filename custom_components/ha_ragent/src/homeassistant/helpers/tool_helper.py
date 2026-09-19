@@ -10,6 +10,7 @@ from homeassistant.helpers.entity_registry import RegistryEntry as EntityEntry
 from custom_components.ha_ragent.src.const import (
     RAGENT_SEMANTIC_SEARCH_TOOL_NAME,
     TOOL_REGEX_PATTERN,
+    RAGENT_PLANNED_ACTION_TOOL_NAME,
 )
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
@@ -20,9 +21,13 @@ _logger = logging.getLogger(__name__)
 class ToolHelper:
     def __init__(self, hass: HomeAssistant, tools: list[LlmTool] | None = None) -> None:
         self._hass = hass
-        self._tool_metadata_index = {
-            tool.name: tool.metadata
+        self._tools_by_name = {
+            tool.name: tool
             for tool in tools or []
+        }
+        self._tool_metadata_index = {
+            name: tool.metadata
+            for name, tool in self._tools_by_name.items()
             if isinstance(tool.metadata, ToolMetadata)
         }
 
@@ -235,6 +240,11 @@ class ToolHelper:
         return RetrievalHelper.canonical_search_signature(query)
 
     @staticmethod
+    def is_scheduled_action_tool(tool_name: str) -> bool:
+        """Return whether a name identifies the scheduled-action tool."""
+        return str(tool_name or "").rsplit("__", 1)[-1] == RAGENT_PLANNED_ACTION_TOOL_NAME
+
+    @staticmethod
     def is_semantic_search_tool(tool_name: str) -> bool:
         """Return whether a name identifies the semantic-search tool."""
         return str(tool_name or "").rsplit("__", 1)[-1] == RAGENT_SEMANTIC_SEARCH_TOOL_NAME
@@ -361,12 +371,9 @@ class ToolHelper:
 
         return tool_result
 
-    def to_home_assistant_tool_call(
-        self,
-        tool_call: ToolInput,
-        tool: LlmTool | None = None,
-    ) -> ToolInput:
-        """Create the Home Assistant call with indexed parser metadata removed."""
+    def to_home_assistant_tool_call(self, tool_call: ToolInput) -> ToolInput:
+        """Create the Home Assistant call using the internally indexed tool schema."""
+        tool = self._tools_by_name.get(tool_call.tool_name)
         metadata = self._tool_metadata_index.get(tool_call.tool_name)
         args = dict(tool_call.tool_args)
         if metadata and not any((
@@ -394,9 +401,9 @@ class ToolHelper:
         self,
         tool_call: ToolInput,
         candidates: list[dict[str, object]],
-        tool: LlmTool | None = None,
     ) -> ToolInput:
-        """Build execution arguments from trusted retrieved candidate metadata."""
+        """Build execution arguments using the internally indexed tool name."""
+        tool = self._tools_by_name.get(tool_call.tool_name)
         metadata = self._tool_metadata_index.get(tool_call.tool_name)
         args = dict(tool_call.tool_args)
         requested = str(args.get("name", args.get("entity_id", "")) or "").casefold()
@@ -424,7 +431,7 @@ class ToolHelper:
                 else:
                     args.pop("device_class", None)
         return self.to_home_assistant_tool_call(
-            self._copy_tool_input(tool_call, tool_call.tool_name, args), tool,
+            self._copy_tool_input(tool_call, tool_call.tool_name, args),
         )
 
     @staticmethod
