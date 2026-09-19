@@ -296,27 +296,6 @@ class ToolHelper:
             return []
         return [candidate for candidate in candidates if isinstance(candidate, dict)]
 
-    @staticmethod
-    def successful_target_names(tool_call: ToolInput, result: object) -> list[str]:
-        """Return target names confirmed by a successful tool result."""
-        success = result.get("success") if isinstance(result, dict) else None
-        if isinstance(success, str):
-            return [success]
-        if isinstance(success, (list, tuple, set)):
-            return [str(value) for value in success if value]
-        nested_result = result.get("result") if isinstance(result, dict) else None
-        nested_success = nested_result.get("success") if isinstance(nested_result, dict) else None
-        if isinstance(nested_success, str):
-            return [nested_success]
-        if isinstance(nested_success, (list, tuple, set)):
-            return [str(value) for value in nested_success if value]
-
-        names = tool_call.tool_args.get("name") if isinstance(tool_call.tool_args, dict) else None
-        if isinstance(names, str):
-            return [names]
-        if isinstance(names, (list, tuple, set)):
-            return [str(value) for value in names if value]
-        return []
 
     @staticmethod
     def failed_target_candidates(

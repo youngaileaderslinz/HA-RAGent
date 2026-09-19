@@ -126,8 +126,8 @@ Use the `Add Integration` button in the bottom right to add a new integration ca
     - Defaults to `2` / `6`. Confident retrieval uses the minimum; uncertain or ambiguous retrieval expands up to the maximum.
 - `Minimum Number of Tools` / `Maximum Number of Tools`
     - Defaults to `2` / `6`. Confident retrieval uses the minimum; uncertain retrieval expands up to the maximum (required HA-RAGent tools do not count toward either limit).
-- `Number of Long-Term Memories`
-    - Controls how many semantically relevant, explicitly stored memories are added to each prompt. Set it to `0` to disable recall without deleting memories.
+- `Minimum Number of Long-Term Memories` / `Maximum Number of Long-Term Memories`
+    - Defaults to `0` / `4`. Vector-search confidence determines how many relevant memories are added to each prompt within this range. Set the maximum to `0` to disable recall without deleting memories.
 - `Maximum Memory Entries`
     - Controls how many long-term memories are retained for this RAGent.
 - `Context Length` (Ollama only)

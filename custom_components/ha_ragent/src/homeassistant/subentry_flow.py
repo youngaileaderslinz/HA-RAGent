@@ -27,7 +27,8 @@ from custom_components.ha_ragent.src.const import (
     CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
     DEFAULT_SETTINGS,
     CONF_EXCLUDED_TOOLS,
-    CONF_NUM_MEMORIES_TO_EXTRACT,
+    CONF_MIN_MEMORIES_TO_EXTRACT,
+    CONF_MAX_MEMORIES_TO_EXTRACT,
     CONF_MAX_MEMORY_ENTRIES
 )
 
@@ -138,7 +139,8 @@ class RagentSubentryFlowHandler(ConfigSubentryFlow):
                 CONF_MAX_TOOL_CALL_ITERATIONS,
                 CONF_CONTEXT_LENGTH,
                 CONF_MAX_TOKENS,
-                CONF_NUM_MEMORIES_TO_EXTRACT,
+                CONF_MIN_MEMORIES_TO_EXTRACT,
+                CONF_MAX_MEMORIES_TO_EXTRACT,
                 CONF_MAX_MEMORY_ENTRIES,
              ):
                 if key in user_input:

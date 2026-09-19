@@ -47,7 +47,8 @@ from custom_components.ha_ragent.src.const import (
     CONF_MAX_DEVICES_TO_EXTRACT,
     CONF_MIN_TOOLS_TO_EXTRACT,
     CONF_MAX_TOOLS_TO_EXTRACT,
-    CONF_NUM_MEMORIES_TO_EXTRACT,
+    CONF_MIN_MEMORIES_TO_EXTRACT,
+    CONF_MAX_MEMORIES_TO_EXTRACT,
     CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
     CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
     CONF_PROMPT,
@@ -488,14 +489,14 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 history_manager = HistoryManager(runtime_options=self.runtime_options)
 
                 retrieval_method = get_setting_value(CONF_RETRIEVAL_METHOD, self.runtime_options)
-                memory_limit = get_setting_value(CONF_NUM_MEMORIES_TO_EXTRACT, self.runtime_options)
-                requires_embedding = retrieval_method != RETRIEVAL_METHOD_LEXICAL or memory_limit > 0
-
+                min_memories = get_setting_value(CONF_MIN_MEMORIES_TO_EXTRACT, self.runtime_options)
+                max_memories = get_setting_value(CONF_MAX_MEMORIES_TO_EXTRACT, self.runtime_options)
                 min_devices = get_setting_value(CONF_MIN_DEVICES_TO_EXTRACT, self.runtime_options)
                 max_devices = get_setting_value(CONF_MAX_DEVICES_TO_EXTRACT, self.runtime_options)
                 min_tools = get_setting_value(CONF_MIN_TOOLS_TO_EXTRACT, self.runtime_options)
                 max_tools = get_setting_value(CONF_MAX_TOOLS_TO_EXTRACT, self.runtime_options)
 
+                requires_embedding = retrieval_method != RETRIEVAL_METHOD_LEXICAL or max_memories > 0
                 current_area, current_floor = self._get_current_device_location(llm_context, scheduled_context)
                 current_area_name = current_area.name if current_area else ""
                 current_floor_name = current_floor.name if current_floor else ""
@@ -529,11 +530,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                         get_setting_value(CONF_MIN_TOOLS_TO_EXTRACT, self.runtime_options),
                         get_setting_value(CONF_MAX_TOOLS_TO_EXTRACT, self.runtime_options)
                     ),
-                    configured_memory_range=(
-                        get_setting_value(CONF_NUM_MEMORIES_TO_EXTRACT, self.runtime_options),
-                        get_setting_value(CONF_NUM_MEMORIES_TO_EXTRACT, self.runtime_options)
-                    ),
-                    memory_limit=memory_limit, 
+                    configured_memory_range=(min_memories, max_memories),
                     current_area_name=current_area_name, 
                     current_floor_name=current_floor_name,
                     is_scheduled_request=is_scheduled_request, 
@@ -543,9 +540,11 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 async with asyncio.TaskGroup() as retrieval_tasks:
                     memory_task = retrieval_tasks.create_task(
                         retriever.async_retrieve_memories(
-                            query_embedding, limit=memory_limit,
+                            query_embedding,
+                            minimum=min_memories,
+                            maximum=max_memories,
                         )
-                    ) if memory_limit > 0 else None
+                    ) if max_memories > 0 else None
 
                     device_task = retrieval_tasks.create_task(
                             retriever.async_retrieve_devices(
@@ -566,7 +565,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                             retrieval_query,
                             minimum=min_tools,
                             maximum=max_tools,
-                            limit=RetrievalHelper.adaptive_candidate_limit(max(min_tools, max_tools)),
                             retrieval_method=retrieval_method,
                             llm_api=llm_api,
                         )

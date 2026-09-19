@@ -213,7 +213,8 @@ CONF_MIN_DEVICES_TO_EXTRACT = "rag_min_devices_to_extract"
 CONF_MAX_DEVICES_TO_EXTRACT = "rag_max_devices_to_extract"
 CONF_MIN_TOOLS_TO_EXTRACT = "rag_min_tools_to_extract"
 CONF_MAX_TOOLS_TO_EXTRACT = "rag_max_tools_to_extract"
-CONF_NUM_MEMORIES_TO_EXTRACT = "rag_num_memories_to_extract"
+CONF_MIN_MEMORIES_TO_EXTRACT = "rag_min_memories_to_extract"
+CONF_MAX_MEMORIES_TO_EXTRACT = "rag_max_memories_to_extract"
 CONF_MAX_MEMORY_ENTRIES = "rag_max_memory_entries"
 CONF_EXCLUDED_TOOLS = "rag_excluded_tools"
 CONF_CONTEXT_LENGTH = "rag_context_length"
@@ -276,7 +277,8 @@ DEFAULT_SETTINGS = {
     CONF_MAX_TOOL_CALL_ITERATIONS: 4,
     CONF_MIN_DEVICES_TO_EXTRACT: 2,
     CONF_MAX_DEVICES_TO_EXTRACT: 5,
-    CONF_NUM_MEMORIES_TO_EXTRACT: 2,
+    CONF_MIN_MEMORIES_TO_EXTRACT: 0,
+    CONF_MAX_MEMORIES_TO_EXTRACT: 4,
     CONF_MIN_TOOLS_TO_EXTRACT: 2,
     CONF_MAX_TOOLS_TO_EXTRACT: 5,
     CONF_PROMPT: DEFAULT_PROMPT,

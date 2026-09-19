@@ -69,9 +69,6 @@ class MongoDbBackend(ABaseDbBackend):
         result = await database.command(command)
         return result.get("ok") == 1.0
 
-    async def _async_database_exists(self, connection: AsyncMongoClient) -> bool:
-        db_names = await connection.list_database_names()
-        return self.db_name in db_names
     
     async def _async_collection_exists(self, connection: AsyncMongoClient, collection_name: str) -> bool:
         database = self._get_database(connection)

@@ -157,15 +157,3 @@ class MemoryManager:
                 except Exception as err:
                     _logger.warning("Failed to update memory retrieval counts: %s", err)
         return [memory for memory in memories if isinstance(memory, Memory) and memory.id and memory.content]
-
-    async def async_list(self) -> list[Memory]:
-        entry, config = self._get_entry_and_config()
-        if entry is None:
-            return []
-        async with self._get_lock():
-            memories = await entry.vector_db_backend.async_list_objects(
-                object_type=MemoryEmbedding,
-                config_subentry=config,
-                collection_name=self.collection_name,
-            )
-        return [memory for memory in memories if isinstance(memory, Memory) and memory.id and memory.content]
