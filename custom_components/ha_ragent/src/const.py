@@ -96,6 +96,9 @@ TRANSLATION_ERROR_MEMORY_NOT_FOUND = "memory_not_found"
 TRANSLATION_ERROR_SEARCH_QUERY_EMPTY = "search_query_empty"
 TRANSLATION_ERROR_SEARCH_QUERIES_TOO_MANY = "search_queries_too_many"
 TRANSLATION_ERROR_NO_SPEECH = "no_speech"
+TRANSLATION_ERROR_TOOL_NOT_EXPOSED = "tool_not_exposed"
+TRANSLATION_ERROR_TOOL_CALL_PREVIOUSLY_FAILED = "tool_call_previously_failed"
+TRANSLATION_ERROR_TOOL_CALL_ALREADY_EXECUTED = "tool_call_already_executed"
 
 
 #-----------------------------------------------

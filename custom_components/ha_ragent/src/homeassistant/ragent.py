@@ -56,6 +56,7 @@ from custom_components.ha_ragent.src.const import (
     CONF_MAX_TOOL_CALL_ITERATIONS,
     DOMAIN,
     CONF_ALLOW_QUESTIONS,
+    RAGENT_PREFIXED_TOOL_NAMES_BY_NAME,
     RAGENT_SCHEDULED_REQUEST_PREFIX,
     RAGENT_PREFIXED_SCHEDULED_REQUEST_PROHIBITED_TOOL_NAMES,
     RETRIEVAL_METHOD_LEXICAL,
@@ -74,6 +75,9 @@ from custom_components.ha_ragent.src.const import (
     TRANSLATION_ERROR_NO_SPEECH,
     TRANSLATION_ERROR_TEMPLATE,
     TRANSLATION_ERROR_UNEXPECTED,
+    TRANSLATION_ERROR_TOOL_NOT_EXPOSED,
+    TRANSLATION_ERROR_TOOL_CALL_PREVIOUSLY_FAILED,
+    TRANSLATION_ERROR_TOOL_CALL_ALREADY_EXECUTED,
 )
 
 from custom_components.ha_ragent.src.utils import get_setting_value
@@ -184,7 +188,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
 
             return rendered_prompt
         except Exception as err:
-            _logger.error(f"Error rendering prompt: {err}", exc_info=True)
+            _logger.log_string(level=logging.ERROR, msg=f"Error rendering prompt: {err}")
             return None
 
     @staticmethod
@@ -243,7 +247,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             for device in devices
         ]
 
-
     async def _async_prompt_model(
         self,
         llm_api: llm.APIInstance,
@@ -255,6 +258,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         request_query: str
     ) -> ConversationResult:
         """Process a prompt through the RAGent."""
+        timing_logger = TimingLogger(__name__ + ".prompt_model")
         max_tool_call_iterations = get_setting_value(CONF_MAX_TOOL_CALL_ITERATIONS, self.runtime_options)
 
         tool_helper = ToolHelper(self.hass, tool_list)
@@ -269,7 +273,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         tools_by_name = {tool.name: tool for tool in tool_list}
 
         for idx in range(max_tool_call_iterations):
-            iteration_start = time.perf_counter()
             formatted_messages.extend(
                 MessageHelper.message_to_chat_messages(
                     history_manager.message_history[formatted_index:]
@@ -277,28 +280,16 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             )
             formatted_index = len(history_manager.message_history)
 
-            if _logger.isEnabledFor(logging.DEBUG):
-                message_chars = sum(
-                    len(json.dumps(message, ensure_ascii=False, default=str))
-                    for message in formatted_messages
-                )
-                tool_schema_chars = sum(
-                    len(json.dumps(tool.parameters, ensure_ascii=False, default=str))
-                    + len(tool.name) + len(tool.description or "")
-                    for tool in tool_list
-                )
-                _logger.debug(f"RAGent prompt size (iteration {idx + 1}): messages={message_chars} chars, tools={tool_schema_chars} chars, tool_count={len(tool_list)}")
-
             tool_calls_in_iteration = []
             executed_signatures_in_iteration: set[str] = set()
             try:
-                _logger.debug(f"Sending prompt to LLM (Iteration {idx + 1}/{max_tool_call_iterations}).")
                 _logger.log_payload("conversation.llm_request",
-                    level="debug",
+                    level=logging.DEBUG,
                     iteration=idx + 1,
                     messages=formatted_messages,
                     tools=[tool.to_tool_dict() for tool in tool_list],
                 )
+
                 content_chunks = []
                 async for chunk in self.entry.llm_backend.async_send_chat_request(
                     dict(self.subentry.data),
@@ -306,301 +297,248 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     tool_list,
                 ):
                     content_chunks.append(chunk)
-                assistant_content = "".join(content_chunks)
-                _logger.debug(f"RAGent timing: LLM iteration {idx + 1}: {time.perf_counter() - iteration_start:.3f}s")
 
-                helper_start = time.perf_counter()
+                assistant_content = "".join(content_chunks)
+                timing_logger.log_timed_string(logging.DEBUG, f"LLM iteration {idx + 1} completed")
+
                 tool_calls_in_iteration = tool_helper.parse_tool_calls(assistant_content)
                 exposed_tool_names = {tool.name for tool in tool_list}
                 tool_calls_in_iteration = [
-                    tool_helper.normalize_exposed_tool_call(
-                        call, exposed_tool_names,
-                    ) or call
+                    tool_helper.normalize_exposed_tool_call(call, exposed_tool_names) or call
                     for call in tool_calls_in_iteration
                 ]
+                timing_logger.log_timed_string(logging.DEBUG, "Parsed tool calls from LLM response")
                 _logger.log_payload("conversation.llm_response",
                     iteration=idx + 1, raw_response=assistant_content,
                     parsed_tool_calls=tool_calls_in_iteration,
                     exposed_tool_names=sorted(exposed_tool_names),
                 )
-                _logger.debug(f"RAGent timing: parse_tool_calls: {time.perf_counter() - helper_start:.3f}s")
 
-                helper_start = time.perf_counter()
-                message_content = MessageHelper.clean_assistant_content(
-                    assistant_content,
-                    bool(tool_calls_in_iteration),
-                )
-                _logger.debug(f"RAGent timing: clean_assistant_content: {time.perf_counter() - helper_start:.3f}s")
+                message_content = MessageHelper.clean_assistant_content(assistant_content, bool(tool_calls_in_iteration))
+                timing_logger.log_timed_string(logging.DEBUG, "Cleaned assistant content from LLM response")
 
-                helper_start = time.perf_counter()
                 history_tool_calls = [tool_helper.to_history_tool_call(call) for call in tool_calls_in_iteration]
-                _logger.debug(f"RAGent timing: to_history_tool_call: {time.perf_counter() - helper_start:.3f}s")
+                timing_logger.log_timed_string(logging.DEBUG, "Converted tool calls to history format")
 
-                message = conversation.AssistantContent(
-                    agent_id=user_input.agent_id,
-                    content=message_content,
-                    tool_calls=history_tool_calls
-                )
+                message = conversation.AssistantContent(agent_id=user_input.agent_id, content=message_content, tool_calls=history_tool_calls)
                 history_manager.append_message(message)
                 
-                if tool_calls_in_iteration:
-                    for tool_call in tool_calls_in_iteration:
-                        tool_name = tool_call.tool_name
-                        call_signature = tool_helper.tool_call_signature(tool_call)
+                for tool_call in tool_calls_in_iteration:
+                    tool_name = tool_call.tool_name
+                    call_signature = tool_helper.tool_call_signature(tool_call)
+                    timing_logger.log_timed_string(logging.DEBUG, f"Processing tool call: {call_signature}")
 
-                        if tool_name not in exposed_tool_names:
-                            error = ValueError(
-                                f"Tool {tool_name} was not exposed. Use only a tool from the native tool list."
-                            )
-                            history_manager.append_message(
-                                MessageHelper.create_tool_failure_message(
-                                    agent_id=user_input.agent_id,
-                                    tool_call_id=tool_call.id,
-                                    tool_name=tool_name,
-                                    error=error,
-                                )
-                            )
-                            failed_signatures.add(call_signature)
-                            continue
-
-                        if call_signature in failed_signatures:
-                            history_manager.append_message(
-                                MessageHelper.create_tool_failure_message(
-                                    agent_id=user_input.agent_id,
-                                    tool_call_id=tool_call.id,
-                                    tool_name=tool_name,
-                                    error=ValueError(
-                                        "This exact call already failed or contradicted the requested capability. "
-                                        "Rediscover a compatible capability before retrying."
-                                    ),
-                                )
-                            )
-                            continue
-
-                        if call_signature in executed_signatures_in_iteration:
-                            history_manager.append_message(
-                                MessageHelper.create_tool_failure_message(
-                                    agent_id=user_input.agent_id,
-                                    tool_call_id=tool_call.id,
-                                    tool_name=tool_name,
-                                    error=ValueError(
-                                        "This exact tool call was already executed in this model iteration."
-                                    ),
-                                )
-                            )
-                            _logger.debug(
-                                "Skipping duplicate tool call in iteration %d: %s",
-                                idx + 1, call_signature,
-                            )
-                            continue
-                        executed_signatures_in_iteration.add(call_signature)
-
-                        requested_capabilities = (
-                            llm_api.requested_capabilities()
-                            if isinstance(llm_api, RAGentAugmentedAPIInstance)
-                            else []
-                        )
-                        selected_tool = tools_by_name.get(tool_name)
-                        try:
-                            if llm_api:
-                                execution_call = tool_helper.sanitize_tool_call(
-                                    tool_call, active_candidate_context, selected_tool,
-                                )
-                                # Keep parsing permissive. The native tool and
-                                # Home Assistant service own schema validation;
-                                # local pre-validation can reject valid custom
-                                # coercions or templated integration arguments.
-                                if (isinstance(llm_api, RAGentAugmentedAPIInstance)
-                                    and tool_name.rsplit("__", 1)[-1] == RAGENT_PLANNED_ACTION_TOOL_NAME):
-                                    llm_api.set_scheduling_context(
-                                        request_query, formatted_messages, active_candidate_context,
-                                    )
-                                tool_start = time.perf_counter()
-                                tool_result = await llm_api.async_call_tool(execution_call)
-                                # Optional constraints can make HA reject an
-                                # otherwise valid target. Retry locally with
-                                # those constraints removed; do not spend an
-                                # additional model iteration.
-                                if (
-                                    not MessageHelper.tool_result_succeeded(
-                                        tool_helper.parse_tool_results(tool_result)
-                                    )
-                                    and any(key in execution_call.tool_args for key in ("device_class", "area", "floor"))
-                                ):
-                                    retry_args = dict(execution_call.tool_args)
-                                    for key in ("device_class", "area", "floor"):
-                                        retry_args.pop(key, None)
-                                    tool_result = await llm_api.async_call_tool(
-                                        tool_helper._copy_tool_input(execution_call, execution_call.tool_name, retry_args)
-                                )
-                                parsed_tool_result = tool_helper.parse_tool_results(tool_result)
-                                tool_succeeded = MessageHelper.tool_result_succeeded(parsed_tool_result)
-                                if tool_succeeded and tool_helper.is_semantic_search_tool(tool_name):
-                                    discovered_candidates = tool_helper.candidate_devices(parsed_tool_result)
-                                    if discovered_candidates:
-                                        active_candidate_context = tool_helper.merge_candidates(active_candidate_context, discovered_candidates)
-                                        if isinstance(llm_api, RAGentAugmentedAPIInstance):
-                                            llm_api.refresh_search_candidates(active_candidate_context)
-                                elif tool_succeeded:
-                                    if isinstance(llm_api, RAGentAugmentedAPIInstance):
-                                        llm_api.refresh_search_candidates(active_candidate_context)
-                                    tool_calls_overall.append((tool_call, parsed_tool_result))
-                                if (
-                                    tool_succeeded
-                                    and not tool_helper.is_semantic_search_tool(tool_name)
-                                    and isinstance(llm_api, RAGentAugmentedAPIInstance)
-                                ):
-                                    for capability_index, capability in enumerate(
-                                        llm_api.requested_capabilities()
-                                    ):
-                                        if (
-                                            capability_index not in fulfilled_capability_indexes
-                                            and RetrievalHelper.tool_capability_compatibility(
-                                                selected_tool, capability,
-                                            ) >= 1.0
-                                        ):
-                                            fulfilled_capability_indexes.add(capability_index)
-                                stored_tool_result = MessageHelper.compact_tool_result_value(
-                                    tool_name,
-                                    parsed_tool_result,
-                                )
-                                targets = tool_helper.successful_target_names(tool_call, parsed_tool_result)
-                                completed_target_names = {
-                                    str(target).casefold() for target in targets
-                                }
-                                remaining_candidates = [
-                                    candidate
-                                    for candidate in active_candidate_context
-                                    if str(candidate.get("name", "")).casefold()
-                                    not in completed_target_names
-                                ]
-                                if tool_succeeded and not tool_helper.is_semantic_search_tool(tool_name):
-                                    active_candidate_context = remaining_candidates
-                                    if isinstance(llm_api, RAGentAugmentedAPIInstance):
-                                        llm_api.prune_search_candidates(completed_target_names)
-                                unresolved_targets = tool_helper.failed_target_candidates(
-                                    tool_call, parsed_tool_result, active_candidate_context,
-                                )
-                                fulfillment_status = "failed"
-                                retry_blocked = not tool_succeeded
-                                observed_states: dict[str, str | None] = {}
-                                device_classes: set[str] = set()
-                                if tool_succeeded:
-                                    has_declared_action = bool(
-                                        getattr(selected_tool, "canonical_action", "")
-                                    )
-                                    fulfillment_status = (
-                                        "unverified"
-                                        if requested_capabilities or has_declared_action
-                                        else "not_evaluated"
-                                    )
-                                    expected_states = set(
-                                        getattr(getattr(selected_tool, "metadata", None), "expected_states", ()) or ()
-                                    )
-                                    if targets:
-                                        current_states = [self.hass.states.get(target) for target in targets]
-                                        observed_states = {
-                                            target: state.state if state is not None else None
-                                            for target, state in zip(targets, current_states)
-                                        }
-                                        device_classes = {
-                                            str(state.attributes.get("device_class")).casefold()
-                                            for state in current_states
-                                            if state is not None and state.attributes.get("device_class")
-                                        }
-                                        target_names = {
-                                            str(target).casefold() for target in targets
-                                        }
-                                        device_classes.update(
-                                            str(candidate.get("device_class")).casefold()
-                                            for candidate in active_candidate_context
-                                            if str(candidate.get("name", "")).casefold() in target_names
-                                            and candidate.get("device_class")
-                                        )
-                                    if expected_states and targets:
-                                        if all(
-                                            state is not None and str(state.state).casefold() in expected_states
-                                            for state in current_states
-                                        ):
-                                            fulfillment_status = "verified"
-                                        else:
-                                            fulfillment_status = "state_mismatch"
-                                            retry_blocked = True
-                                execution_status = {
-                                    "requested_capabilities": requested_capabilities,
-                                    "executed_capability": getattr(selected_tool, "canonical_action", ""),
-                                    "target": targets,
-                                    "tool_succeeded": tool_succeeded,
-                                    "fulfillment_status": fulfillment_status,
-                                    "observed_states": observed_states,
-                                    "device_classes": sorted(device_classes),
-                                    "unresolved_targets": unresolved_targets,
-                                    "retry_blocked": retry_blocked,
-                                    "unresolved_capabilities": [
-                                        capability
-                                        for index, capability in enumerate(requested_capabilities)
-                                        if index not in fulfilled_capability_indexes
-                                    ],
-                                }
-                                if retry_blocked:
-                                    failed_signatures.add(call_signature)
-                                if isinstance(stored_tool_result, dict):
-                                    stored_tool_result["execution_status"] = execution_status
-                                else:
-                                    stored_tool_result = {
-                                        "result": stored_tool_result,
-                                        "execution_status": execution_status,
-                                    }
-                                tool_result_msg = conversation.ToolResultContent(
-                                    agent_id=user_input.agent_id,
-                                    tool_call_id=tool_call.id,
-                                    tool_name=tool_name,
-                                    tool_result=stored_tool_result,
-                                )
-                                history_manager.append_message(tool_result_msg)
-                                _logger.log_payload("conversation.tool_result",
-                                    iteration=idx + 1, requested_call=tool_call,
-                                    execution_call=execution_call,
-                                    raw_result=tool_result,
-                                    parsed_result=parsed_tool_result,
-                                    stored_result=stored_tool_result,
-                                    execution_status=execution_status,
-                                    active_candidate_context=active_candidate_context,
-                                    exposed_tool_names=sorted(exposed_tool_names),
-                                )
-                                _logger.debug(f"RAGent timing: tool {tool_name}: {time.perf_counter() - tool_start:.3f}s")
-                            else:
-                                _logger.warning(f"LLM API not available, skipping tool execution for tool: {tool_name}")
-                                tool_result_msg = conversation.ToolResultContent(
-                                    agent_id=user_input.agent_id,
-                                    tool_call_id=tool_call.id,
-                                    tool_name=tool_name,
-                                    tool_result="Tool calling is not active on this instance instruct the user to activate it manually."
-                                )
-                                history_manager.append_message(tool_result_msg)
-
-                        except Exception as tool_err:
-                            _logger.exception(
-                                "Tool %s failed; passing the failure back to the model",
-                                tool_name,
-                            )
-                            tool_result_msg = MessageHelper.create_tool_failure_message(
+                    if tool_name not in exposed_tool_names:
+                        history_manager.append_message(
+                            MessageHelper.create_tool_failure_message(
                                 agent_id=user_input.agent_id,
                                 tool_call_id=tool_call.id,
                                 tool_name=tool_name,
-                                error=tool_err,
+                                error=ValueError(self.entry.translations.error(TRANSLATION_ERROR_TOOL_NOT_EXPOSED, tool_name=tool_name))
+                            )
+                        )
+                        failed_signatures.add(call_signature)
+                        continue
+
+                    if call_signature in failed_signatures:
+                        history_manager.append_message(
+                            MessageHelper.create_tool_failure_message(
+                                agent_id=user_input.agent_id,
+                                tool_call_id=tool_call.id,
+                                tool_name=tool_name,
+                                error=ValueError(self.entry.translations.error(TRANSLATION_ERROR_TOOL_CALL_PREVIOUSLY_FAILED))
+                            )
+                        )
+                        continue
+
+                    if call_signature in executed_signatures_in_iteration:
+                        history_manager.append_message(
+                            MessageHelper.create_tool_failure_message(
+                                agent_id=user_input.agent_id,
+                                tool_call_id=tool_call.id,
+                                tool_name=tool_name,
+                                error=ValueError(self.entry.translations.error(TRANSLATION_ERROR_TOOL_CALL_ALREADY_EXECUTED))
+                            )
+                        )
+                        continue
+
+                    executed_signatures_in_iteration.add(call_signature)
+
+                    requested_capabilities = (
+                        llm_api.requested_capabilities()
+                        if isinstance(llm_api, RAGentAugmentedAPIInstance)
+                        else []
+                    )
+                    selected_tool = tools_by_name.get(tool_name)
+                    try:
+                        if llm_api:
+                            execution_call = tool_helper.sanitize_tool_call(tool_call, active_candidate_context, selected_tool)
+
+                            if (isinstance(llm_api, RAGentAugmentedAPIInstance)
+                                and tool_name == RAGENT_PREFIXED_TOOL_NAMES_BY_NAME.get(RAGENT_PLANNED_ACTION_TOOL_NAME)):
+                                llm_api.set_scheduling_context(request_query, formatted_messages, active_candidate_context)
+
+                            tool_result = await llm_api.async_call_tool(execution_call)
+                            parsed_tool_result = tool_helper.parse_tool_results(tool_result)
+                            tool_succeeded = MessageHelper.tool_result_succeeded(parsed_tool_result)
+
+                            if tool_succeeded and tool_helper.is_semantic_search_tool(tool_name):
+                                discovered_candidates = tool_helper.candidate_devices(parsed_tool_result)
+                                if discovered_candidates:
+                                    active_candidate_context = tool_helper.merge_candidates(active_candidate_context, discovered_candidates)
+                                    if isinstance(llm_api, RAGentAugmentedAPIInstance):
+                                        llm_api.refresh_search_candidates(active_candidate_context)
+                            elif tool_succeeded:
+                                if isinstance(llm_api, RAGentAugmentedAPIInstance):
+                                    llm_api.refresh_search_candidates(active_candidate_context)
+                                tool_calls_overall.append((tool_call, parsed_tool_result))
+                            if (
+                                tool_succeeded
+                                and not tool_helper.is_semantic_search_tool(tool_name)
+                                and isinstance(llm_api, RAGentAugmentedAPIInstance)
+                            ):
+                                for capability_index, capability in enumerate(
+                                    llm_api.requested_capabilities()
+                                ):
+                                    if (
+                                        capability_index not in fulfilled_capability_indexes
+                                        and RetrievalHelper.tool_capability_compatibility(
+                                            selected_tool, capability,
+                                        ) >= 1.0
+                                    ):
+                                        fulfilled_capability_indexes.add(capability_index)
+                            stored_tool_result = MessageHelper.compact_tool_result_value(
+                                tool_name,
+                                parsed_tool_result,
+                            )
+                            targets = tool_helper.successful_target_names(tool_call, parsed_tool_result)
+                            completed_target_names = {
+                                str(target).casefold() for target in targets
+                            }
+                            remaining_candidates = [
+                                candidate
+                                for candidate in active_candidate_context
+                                if str(candidate.get("name", "")).casefold()
+                                not in completed_target_names
+                            ]
+                            if tool_succeeded and not tool_helper.is_semantic_search_tool(tool_name):
+                                active_candidate_context = remaining_candidates
+                                if isinstance(llm_api, RAGentAugmentedAPIInstance):
+                                    llm_api.prune_search_candidates(completed_target_names)
+                            unresolved_targets = tool_helper.failed_target_candidates(
+                                tool_call, parsed_tool_result, active_candidate_context,
+                            )
+                            fulfillment_status = "failed"
+                            retry_blocked = not tool_succeeded
+                            observed_states: dict[str, str | None] = {}
+                            device_classes: set[str] = set()
+                            if tool_succeeded:
+                                has_declared_action = bool(
+                                    getattr(selected_tool, "canonical_action", "")
+                                )
+                                fulfillment_status = (
+                                    "unverified"
+                                    if requested_capabilities or has_declared_action
+                                    else "not_evaluated"
+                                )
+                                expected_states = set(
+                                    getattr(getattr(selected_tool, "metadata", None), "expected_states", ()) or ()
+                                )
+                                if targets:
+                                    current_states = [self.hass.states.get(target) for target in targets]
+                                    observed_states = {
+                                        target: state.state if state is not None else None
+                                        for target, state in zip(targets, current_states)
+                                    }
+                                    device_classes = {
+                                        str(state.attributes.get("device_class")).casefold()
+                                        for state in current_states
+                                        if state is not None and state.attributes.get("device_class")
+                                    }
+                                    target_names = {
+                                        str(target).casefold() for target in targets
+                                    }
+                                    device_classes.update(
+                                        str(candidate.get("device_class")).casefold()
+                                        for candidate in active_candidate_context
+                                        if str(candidate.get("name", "")).casefold() in target_names
+                                        and candidate.get("device_class")
+                                    )
+                                if expected_states and targets:
+                                    if all(
+                                        state is not None and str(state.state).casefold() in expected_states
+                                        for state in current_states
+                                    ):
+                                        fulfillment_status = "verified"
+                                    else:
+                                        fulfillment_status = "state_mismatch"
+                                        retry_blocked = True
+                            execution_status = {
+                                "requested_capabilities": requested_capabilities,
+                                "executed_capability": getattr(selected_tool, "canonical_action", ""),
+                                "target": targets,
+                                "tool_succeeded": tool_succeeded,
+                                "fulfillment_status": fulfillment_status,
+                                "observed_states": observed_states,
+                                "device_classes": sorted(device_classes),
+                                "unresolved_targets": unresolved_targets,
+                                "retry_blocked": retry_blocked,
+                                "unresolved_capabilities": [
+                                    capability
+                                    for index, capability in enumerate(requested_capabilities)
+                                    if index not in fulfilled_capability_indexes
+                                ],
+                            }
+                            if retry_blocked:
+                                failed_signatures.add(call_signature)
+                            if isinstance(stored_tool_result, dict):
+                                stored_tool_result["execution_status"] = execution_status
+                            else:
+                                stored_tool_result = {
+                                    "result": stored_tool_result,
+                                    "execution_status": execution_status,
+                                }
+                            tool_result_msg = conversation.ToolResultContent(
+                                agent_id=user_input.agent_id,
+                                tool_call_id=tool_call.id,
+                                tool_name=tool_name,
+                                tool_result=stored_tool_result,
                             )
                             history_manager.append_message(tool_result_msg)
-                            failed_signatures.add(call_signature)
-                            _logger.log_payload("conversation.tool_failure",
+                            _logger.log_payload("conversation.tool_result",
                                 iteration=idx + 1, requested_call=tool_call,
-                                error=repr(tool_err), failure_message=tool_result_msg,
-                                failed_signatures=failed_signatures,
+                                execution_call=execution_call,
+                                raw_result=tool_result,
+                                parsed_result=parsed_tool_result,
+                                stored_result=stored_tool_result,
+                                execution_status=execution_status,
+                                active_candidate_context=active_candidate_context,
+                                exposed_tool_names=sorted(exposed_tool_names),
                             )
+                            _logger.debug(f"RAGent timing: tool {tool_name}: {time.perf_counter() - tool_start:.3f}s")
+                        else:
+                            _logger.warning(f"LLM API not available, skipping tool execution for tool: {tool_name}")
+                            tool_result_msg = conversation.ToolResultContent(
+                                agent_id=user_input.agent_id,
+                                tool_call_id=tool_call.id,
+                                tool_name=tool_name,
+                                tool_result="Tool calling is not active on this instance instruct the user to activate it manually."
+                            )
+                            history_manager.append_message(tool_result_msg)
 
+                    except Exception as tool_err:
+                        _logger.log_string(level=logging.ERROR, message=f"Error executing tool {tool_name}: {tool_err}")
+                        tool_result_msg = MessageHelper.create_tool_failure_message(
+                            agent_id=user_input.agent_id,
+                            tool_call_id=tool_call.id,
+                            tool_name=tool_name,
+                            error=tool_err,
+                        )
+                        history_manager.append_message(tool_result_msg)
+                        failed_signatures.add(call_signature)
 
             except Exception as err:
-                _logger.exception("There was a problem talking to the backend: %s", err)
+                _logger.log_string(level=logging.ERROR, message=f"There was a problem talking to the backend: {err}")
                 if tool_calls_overall:
                     break
                 intent_response = intent.IntentResponse(language=user_input.language)
@@ -693,13 +631,13 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 history_manager = HistoryManager(runtime_options=self.runtime_options)
 
                 retrieval_method = get_setting_value(CONF_RETRIEVAL_METHOD, self.runtime_options)
+                memory_limit = get_setting_value(CONF_NUM_MEMORIES_TO_EXTRACT, self.runtime_options)
                 requires_embedding = retrieval_method != RETRIEVAL_METHOD_LEXICAL or memory_limit > 0
 
                 min_devices = get_setting_value(CONF_MIN_DEVICES_TO_EXTRACT, self.runtime_options)
                 max_devices = get_setting_value(CONF_MAX_DEVICES_TO_EXTRACT, self.runtime_options)
                 min_tools = get_setting_value(CONF_MIN_TOOLS_TO_EXTRACT, self.runtime_options)
                 max_tools = get_setting_value(CONF_MAX_TOOLS_TO_EXTRACT, self.runtime_options)
-                memory_limit = get_setting_value(CONF_NUM_MEMORIES_TO_EXTRACT, self.runtime_options)
 
                 current_area, current_floor = self._get_current_device_location(llm_context, scheduled_context)
                 current_area_name = current_area.name if current_area else ""
