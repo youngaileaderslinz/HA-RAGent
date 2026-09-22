@@ -8,7 +8,6 @@ from typing import TypeVar
 from custom_components.ha_ragent.src.const import RETRIEVAL_METHOD_VECTOR
 from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_confidence import RetrievalConfidence
 from custom_components.ha_ragent.src.models.retrieval.confidence_assessment import ConfidenceAssessment
-from custom_components.ha_ragent.src.models.retrieval.confidence_profile import ConfidenceProfile
 from custom_components.ha_ragent.src.models.retrieval.lexical_index import lexical_index
 from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
 
@@ -63,13 +62,13 @@ class SourceRanker:
         keys: Iterable[str],
         method: str,
         ranking_evidence: dict[str, dict[str, float]],
-        profile: ConfidenceProfile,
+        near_tie_margin: float,
         kind: str,
     ) -> ConfidenceAssessment:
         return RetrievalConfidence.assess_distribution_confidence(
             keys,
             {method: ranking_evidence.get(method, {})},
-            profile=profile,
+            near_tie_margin=near_tie_margin,
             minimum_independent_signals=1,
             kind=kind,
         )

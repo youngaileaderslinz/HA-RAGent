@@ -1,22 +1,16 @@
-"""Distribution confidence and candidate exposure thresholds."""
-
 from __future__ import annotations
 
-import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 import math
 from collections.abc import Iterable
 
-from custom_components.ha_ragent.src.logging import log_debug_payload
 from custom_components.ha_ragent.src.models.retrieval.confidence_assessment import ConfidenceAssessment
-from custom_components.ha_ragent.src.models.retrieval.confidence_profile import ConfidenceProfile
 
 
-_logger = logging.getLogger("custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper")
+_logger = BaseLogger("custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper")
 
 
 class RetrievalConfidence:
-    """Assess independent retrieval evidence and select confidence bands."""
-
     @staticmethod
     def prune_confidence_band(
         confidence: ConfidenceAssessment,
@@ -66,7 +60,7 @@ class RetrievalConfidence:
         ordered_keys: Iterable[str],
         signal_scores: dict[str, dict[str, float]],
         *,
-        profile: ConfidenceProfile,
+        near_tie_margin: float,
         weak_signals: set[str] | None = None,
         signal_families: dict[str, str] | None = None,
         strength_signals: set[str] | None = None,
@@ -128,7 +122,7 @@ class RetrievalConfidence:
             if not ranked:
                 continue
             source_margin = ranked[0][1] - (ranked[1][1] if len(ranked) > 1 else 0.0)
-            if source_margin <= profile.near_tie_margin:
+            if source_margin <= near_tie_margin:
                 continue
             if ranked[0][0] == top_key:
                 agreeing.append(name)
@@ -155,7 +149,7 @@ class RetrievalConfidence:
             else:
                 level = "low"
                 reason = "the only candidate lacks independent corroboration"
-        elif margin <= profile.near_tie_margin:
+        elif margin <= near_tie_margin:
             level = "low"
             reason = "top candidates are near-tied"
         elif disagreeing and len(disagreeing) >= len(agreeing):
@@ -163,7 +157,7 @@ class RetrievalConfidence:
             reason = "strong ranking signals disagree"
         elif (
             len(independent_agreement) >= minimum_independent_signals
-            and margin > profile.near_tie_margin
+            and margin > near_tie_margin
             and top_score >= 0.35
             and absolute_strength > 0.2
         ):
@@ -203,8 +197,7 @@ class RetrievalConfidence:
             absolute_strength=round(min(1.0, absolute_strength), 6),
             independent_signal_count=len(independent_agreement),
         )
-        log_debug_payload(
-            _logger, f"retrieval.{kind}_confidence",
+        _logger.log_payload(f"retrieval.{kind}_confidence",
             top_candidate=top_key,
             top_score=assessment.top_score,
             second_score=assessment.second_score,

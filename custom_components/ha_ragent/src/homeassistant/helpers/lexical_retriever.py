@@ -1,5 +1,3 @@
-"""Lexical source retrieval for Home Assistant entities and tools."""
-
 from __future__ import annotations
 
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger

@@ -1,8 +1,6 @@
-"""Coordinate configured lexical and vector source retrieval."""
-
 from __future__ import annotations
 
-import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any
 
 from custom_components.ha_ragent.src.const import (
@@ -13,17 +11,14 @@ from custom_components.ha_ragent.src.const import (
 )
 from custom_components.ha_ragent.src.homeassistant.helpers.lexical_retriever import LexicalRetriever
 from custom_components.ha_ragent.src.homeassistant.helpers.vector_retriever import VectorRetriever
-from custom_components.ha_ragent.src.logging import log_debug_payload
 from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
 from custom_components.ha_ragent.src.utils import get_setting_value
 
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 
 class SourceRetriever:
-    """Combine the independently replaceable lexical and vector retrievers."""
-
     @staticmethod
     def retrieval_method(options: dict) -> str:
         """Return the configured retrieval mode, defaulting safely to hybrid."""
@@ -47,11 +42,14 @@ class SourceRetriever:
         if limit <= 0:
             return [], []
         method = cls.retrieval_method(options)
-        log_debug_payload(
-            _logger, "retrieval.sources.request", collection=collection,
+        _logger.log_payload(
+            "retrieval.sources.request", 
+            collection=collection,
             object_type=getattr(object_type, "__name__", str(object_type)),
-            method=method, query=query, limit=limit,
-            embedding_deferred=isinstance(embedding, QueryEmbedding),
+            method=method, 
+            query=query, 
+            limit=limit,
+            embedding_deferred=isinstance(embedding, QueryEmbedding)
         )
 
         lexical = []
@@ -60,9 +58,12 @@ class SourceRetriever:
                 backend, object_type, options, collection,
             )
         if method == RETRIEVAL_METHOD_LEXICAL:
-            log_debug_payload(
-                _logger, "retrieval.sources.result", collection=collection,
-                method=method, vector=[], lexical=lexical,
+            _logger.log_payload(
+                "retrieval.sources.result", 
+                collection=collection,
+                method=method, 
+                vector=[], 
+                lexical=lexical,
             )
             return [], lexical
 
@@ -79,5 +80,8 @@ class SourceRetriever:
             payload["embedding"] = resolved_embedding
         if failure is not None:
             payload["failure"] = failure
-        log_debug_payload(_logger, "retrieval.sources.result", **payload)
+        _logger.log_payload(
+            "retrieval.sources.result", 
+            **payload
+        )
         return vector, lexical

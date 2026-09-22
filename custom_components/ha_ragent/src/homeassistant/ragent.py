@@ -5,6 +5,7 @@ import json
 import logging
 from typing import Any, List, Tuple
 
+from custom_components.ha_ragent.src.homeassistant.helpers.history_retriever import HistoryRetriever
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from custom_components.ha_ragent.src.logging.timing_logger import TimingLogger
 from homeassistant.components.conversation import ConversationInput, ConversationResult, ConversationEntity
@@ -23,7 +24,6 @@ from custom_components.ha_ragent.src.homeassistant.helpers.history_manager impor
 from custom_components.ha_ragent.src.homeassistant.helpers.message_helper import MessageHelper
 from custom_components.ha_ragent.src.homeassistant.helpers.tool_helper import ToolHelper
 from custom_components.ha_ragent.src.homeassistant.helpers.conversation_retriever import ConversationRetriever
-from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
 from custom_components.ha_ragent.src.homeassistant.helpers.source_retriever import SourceRetriever
 from custom_components.ha_ragent.src.models.retrieval.scheduled_context import ScheduledContext
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
@@ -137,7 +137,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             current_vector = await query_embedding.get() if query_embedding else []
             embedded = await asyncio.gather(*(
                 self._async_embed_retrieval_text(
-                    RetrievalHelper.build_retrieval_text(
+                    HistoryRetriever.build_retrieval_text(
                         context.to_embedding_text(self.entry.translations),
                     )
                 )
@@ -148,12 +148,12 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 for context, vector in zip(contexts, embedded)
                 if vector
             }
-        selected = RetrievalHelper.select_history_contexts(
+        selected = HistoryRetriever.select_history_contexts(
             contexts, vectors, current_vector,
             max_age_seconds=remember_time * 60 if remember_time > 0 else float("inf"),
             limit=remember_num if remember_num > 0 else len(contexts),
         )
-        return RetrievalHelper.build_continuity_context(selected)
+        return HistoryRetriever.build_continuity_context(selected)
 
     async def _async_render_system_prompt(
         self,
@@ -508,7 +508,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 if requires_embedding:
                     query_embedding = QueryEmbedding(
                         lambda: self._async_embed_retrieval_text(
-                            RetrievalHelper.build_retrieval_text(retrieval_query)
+                            HistoryRetriever.build_retrieval_text(retrieval_query)
                         )
                     )
 

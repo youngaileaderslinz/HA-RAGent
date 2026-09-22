@@ -231,6 +231,7 @@ class HistoryManager:
                         # evidence. Retrieved candidates are collected through
                         # successful search results and validated separately.
                         continue
+                    
                     tool_name = str(getattr(message, "tool_name", "") or "")
                     if self._is_semantic_search(tool_name):
                         self._collect_search_candidates(result, ambiguous_entities)

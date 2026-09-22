@@ -4,7 +4,6 @@ import asyncio
 import logging
 from typing import Any
 
-from homeassistant.const import CONF_HOST, CONF_PORT, CONF_SSL
 from homeassistant.config_entries import (
     ConfigEntriesFlowManager,
     ConfigFlow,

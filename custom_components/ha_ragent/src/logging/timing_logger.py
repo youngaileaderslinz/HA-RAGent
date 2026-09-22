@@ -1,6 +1,7 @@
 
 import time
-from custom_components.ha_ragent.src.logging.base_logger import BaseLogger, LogLevel, TRACE
+from custom_components.ha_ragent.src.const import TRACE
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger, LogLevel
 
 class TimingLogger(BaseLogger):
     def __init__(self, name: str):

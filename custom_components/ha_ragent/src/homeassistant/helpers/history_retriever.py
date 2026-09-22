@@ -1,23 +1,18 @@
-"""History selection and continuity aggregation for retrieval."""
-
 from __future__ import annotations
 
-import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 import math
 import time
 from collections.abc import Iterable
 
-from custom_components.ha_ragent.src.logging import log_debug_payload
 from custom_components.ha_ragent.src.models.retrieval.continuity_context import ContinuityContext
 from custom_components.ha_ragent.src.models.retrieval.turn_context import TurnContext
 
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 
 class HistoryRetriever:
-    """Keep conversational continuity separate from source retrieval/ranking."""
-
     @staticmethod
     def build_retrieval_text(current_request: str) -> str:
         return " ".join(current_request.split())
@@ -61,10 +56,15 @@ class HistoryRetriever:
                 if previous is None or short_term_weight > previous[1]:
                     selected[context.key] = (context, short_term_weight)
         result = sorted(selected.values(), key=lambda item: item[1], reverse=True)[:limit]
-        log_debug_payload(
-            _logger, "continuity.history_selection",
-            contexts=contexts, vectors=vectors, current_vector=current_vector,
-            max_age_seconds=max_age_seconds, limit=limit, now=now, selected=result,
+        _logger.log_payload(
+            "continuity.history_selection",
+            contexts=contexts, 
+            vectors=vectors, 
+            current_vector=current_vector,
+            max_age_seconds=max_age_seconds, 
+            limit=limit, 
+            now=now, 
+            selected=result
         )
         return result
 
@@ -88,8 +88,9 @@ class HistoryRetriever:
         continuity.target_groups = [
             (group, weight) for context, weight in recent_contexts for group in context.target_groups
         ]
-        log_debug_payload(
-            _logger, "continuity.built",
-            selected_contexts=selected_contexts, continuity=continuity,
+        _logger.log_payload(
+            "continuity.built",
+            selected_contexts=selected_contexts, 
+            continuity=continuity
         )
         return continuity

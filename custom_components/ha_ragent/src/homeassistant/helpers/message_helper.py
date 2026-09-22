@@ -1,5 +1,3 @@
-"""Helpers for converting and cleaning conversation messages."""
-
 from __future__ import annotations
 
 from homeassistant.components import conversation
@@ -7,6 +5,9 @@ from homeassistant.components import conversation
 from custom_components.ha_ragent.src.const import (
     RAGENT_SEMANTIC_SEARCH_TOOL_NAME,
     TOOL_REGEX_PATTERN,
+    TOOL_RESULT_MAX_DEPTH,
+    TOOL_RESULT_MAX_ITEMS,
+    TOOL_RESULT_MAX_TEXT,
 )
 from custom_components.ha_ragent.src.models.chat.chat_message import (
     ChatFunction,
@@ -17,10 +18,6 @@ from custom_components.ha_ragent.src.models.chat.chat_message import (
 
 
 class MessageHelper:
-    _MAX_RESULT_ITEMS = 12
-    _MAX_RESULT_TEXT = 2000
-    _MAX_RESULT_DEPTH = 4
-
     @staticmethod
     def _is_semantic_search(tool_name: str) -> bool:
         return str(tool_name or "").rsplit("__", 1)[-1] == RAGENT_SEMANTIC_SEARCH_TOOL_NAME
@@ -42,7 +39,7 @@ class MessageHelper:
             "device_class",
         )
         compact: list[object] = []
-        for candidate in candidates[:MessageHelper._MAX_RESULT_ITEMS]:
+        for candidate in candidates[:TOOL_RESULT_MAX_ITEMS]:
             if not isinstance(candidate, dict):
                 compact.append(candidate)
                 continue
@@ -68,7 +65,7 @@ class MessageHelper:
             "expected_states",
         )
         compact: list[object] = []
-        for candidate in candidates[:MessageHelper._MAX_RESULT_ITEMS]:
+        for candidate in candidates[:TOOL_RESULT_MAX_ITEMS]:
             if not isinstance(candidate, dict):
                 compact.append(candidate)
                 continue
@@ -83,20 +80,20 @@ class MessageHelper:
 
     @staticmethod
     def _compact_value(value: object, depth: int = 0) -> object:
-        if isinstance(value, (dict, list, tuple)) and depth >= MessageHelper._MAX_RESULT_DEPTH:
+        if isinstance(value, (dict, list, tuple)) and depth >= TOOL_RESULT_MAX_DEPTH:
             return "[truncated]"
         if isinstance(value, dict):
             return {
                 key: MessageHelper._compact_value(item, depth + 1)
-                for key, item in list(value.items())[:MessageHelper._MAX_RESULT_ITEMS]
+                for key, item in list(value.items())[:TOOL_RESULT_MAX_ITEMS]
             }
         if isinstance(value, (list, tuple)):
             return [
                 MessageHelper._compact_value(item, depth + 1)
-                for item in value[:MessageHelper._MAX_RESULT_ITEMS]
+                for item in value[:TOOL_RESULT_MAX_ITEMS]
             ]
         if isinstance(value, str):
-            return value[:MessageHelper._MAX_RESULT_TEXT]
+            return value[:TOOL_RESULT_MAX_TEXT]
         return value
 
     @staticmethod
@@ -137,7 +134,7 @@ class MessageHelper:
         # IDs or details needed to correct a failed call.
         for key, value in result.items():
             if key not in compact:
-                if len(compact) >= MessageHelper._MAX_RESULT_ITEMS:
+                if len(compact) >= TOOL_RESULT_MAX_ITEMS:
                     break
                 compact[key] = MessageHelper._compact_value(value)
         return compact
