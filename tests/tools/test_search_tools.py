@@ -15,19 +15,31 @@ from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolM
 from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
 
 
+def _search_tool() -> RAGentSemanticSearchTool:
+    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+    tool.hass = Mock()
+    tool.hass.states.get.return_value = None
+    tool.entry_id = "entry"
+    tool.subentry_id = "agent"
+    tool.set_search_context()
+    return tool
+
+
 def test_semantic_search_schema_explains_parallel_structured_capabilities() -> None:
     schema = to_openapi(RAGentSemanticSearchTool.parameters)
 
-    assert set(schema["required"]) >= {"search_queries", "capabilities"}
+    assert "search_queries" in schema["required"]
+    assert "capabilities" not in schema["required"]
     assert "position" in schema["properties"]["search_queries"]["description"]
     capability_description = schema["properties"]["capabilities"]["description"]
     assert "turn_on" in capability_description
     action_schema = schema["properties"]["capabilities"]["items"]["properties"]["action"]
     assert "canonical action ID" in action_schema["description"]
+    assert "action" not in schema["properties"]["capabilities"]["items"].get("required", [])
 
 
 def test_model_search_query_can_search_outside_user_request() -> None:
-    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+    tool = _search_tool()
     tool.set_search_context(
         latest_request="turn off the light strip",
         area="Guest Bedroom",
@@ -35,29 +47,29 @@ def test_model_search_query_can_search_outside_user_request() -> None:
         candidates=[{"name": "light.strip", "friendly_name": "Light Strip"}],
     )
 
-    query = asyncio.run(tool._validate_query(SimpleNamespace(
+    queries = asyncio.run(tool._validate_queries(SimpleNamespace(
         tool_args={"search_query": "find a ventilation control tool"},
     )))
 
-    assert query.startswith("Search intent: find a ventilation control tool")
-    assert "Default area when the request has no explicit location: Guest Bedroom" in query
-    assert "Default floor when the request has no explicit location: 2nd Floor" in query
-    assert "Current candidate: light.strip | Light Strip" in query
+    assert queries == [
+        "Search intent: find a ventilation control tool\n"
+        "turn off the light strip\nGuest Bedroom\n2nd Floor\nlight.strip | Light Strip"
+    ]
 
 
 def test_user_context_is_fallback_without_model_search_query() -> None:
-    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
-    tool._contextual_query = "Current request: turn off a light"
+    tool = _search_tool()
+    tool._contextual_query = "turn off a light"
 
-    query = asyncio.run(tool._validate_query(SimpleNamespace(
+    queries = asyncio.run(tool._validate_queries(SimpleNamespace(
         tool_args={"search_query": ""},
     )))
 
-    assert query == "Current request: turn off a light"
+    assert queries == ["turn off a light"]
 
 
 def test_multi_query_search_normalizes_distinct_focused_intents() -> None:
-    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+    tool = _search_tool()
 
     queries = tool._model_search_queries(SimpleNamespace(tool_args={
         "search_queries": [" turn on devices ", "turn off devices", "TURN ON DEVICES"],
@@ -83,7 +95,7 @@ def test_multi_query_results_are_merged_fairly_without_duplicates() -> None:
 
 
 def test_search_context_signature_accepts_empty_keyword_context() -> None:
-    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+    tool = _search_tool()
 
     tool.set_search_context()
 
@@ -108,7 +120,7 @@ def test_corrective_search_uses_subentry_retrieval_limits() -> None:
     assert RAGentSemanticSearchTool._get_effective_ranges(entry, subentry) == (2, 4, 3, 5)
 
 
-def test_effective_ranges_do_not_rewrite_user_boundaries() -> None:
+def test_effective_ranges_clamp_minimums_to_exposure_limits() -> None:
     entry = SimpleNamespace(options={})
     subentry = SimpleNamespace(data={
         const.CONF_MIN_DEVICES_TO_EXTRACT: 8,
@@ -118,12 +130,12 @@ def test_effective_ranges_do_not_rewrite_user_boundaries() -> None:
     })
 
     assert RAGentSemanticSearchTool._get_effective_ranges(entry, subentry) == (
-        8, 3, 7, 2,
+        3, 3, 2, 2,
     )
 
 
 def test_contextual_fallback_includes_trusted_location() -> None:
-    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+    tool = _search_tool()
     tool.set_search_context(
         latest_request="turn off the lights",
         area="Kitchen",
@@ -131,16 +143,15 @@ def test_contextual_fallback_includes_trusted_location() -> None:
         candidates=[],
     )
 
-    query = asyncio.run(tool._validate_query(SimpleNamespace(
+    queries = asyncio.run(tool._validate_queries(SimpleNamespace(
         tool_args={"search_query": ""},
     )))
 
-    assert "Default area when the request has no explicit location: Kitchen" in query
-    assert "Default floor when the request has no explicit location: Ground floor" in query
+    assert queries == ["turn off the lights\nKitchen\nGround floor"]
 
 
 def test_device_search_ignores_model_guessed_concepts() -> None:
-    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+    tool = _search_tool()
     tool.set_search_context(latest_request="turn on the bathroom lights")
 
     query = tool._device_search_query(
@@ -151,18 +162,6 @@ def test_device_search_ignores_model_guessed_concepts() -> None:
     assert query == "turn on the bathroom lights"
 
 
-def test_refresh_does_not_restore_pruned_candidates() -> None:
-    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
-    candidates = [
-        {"name": "light.kitchen"},
-        {"name": "light.dining"},
-    ]
-    tool.set_search_context(candidates=candidates)
-
-    tool.prune_candidates({"LIGHT.KITCHEN"})
-    tool.refresh_candidates(candidates)
-
-    assert tool._candidate_context == [{"name": "light.dining"}]
 
 
 class _FakeEmbedder:
@@ -199,7 +198,7 @@ def test_combined_corrective_search_keeps_retrieval_independent_and_location_ali
                                 async_get_lexical_objects=local, async_retrieve_scored_objects=vector,
                             ))
     subentry = SimpleNamespace(data={}, title="Test")
-    search = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+    search = _search_tool()
     search.hass = Mock()
     search.hass.states.get.return_value = None
     search._iter_searchable_entries = lambda: iter([(entry, "subentry", subentry, 2, 2, 2, 2)])
@@ -216,8 +215,8 @@ def test_combined_corrective_search_keeps_retrieval_independent_and_location_ali
     assert result["candidate_devices"][0]["name"] == device.id
     assert result["candidate_tools"][0]["name"] == capability.name
     compact = MessageHelper._compact_candidate_devices(result["candidate_devices"])
-    assert compact[0]["area_aliases"] == ["Küche"]
-    assert compact[0]["floor_aliases"] == ["Erdgeschoss"]
+    assert "area_aliases" not in compact[0]
+    assert "floor_aliases" not in compact[0]
 
 
 class _FakeToolVectorDatabase:
@@ -252,7 +251,7 @@ def test_search_mode_skips_unused_backends_and_preserves_ranking(scope, mode):
     entry = SimpleNamespace(options={const.CONF_RETRIEVAL_METHOD: mode},
                             embedder_backend=embedder, vector_db_backend=database)
     subentry = SimpleNamespace(data={}, title="Test")
-    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+    tool = _search_tool()
     tool.hass = Mock()
     tool.hass.states.get.return_value = None
     tool._iter_searchable_entries = lambda: iter([(entry, "subentry", subentry, 1, 1, 1, 1)])
@@ -311,7 +310,7 @@ def test_subentry_retrieval_method_overrides_entry(
         data={const.CONF_RETRIEVAL_METHOD: subentry_mode},
         title="Test",
     )
-    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+    tool = _search_tool()
     tool.hass = Mock()
     tool.hass.states.get.return_value = None
     tool._iter_searchable_entries = lambda: iter(
@@ -349,7 +348,7 @@ def test_automatic_device_search_combines_exact_lexical_and_vector_results():
         vector_db_backend=database,
     )
     subentry = SimpleNamespace(data={}, title="Test")
-    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+    tool = _search_tool()
     tool.hass = Mock()
     tool.hass.states.get.return_value = None
     tool._iter_searchable_entries = lambda: iter(
@@ -388,7 +387,7 @@ def test_zero_maximum_skips_the_requested_search_scope(scope):
         vector_db_backend=database,
     )
     subentry = SimpleNamespace(data={}, title="Test")
-    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+    tool = _search_tool()
     tool._iter_searchable_entries = lambda: iter(
         [(
             entry,
@@ -418,11 +417,12 @@ def test_search_embedding_failure_still_discovers_custom_tool():
     database = _FakeToolVectorDatabase([custom])
     database.async_retrieve_scored_objects = AsyncMock(side_effect=AssertionError("No embedding"))
     entry = SimpleNamespace(
+        options={},
         embedder_backend=SimpleNamespace(async_embed_text=AsyncMock(side_effect=RuntimeError("offline"))),
         vector_db_backend=database,
     )
     subentry = SimpleNamespace(data={}, title="Test")
-    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+    tool = _search_tool()
     tool._iter_searchable_entries = lambda: iter([(entry, "subentry", subentry, 1, 1, 1, 1)])
     tool.set_search_context(latest_request="Turbo ventilation")
     result = asyncio.run(tool.async_call(SimpleNamespace(tool_args={
@@ -432,7 +432,7 @@ def test_search_embedding_failure_still_discovers_custom_tool():
     database.async_retrieve_scored_objects.assert_not_awaited()
 
 
-def test_semantic_tool_search_filters_capability_before_vector_rank() -> None:
+def test_semantic_tool_search_prioritizes_capability_without_filtering_custom_tools() -> None:
     timer = LlmTool(name="HassTimerCancel", description="Cancel a timer",
                     metadata=ToolMetadata(canonical_action="cancel", supported_domains=("timer",)))
     set_light = LlmTool(name="HassLightSet", description="Set light brightness",
@@ -441,11 +441,12 @@ def test_semantic_tool_search_filters_capability_before_vector_rank() -> None:
                        metadata=ToolMetadata(canonical_action="off", supported_domains=("light",)))
     vector_database = _FakeToolVectorDatabase([timer, set_light, turn_off])
     entry = SimpleNamespace(
+        options={},
         embedder_backend=_FakeEmbedder(),
         vector_db_backend=vector_database,
     )
     subentry = SimpleNamespace(data={}, title="Test")
-    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+    tool = _search_tool()
     tool._iter_searchable_entries = lambda: iter([(entry, "subentry", subentry, 3, 3, 3, 3)])
     tool.set_search_context(
         latest_request="turn off the kitchen light",
@@ -466,11 +467,12 @@ def test_semantic_tool_search_filters_capability_before_vector_rank() -> None:
 
     candidate_names = [candidate["name"] for candidate in result["candidate_tools"]]
     assert candidate_names[0] == "HassTurnOff"
-    assert candidate_names == ["HassTurnOff"]
+    assert set(candidate_names) == {"HassTimerCancel", "HassLightSet", "HassTurnOff"}
 
 
-def test_structured_search_requires_capability_for_each_production_query() -> None:
-    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+def test_structured_search_allows_query_only_discovery() -> None:
+    tool = _search_tool()
+    tool._iter_searchable_entries = lambda: iter(())
     tool.set_search_context(latest_request="request")
 
     result = asyncio.run(tool.async_call(SimpleNamespace(tool_args={
@@ -479,10 +481,10 @@ def test_structured_search_requires_capability_for_each_production_query() -> No
     })))
 
     assert result["requested_capabilities"] == []
-    assert "structured capability" in result["error"]
+    assert not result.get("error")
 
 
-def test_capability_filter_removes_dangerous_memory_distractor() -> None:
+def test_capability_ranking_prioritizes_requested_action_without_excluding_alternatives() -> None:
     forget = LlmTool(
         name="HassForgetFact",
         description="Forget stored information",
@@ -495,11 +497,12 @@ def test_capability_filter_removes_dangerous_memory_distractor() -> None:
     )
     vector_database = _FakeToolVectorDatabase([forget, turn_on])
     entry = SimpleNamespace(
+        options={},
         embedder_backend=_FakeEmbedder(),
         vector_db_backend=vector_database,
     )
     subentry = SimpleNamespace(data={}, title="Test")
-    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+    tool = _search_tool()
     tool._iter_searchable_entries = lambda: iter([
         (entry, "subentry", subentry, 2, 6, 1, 6),
     ])
@@ -515,6 +518,7 @@ def test_capability_filter_removes_dangerous_memory_distractor() -> None:
 
     assert [candidate["name"] for candidate in result["candidate_tools"]] == [
         "HassTurnOn",
+        "HassForgetFact",
     ]
 
 
@@ -523,11 +527,12 @@ def test_weak_tool_result_returns_explicit_fallback_signal() -> None:
         LlmTool(name="HassBroadcast", description="Broadcast a message"),
     ])
     entry = SimpleNamespace(
+        options={},
         embedder_backend=_FakeEmbedder(),
         vector_db_backend=vector_database,
     )
     subentry = SimpleNamespace(data={}, title="Test")
-    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+    tool = _search_tool()
     tool._iter_searchable_entries = lambda: iter([(entry, "subentry", subentry, 3, 3, 3, 3)])
     tool.set_search_context(
         latest_request="turn on the bathroom heater",
@@ -552,11 +557,12 @@ def test_weak_tool_result_returns_explicit_fallback_signal() -> None:
 
 def test_empty_tool_index_returns_no_tools_fallback() -> None:
     entry = SimpleNamespace(
+        options={},
         embedder_backend=_FakeEmbedder(),
         vector_db_backend=_FakeToolVectorDatabase([]),
     )
     subentry = SimpleNamespace(data={}, title="Test")
-    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+    tool = _search_tool()
     tool._iter_searchable_entries = lambda: iter([(entry, "subentry", subentry, 3, 3, 3, 3)])
     tool.set_search_context(
         latest_request="turn on the bathroom heater",
@@ -577,11 +583,12 @@ def test_empty_tool_index_returns_no_tools_fallback() -> None:
 
 def test_candidate_context_fallback_obeys_device_limit() -> None:
     entry = SimpleNamespace(
+        options={},
         embedder_backend=_FakeEmbedder(),
         vector_db_backend=_FakeToolVectorDatabase([]),
     )
     subentry = SimpleNamespace(data={}, title="Test")
-    tool = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+    tool = _search_tool()
     tool._iter_searchable_entries = lambda: iter([(entry, "subentry", subentry, 1, 1, 1, 1)])
     tool.set_search_context(candidates=[
         {"name": "light.first", "domain": ["light"]},

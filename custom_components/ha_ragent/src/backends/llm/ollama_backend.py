@@ -192,7 +192,7 @@ class OllamaLlmBackend(ALlmBaseBackend):
         if tools:
             payload["tools"] = [tool.to_tool_dict() for tool in tools]
             required_tool_names, searched_tool_names = self.split_tool_names(tools)
-            _logger.log_string(level=logging.DEBUG, message=f"Added {len(tools)} tools to Ollama request: required_tools={required_tool_names}, searched_tools={searched_tool_names}")
+            _logger.log_string(logging.DEBUG, f"Added {len(tools)} tools to Ollama request: required_tools={required_tool_names}, searched_tools={searched_tool_names}")
         
         try:
             async with session.post(self._chat_url, json=payload, timeout=ALlmBaseBackend._chat_timeout) as response:
@@ -206,7 +206,7 @@ class OllamaLlmBackend(ALlmBaseBackend):
 
                         reasoning_content = data.get("message", {}).get("thinking")
                         if reasoning_content and not thinking_enabled and not unexpected_reasoning_logged:
-                            _logger.log_string(level=logging.WARNING, message="Model returned reasoning although model thinking is disabled in the UI.")
+                            _logger.log_string(logging.WARNING, "Model returned reasoning although model thinking is disabled in the UI.")
                             unexpected_reasoning_logged = True
                         
                         if "message" in data and "content" in data["message"]:
@@ -219,7 +219,7 @@ class OllamaLlmBackend(ALlmBaseBackend):
                             tool_calls = data["message"]["tool_calls"]
                             if tool_calls:
                                 emitted["value"] = True
-                                _logger.log_string(level=logging.DEBUG, message=f"LLM tool calls received from Ollama: {tool_calls}")
+                                _logger.log_string(logging.DEBUG, f"LLM tool calls received from Ollama: {tool_calls}")
                                 for tc in tool_calls:
                                     if "function" in tc:
                                         func = tc["function"]
@@ -230,10 +230,10 @@ class OllamaLlmBackend(ALlmBaseBackend):
                                         yield f"\n```homeassistant\n{json.dumps(tool_json)}\n```\n"
 
                     except json.JSONDecodeError:
-                        _logger.log_string(level=logging.DEBUG, message=f"Failed to parse Ollama response: {line}")
+                        _logger.log_string(logging.DEBUG, f"Failed to parse Ollama response: {line}")
                         continue
         except Exception as err:
-            _logger.log_string(level=logging.DEBUG, message="Ollama request attempt failed: %s", args=(type(err).__name__,), exc_info=True)
+            _logger.log_string(logging.DEBUG, f"Ollama request attempt failed: {type(err).__name__}")
             raise
         return
 
@@ -259,8 +259,8 @@ class OllamaLlmBackend(ALlmBaseBackend):
             max_chars //= 2
             trimmed_messages = self.truncate_messages(messages, max_chars)
             if trimmed_messages == current_messages:
-                _logger.log_string(level=logging.DEBUG, message="Ollama response was empty, but the prompt is already short enough to avoid truncation.")
+                _logger.log_string(logging.DEBUG, "Ollama response was empty, but the prompt is already short enough to avoid truncation.")
                 return
 
             current_messages = trimmed_messages
-            _logger.log_string(level=logging.WARNING, message=f"Ollama returned an empty response. Retrying with messages limited to {max_chars} characters.")
+            _logger.log_string(logging.WARNING, f"Ollama returned an empty response. Retrying with messages limited to {max_chars} characters.")

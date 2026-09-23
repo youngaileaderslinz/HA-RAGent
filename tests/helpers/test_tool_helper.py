@@ -1,13 +1,24 @@
 import json
 from unittest.mock import Mock
 
-
 from custom_components.ha_ragent.src.homeassistant.helpers import (
     tool_helper as tool_helper_module,
 )
 from custom_components.ha_ragent.src.homeassistant.helpers.tool_helper import ToolHelper
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
+
+
+def test_failed_target_candidates_excludes_unattempted_candidates() -> None:
+    candidates = [
+        {"name": "light.chandelier"},
+        {"name": "light.dining_table"},
+    ]
+    tool_call = Mock(tool_args={"name": "light.chandelier"})
+
+    assert ToolHelper.failed_target_candidates(
+        tool_call, {"failed": ["light.chandelier"]}, candidates,
+    ) == [candidates[0]]
 
 def test_parse_tool_call_preserves_friendly_name() -> None:
     """A friendly-name target must survive nested argument parsing."""
@@ -41,7 +52,7 @@ def test_parse_tool_call_preserves_apostrophes_in_json_strings() -> None:
 
 
 def test_unknown_tool_arguments_are_preserved_exactly_from_live_schema() -> None:
-    helper = ToolHelper(Mock())
+    helper = ToolHelper(Mock(), [LlmTool(name="VendorExecute", description="", metadata=ToolMetadata())])
     arguments = {
         "name": "raw.vendor_target",
         "friendly_name": "schema-owned value",
@@ -52,8 +63,8 @@ def test_unknown_tool_arguments_are_preserved_exactly_from_live_schema() -> None
 {{"tool": "VendorExecute", "arguments": {json.dumps(arguments)}}}
 ```'''
 
-    calls = helper.parse_tool_calls(response, {"VendorExecute": ToolMetadata()})
-    execution_call = helper.to_home_assistant_tool_call(calls[0], ToolMetadata())
+    calls = helper.parse_tool_calls(response)
+    execution_call = helper.to_home_assistant_tool_call(calls[0])
 
     assert execution_call.tool_args == arguments
 
@@ -182,22 +193,6 @@ def test_tool_call_signature_distinguishes_targets() -> None:
     )
 
 
-def test_identical_failed_retry_ignores_argument_order() -> None:
-    helper = ToolHelper(Mock())
-    first = Mock(
-        tool_name="HassTurnOn",
-        tool_args={"domain": ["light"], "area": "Bedroom"},
-    )
-    retry = Mock(
-        tool_name="HassTurnOn",
-        tool_args={"area": "Bedroom", "domain": ["light"]},
-    )
-
-    failed = {helper.tool_call_signature(first): {"success": False}}
-
-    assert helper.is_identical_failed_retry(retry, failed)
-
-
 def test_semantic_search_signature_normalizes_query_and_scope() -> None:
     first = Mock(
         tool_name="ha_ragent__HassSemanticSearch",
@@ -246,40 +241,6 @@ def test_exposed_tool_name_normalizes_only_known_namespace_variants() -> None:
     )
     assert ToolHelper.resolve_exposed_tool_name("switch__HassSwitchToggle", exposed) is None
 
-
-
-def test_discovered_tools_are_converted_for_next_iteration() -> None:
-    existing_names = {"HassSemanticSearch"}
-    discovered = ToolHelper.discovered_tools(
-        {
-            "candidate_tools": [{
-                "name": "HassTurnOn",
-                "description": "Turn on a target",
-                "parameters": {"properties": {"name": {"type": "string"}}},
-                "metadata": {"is_domain_aware": True},
-            }],
-        },
-        existing_names,
-    )
-
-    assert [tool.name for tool in discovered] == ["HassTurnOn"]
-    assert discovered[0].metadata.is_domain_aware is True
-    assert "HassTurnOn" in existing_names
-
-
-def test_discovered_unknown_tool_keeps_live_schema_and_generic_metadata() -> None:
-    parameters = {"type": "object", "properties": {"mode": {"enum": ["quiet"]}}}
-    discovered = ToolHelper.discovered_tools(
-        {"candidate_tools": [{
-            "name": "VendorExecute",
-            "description": "Execute a vendor operation",
-            "parameters": parameters,
-        }]},
-        set(),
-    )
-
-    assert discovered[0].parameters is parameters
-    assert discovered[0].metadata == ToolMetadata()
 
 
 def test_device_registry_lookup_uses_device_id(monkeypatch) -> None:

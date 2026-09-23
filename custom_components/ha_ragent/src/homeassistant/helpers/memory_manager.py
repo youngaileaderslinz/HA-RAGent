@@ -37,12 +37,12 @@ class MemoryManager:
     def _get_entry_and_config(self) -> tuple[Any | None, dict[str, Any]]:
         entry = self.hass.data.get(DOMAIN, {}).get(self.entry_id)
         if entry is None:
-            _logger.log_string(level=logging.ERROR, message="The HA-RAGent integration entry is not available.")
+            _logger.log_string(logging.ERROR, "The HA-RAGent integration entry is not available.")
             return None, {}
 
         subentry = entry.subentries.get(self.subentry_id)
         if subentry is None:
-            _logger.log_string(level=logging.ERROR, message="The HA-RAGent agent entry is not available.")
+            _logger.log_string(logging.ERROR, "The HA-RAGent agent entry is not available.")
             return None, {}
         
         return entry, dict(subentry.data)
@@ -64,7 +64,7 @@ class MemoryManager:
     async def async_remember(self, content: str) -> Memory | None:
         normalized_content = self.normalize_content(content)
         if not normalized_content:
-            _logger.log_string(level=logging.ERROR, message="Memory content must not be empty.")
+            _logger.log_string(logging.ERROR, "Memory content must not be empty.")
             return None
 
         entry, config = self._get_entry_and_config()
@@ -79,7 +79,7 @@ class MemoryManager:
             config, memory.to_embedding_text(entry.translations), input_type="document",
         )
         if not vector:
-            _logger.log_string(level=logging.ERROR, message="The embedding backend returned an empty memory embedding.")
+            _logger.log_string(logging.ERROR, "The embedding backend returned an empty memory embedding.")
             return None
 
         async with self._get_lock():
@@ -209,7 +209,7 @@ class MemoryManager:
                 try:
                     await increment_counts(config, self.collection_name, memory_ids)
                 except Exception as err:
-                    _logger.log_string(level=logging.WARNING, message=f"Failed to update memory retrieval counts: {err}")
+                    _logger.log_string(logging.WARNING, f"Failed to update memory retrieval counts: {err}")
         _logger.log_payload(
             "retrieval.memory_exposure",
             configured_minimum=minimum,

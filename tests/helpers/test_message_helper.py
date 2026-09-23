@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+from custom_components.ha_ragent.src.const import TOOL_RESULT_MAX_ITEMS, TOOL_RESULT_MAX_TEXT
+
 from custom_components.ha_ragent.src.homeassistant.helpers.message_helper import (
     MessageHelper,
     conversation,
@@ -130,7 +132,6 @@ def test_compact_search_preserves_device_state_and_location() -> None:
                 "floor": "Ground floor",
                 "domain": ["sensor"],
                 "aliases": ["kitchen thermometer"],
-                "attributes": {"temperature": 21.5},
             }],
             "error": [],
         },
@@ -146,7 +147,6 @@ def test_compact_search_preserves_device_state_and_location() -> None:
         "floor": "Ground floor",
         "domain": ["sensor"],
         "aliases": ["kitchen thermometer"],
-        "attributes": {"temperature": 21.5},
     }
     assert "directly" in result["candidate_data_notice"]
 
@@ -176,8 +176,8 @@ def test_compact_search_keeps_capabilities_without_detailed_ranking_signals() ->
             "candidate_tools": [{
                 "name": "HassTurnOn",
                 "description": "Turn on a device",
-                "canonical_action": "on",
-                "supported_domains": ["light", "switch"],
+                "action": "on",
+                "domains": ["light", "switch"],
                 "retrieval_score": 6.25,
                 "ranking_signals": {
                     "semantic_similarity": 0.8,
@@ -193,8 +193,9 @@ def test_compact_search_keeps_capabilities_without_detailed_ranking_signals() ->
 
     candidate = result["candidate_tools"][0]
     assert candidate["name"] == "HassTurnOn"
-    assert candidate["canonical_action"] == "on"
-    assert candidate["retrieval_score"] == 6.25
+    assert candidate["action"] == "on"
+    assert candidate["domains"] == ["light", "switch"]
+    assert "retrieval_score" not in candidate
     assert "ranking_signals" not in candidate
     assert "parameters" not in candidate
     assert result["tool_search_confidence"] == "high"
@@ -206,7 +207,7 @@ def test_long_success_result_is_bounded() -> None:
         {"success": [f"light.room_{index}" for index in range(30)]},
     )
 
-    assert len(result["success"]) == MessageHelper._MAX_RESULT_ITEMS
+    assert len(result["success"]) == TOOL_RESULT_MAX_ITEMS
 
 
 def test_tool_result_success_rejects_failed_and_error_results() -> None:
@@ -240,7 +241,7 @@ def test_custom_nested_result_is_bounded_and_keeps_status():
     }
     compact = MessageHelper.compact_tool_result_value("VendorTool", result)
     assert compact["success"] is True
-    assert len(compact["rows"]) == MessageHelper._MAX_RESULT_ITEMS
-    assert len(compact["rows"][0]["text"]) == MessageHelper._MAX_RESULT_TEXT
-    assert len(compact["details"]) == MessageHelper._MAX_RESULT_ITEMS
+    assert len(compact["rows"]) == TOOL_RESULT_MAX_ITEMS
+    assert len(compact["rows"][0]["text"]) == TOOL_RESULT_MAX_TEXT
+    assert len(compact["details"]) == TOOL_RESULT_MAX_ITEMS
     assert compact["deep"]["a"]["b"]["c"]["d"] == "[truncated]"

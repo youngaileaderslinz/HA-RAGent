@@ -3,7 +3,8 @@ from types import SimpleNamespace
 import voluptuous as vol
 
 from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
-from custom_components.ha_ragent.src.homeassistant.ragent import RAGent
+from custom_components.ha_ragent.src.const import RAGENT_PREFIXED_REQUIRED_TOOL_NAMES
+from custom_components.ha_ragent.src.homeassistant.helpers.conversation_retriever import ConversationRetriever
 
 
 def test_tool_metadata_uses_explicit_capability_and_schema_domains() -> None:
@@ -46,7 +47,7 @@ def test_tool_metadata_uses_a_single_schema_action_without_reading_tool_name() -
 
 def test_runtime_converted_tool_keeps_canonical_metadata(monkeypatch) -> None:
     api_tool = SimpleNamespace(
-        name="VendorStop",
+        name=RAGENT_PREFIXED_REQUIRED_TOOL_NAMES[0],
         description="Stop playback",
         parameters=object(),
         metadata={
@@ -56,12 +57,12 @@ def test_runtime_converted_tool_keeps_canonical_metadata(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
-        "custom_components.ha_ragent.src.homeassistant.ragent.to_openapi",
+        "custom_components.ha_ragent.src.homeassistant.helpers.conversation_retriever.to_openapi",
         lambda *_args, **_kwargs: {"properties": {}},
     )
-    agent = RAGent.__new__(RAGent)
-
-    converted = agent._convert_api_tool(api_tool, SimpleNamespace(custom_serializer=None))
+    converted, = ConversationRetriever._required_tools(
+        SimpleNamespace(tools=[api_tool], custom_serializer=None),
+    )
 
     assert converted.canonical_action == "stop"
     assert converted.canonical_supported_domains == ("media_player",)

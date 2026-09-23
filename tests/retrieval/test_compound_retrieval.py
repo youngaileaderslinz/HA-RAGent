@@ -2,21 +2,16 @@
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import Mock
 
 import pytest
 import voluptuous as vol
 
-from custom_components.ha_ragent.src.const import (
-    CONF_RETRIEVAL_METHOD,
-    RAGENT_MAX_SEARCH_QUERIES,
-)
-from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
+from custom_components.ha_ragent.src.homeassistant.helpers.tool_ranker import ToolRanker
+from custom_components.ha_ragent.src.const import RAGENT_MAX_SEARCH_QUERIES
 from custom_components.ha_ragent.src.homeassistant.tools.search_tools import RAGentSemanticSearchTool
-from custom_components.ha_ragent.src.models.embedding.device import Device
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
-from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
 from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 
@@ -27,13 +22,22 @@ def test_action_compatibility_uses_metadata_not_word_order():
         metadata=ToolMetadata(canonical_action="stop", supported_domains=("media_player",)),
     )
     capability = {"action": "stop", "domain": "media_player"}
-    first = RetrievalHelper.tool_ranking_signals(
+    first = ToolRanker.tool_ranking_signals(
         tool, "stop the player", requested_capability=capability,
     )
-    reordered = RetrievalHelper.tool_ranking_signals(
+    reordered = ToolRanker.tool_ranking_signals(
         tool, "player the stop", requested_capability=capability,
     )
     assert first["capability"] == reordered["capability"] == 1.5
+
+
+def test_semantic_rank_is_not_added_to_tool_score():
+    signals = {
+        "semantic_rank": 1.0,
+        "semantic_similarity": 0.8,
+    }
+
+    assert ToolRanker.tool_signal_score(signals) == pytest.approx(0.8)
 
 
 def test_merge_advances_past_duplicates_to_preserve_each_query():

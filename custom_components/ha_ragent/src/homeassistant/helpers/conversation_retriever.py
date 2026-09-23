@@ -73,7 +73,7 @@ class ConversationRetriever:
                 f"devices_{self.subentry_id}", embedding, candidate_limit, query=query,
             )
         except Exception as err:
-            _logger.log_string(level=logging.ERROR, message=f"Error retrieving devices from vector DB: {err}")
+            _logger.log_string(logging.ERROR, f"Error retrieving devices from vector DB: {err}")
             return []
 
         def identity(device: Device) -> float:
@@ -244,7 +244,7 @@ class ConversationRetriever:
                 query=query,
             )
         except Exception as err:
-            _logger.log_string(level=logging.ERROR, message=f"Error retrieving tools from vector DB: {err}")
+            _logger.log_string(logging.ERROR, f"Error retrieving tools from vector DB: {err}")
             return required_tools
 
         required = set(RAGENT_PREFIXED_REQUIRED_TOOL_NAMES)
@@ -312,5 +312,5 @@ class ConversationRetriever:
                 embedding, minimum, maximum,
             )
         except Exception as err:
-            _logger.log_string(level=logging.ERROR, message=f"Error retrieving memories from vector DB: {err}")
+            _logger.log_string(logging.ERROR, f"Error retrieving memories from vector DB: {err}")
             return []

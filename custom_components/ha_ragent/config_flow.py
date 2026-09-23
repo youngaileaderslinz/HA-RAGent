@@ -131,7 +131,7 @@ class RagentConfigFlow(ConfigFlow, domain=DOMAIN):
                     connect_err = await llm_backend_to_class(self.client_config.get(CONF_LLM_BACKEND_TYPE)).async_validate_connection(self.hass, self.client_config)
 
                 if connect_err:
-                    errors["base"] = f"failed_to_connect"
+                    errors["base"] = "failed_to_connect"
                     description_placeholders["exception"] = str(connect_err)
                 else:
                     return await self._step_finish_async(user_input)

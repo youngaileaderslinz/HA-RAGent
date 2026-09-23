@@ -108,7 +108,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         try:
             embedding = await self.entry.embedder_backend.async_embed_text(dict(self.subentry.data), retrieval_text)
         except Exception as err:
-            _logger.log_string(level=logging.ERROR, message=f"Error embedding retrieval query: {err}")
+            _logger.log_string(logging.ERROR, f"Error embedding retrieval query: {err}")
             return None
 
         return embedding or None
@@ -186,7 +186,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
 
             return rendered_prompt
         except Exception as err:
-            _logger.log_string(level=logging.ERROR, msg=f"Error rendering prompt: {err}")
+            _logger.log_string(logging.ERROR, f"Error rendering prompt: {err}")
             return None
 
     @staticmethod
@@ -362,7 +362,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     executed_signatures_in_iteration.add(call_signature)
 
                     if not llm_api:
-                        _logger.log_string(level=logging.INFO, message=f"LLM API not available, skipping tool execution for tool: {tool_name}")
+                        _logger.log_string(logging.INFO, f"LLM API not available, skipping tool execution for tool: {tool_name}")
                         history_manager.append_message(
                             MessageHelper.create_tool_failure_message(
                                 agent_id=user_input.agent_id,
@@ -405,7 +405,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                 )
                             )
                         except Exception as tool_err:
-                            _logger.log_string(level=logging.ERROR, message=f"Error executing tool {tool_name}: {tool_err}")
+                            _logger.log_string(logging.ERROR, f"Error executing tool {tool_name}: {tool_err}")
                             tool_result_msg = MessageHelper.create_tool_failure_message(
                                 agent_id=user_input.agent_id,
                                 tool_call_id=tool_call.id,
@@ -416,7 +416,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                             failed_signatures.add(call_signature)
 
             except Exception as err:
-                _logger.log_string(level=logging.ERROR, message=f"There was a problem talking to the backend: {err}")
+                _logger.log_string(logging.ERROR, f"There was a problem talking to the backend: {err}")
                 intent_response = intent.IntentResponse(language=user_input.language)
                 intent_response.async_set_error(intent.IntentResponseErrorCode.FAILED_TO_HANDLE, self.entry.translations.error(TRANSLATION_ERROR_BACKEND))
                 return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
@@ -478,7 +478,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                         llm_api.set_conversation_agent_id(user_input.agent_id)
                         llm_api.set_search_scope(self.entry_id,self.subentry_id)
                 except HomeAssistantError as err:
-                    _logger.log_string(level=logging.ERROR, message=f"Error getting LLM API: {err}")
+                    _logger.log_string(logging.ERROR, f"Error getting LLM API: {err}")
                     intent_response = intent.IntentResponse(language=user_input.language)
                     intent_response.async_set_error(intent.IntentResponseErrorCode.UNKNOWN, self.entry.translations.error(TRANSLATION_ERROR_LLM_API))
                     return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
@@ -671,7 +671,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 timing_logger.log_timed_string(level=logging.DEBUG, message="Model and tool processing")
                 return result
         except Exception as err:
-            _logger.log_string(level=logging.ERROR, message=f"Unexpected error in async_process: {err}")
+            _logger.log_string(logging.ERROR, f"Unexpected error in async_process: {err}")
             intent_response = intent.IntentResponse(language=user_input.language)
             intent_response.async_set_error(intent.IntentResponseErrorCode.FAILED_TO_HANDLE, self.entry.translations.error(TRANSLATION_ERROR_UNEXPECTED))
             return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)

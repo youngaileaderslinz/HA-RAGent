@@ -1,5 +1,8 @@
 from types import SimpleNamespace
 
+from custom_components.ha_ragent.src.homeassistant.helpers.source_ranker import SourceRanker
+from custom_components.ha_ragent.src.homeassistant.helpers.tool_ranker import ToolRanker
+from custom_components.ha_ragent.src.homeassistant.helpers.history_retriever import HistoryRetriever
 from custom_components.ha_ragent.src.const import (
     CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
     CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
@@ -8,7 +11,6 @@ from custom_components.ha_ragent.src.homeassistant.helpers.history_manager impor
     HistoryManager,
     conversation,
 )
-from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
 from custom_components.ha_ragent.src.models.embedding.device import Device
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
@@ -116,11 +118,11 @@ def test_success_entity_and_capability_survive_the_next_related_turn() -> None:
         conversation.UserContent(content="do that again"),
     ])
     context = manager.structured_turn_contexts(chat_log)[0]
-    continuity = RetrievalHelper.build_continuity_context([(context, 1.0)])
+    continuity = HistoryRetriever.build_continuity_context([(context, 1.0)])
     confirmed = Device("media_player.living", "Living room player", "Living room", "")
     wrong = Device("timer.living", "Living room timer", "Living room", "")
 
-    devices = RetrievalHelper.rank_scored_candidates(
+    devices = SourceRanker.rank_scored_candidates(
         [ScoredResult(wrong, 0.99, 1)],
         [wrong, confirmed],
         "do that again",
@@ -137,14 +139,13 @@ def test_success_entity_and_capability_survive_the_next_related_turn() -> None:
         "VendorTimerStop", "",
         metadata=ToolMetadata(canonical_action="stop", supported_domains=("timer",)),
     )
-    tools = RetrievalHelper.rank_tool_candidates(
+    tools = ToolRanker.rank_tool_candidates(
         [], [timer, stop], "", devices, 2,
-        continuity_score=continuity.tool_score,
         requested_capability={"action": "stop", "domain": "media_player"},
     )
 
     assert devices == [confirmed]
-    assert tools == [stop]
+    assert tools == [stop, timer]
 
 
 def test_prompt_history_uses_selected_semantic_turns() -> None:
@@ -323,7 +324,7 @@ def test_unresolved_targets_and_requested_action_survive_structurally() -> None:
     ])
 
     context = manager.structured_turn_contexts(chat_log)[0]
-    continuity = RetrievalHelper.build_continuity_context([(context, 1.0)])
+    continuity = HistoryRetriever.build_continuity_context([(context, 1.0)])
     unresolved = Device(
         "switch.bedroom_heater", "Heater", "Bedroom", "", domain=["switch"],
     )

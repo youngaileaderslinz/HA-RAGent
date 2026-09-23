@@ -1,27 +1,19 @@
 import asyncio
-import json
 import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from custom_components.ha_ragent.src import const
-from custom_components.ha_ragent.src.const import (
-    CONF_RETRIEVAL_METHOD,
-    RETRIEVAL_METHOD_AUTOMATIC,
-    RETRIEVAL_METHOD_LEXICAL,
-    RETRIEVAL_METHOD_VECTOR,
-)
-from custom_components.ha_ragent.src.homeassistant.ragent import RAGent
-from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
+from custom_components.ha_ragent.src.homeassistant.helpers.source_ranker import SourceRanker
+from custom_components.ha_ragent.src.homeassistant.helpers.tool_ranker import ToolRanker
+from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_confidence import RetrievalConfidence
+from custom_components.ha_ragent.src.const import RETRIEVAL_METHOD_AUTOMATIC
+from custom_components.ha_ragent.src.homeassistant.helpers.conversation_retriever import ConversationRetriever
 from custom_components.ha_ragent.src.models.embedding.device import Device
-from custom_components.ha_ragent.src.models.retrieval.continuity_context import ContinuityContext
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.retrieval.lexical_index import lexical_index
-from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
-from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
-from custom_components.ha_ragent.src.homeassistant.ragent_api import RAGentAugmentedAPIInstance
+from custom_components.ha_ragent.src.models.retrieval.confidence_assessment import ConfidenceAssessment
 from custom_components.ha_ragent.src.homeassistant.tools.search_tools import RAGentSemanticSearchTool
 
 
@@ -30,8 +22,8 @@ def test_short_substrings_are_retrievable_without_identity_confidence(query, nam
     tools = [LlmTool("unrelated", "zzz"), LlmTool("target", name)]
     index = lexical_index((("zzz",), (name,)))
     assert index.scores(query)[1] > index.scores(query)[0]
-    assert RetrievalHelper.rank_tool_candidates([], tools, query, [], 1) == [tools[1]]
-    assert not RetrievalHelper.local_candidates_confident(query, tools)
+    assert ToolRanker.rank_tool_candidates([], tools, query, [], 1) == [tools[1]]
+    assert not SourceRanker.local_candidates_confident(query, tools)
 
 
 @pytest.mark.parametrize("query", ["", "ab", "a", "Alpha Beta", "alpha btea", "VendorMode", "厨房", "zzz"])
@@ -39,7 +31,7 @@ def test_indexed_field_scores_preserve_exhaustive_matches(query):
     documents = (("Alpha Beta", "area"), ("Beta Gamma", "area"), ("VendorMode", "xabz"), ("厨房吊灯",))
     indexed = lexical_index(documents).match_scores(query)
     for position, parts in enumerate(documents):
-        assert indexed.get(position, (0.0, 0.0)) == RetrievalHelper._match_scores(query, parts)
+        assert indexed.get(position, (0.0, 0.0)) == SourceRanker.match_scores(query, parts)
 
 
 def test_nested_schema_edits_refresh_cached_features():
@@ -50,14 +42,55 @@ def test_nested_schema_edits_refresh_cached_features():
     tool.parameters["properties"]["domain"]["enum"][:] = ["beta"]
     assert tool.canonical_supported_domains == ("beta",)
     assert tool.canonical_schema_parts != first
-    assert "choices beta" in tool.canonical_schema_parts
+    assert "beta" in tool.canonical_schema_parts
+
+
+def test_local_schema_references_and_deep_custom_fields_are_indexed_fairly():
+    tool = LlmTool("Vendor", "", parameters={
+        "$defs": {"profile": {"type": "string", "enum": ["hydroponics"]}},
+        "properties": {
+            "mode": {"$ref": "#/$defs/profile"},
+            "other": {"properties": {"a": {"properties": {"b": {"properties": {"c": {"enum": ["deep-value"]}}}}}}},
+        },
+    })
+    parts = " ".join(tool.canonical_schema_parts)
+    assert "hydroponics" in parts
+    assert "deep-value" in parts
+
+
+def test_tool_pruning_uses_calibrated_confidence_not_raw_rrf_scale():
+    confidence = ConfidenceAssessment(
+        level="high",
+        candidate_scores=(("first", 1.0), ("second", 0.98)),
+        final_candidate_scores=(("first", 0.0492), ("second", 0.0484)),
+    )
+    assert RetrievalConfidence.prune_confidence_band(
+        confidence, 2, absolute_floor=0.20, relative_floor=0.60, gap_threshold=0.11,
+    ) == ["first", "second"]
+
+
+def test_inferred_domain_does_not_exclude_custom_tool():
+    custom = LlmTool("VendorDomainSetting", "Calibrate irrigation", parameters={
+        "properties": {"domain": {"enum": ["configuration"]}},
+    })
+    assert ToolRanker.tool_capability_compatibility(
+        custom, {"action": "calibrate", "domain": "light"},
+    ) == 0.0
+
+
+def test_fallback_search_query_contains_only_user_text_and_literal_metadata():
+    assert RAGentSemanticSearchTool._build_search_query(
+        latest_request="Allume la lampe",
+        area="Cuisine",
+        floor="Rez-de-chaussée",
+    ) == "Allume la lampe\nCuisine\nRez-de-chaussée"
 
 
 def test_tool_schema_is_prepared_once_for_repeated_ranking(monkeypatch):
     tool = LlmTool("Vendor", "Execute", parameters={"properties": {"mode": {"type": "string"}}})
-    RetrievalHelper.rank_tool_candidates([], [tool], "execute", [], 1)
+    ToolRanker.rank_tool_candidates([], [tool], "execute", [], 1)
     monkeypatch.setattr(LlmTool, "_schema_search_parts", lambda *_args: pytest.fail("Unchanged schema was rebuilt"))
-    assert RetrievalHelper.rank_tool_candidates([], [tool], "mode", [], 1) == [tool]
+    assert ToolRanker.rank_tool_candidates([], [tool], "mode", [], 1) == [tool]
 
 
 def test_request_ranking_runs_outside_event_loop(monkeypatch):
@@ -66,27 +99,20 @@ def test_request_ranking_runs_outside_event_loop(monkeypatch):
     def rank(*_args, **_kwargs):
         assert threading.get_ident() != event_loop_thread
         return [tool]
-    monkeypatch.setattr(RetrievalHelper, "rank_tool_candidates", rank)
-    backend = SimpleNamespace(async_get_lexical_objects=AsyncMock(return_value=[tool]))
-    agent = SimpleNamespace(
-        entry=SimpleNamespace(options={}, vector_db_backend=backend),
-        subentry=SimpleNamespace(data={CONF_RETRIEVAL_METHOD: "lexical"}),
-        subentry_id="agent",
+    monkeypatch.setattr(ToolRanker, "rank_tool_candidates", rank)
+    entry = SimpleNamespace(
+        options={},
+        vector_db_backend=SimpleNamespace(
+            async_get_lexical_objects=AsyncMock(return_value=[tool]),
+        ),
     )
-    assert asyncio.run(RAGent._async_retrieve_tools(agent, [], "capability", 1, ContinuityContext())) == [tool]
-
-
-def test_initial_capabilities_remain_available_without_semantic_search() -> None:
-    search = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
-    search._requested_capabilities = []
-    api = RAGentAugmentedAPIInstance.__new__(RAGentAugmentedAPIInstance)
-    api.tools = [search]
-    api._initial_requested_capabilities = []
-
-    api.set_request_capabilities([
-        {"action": "turn_on", "domains": ("switch",)},
-    ])
-
-    assert api.requested_capabilities() == [
-        {"action": "turn_on", "domains": ("switch",)},
-    ]
+    retriever = ConversationRetriever(
+        None, entry, "entry", "subentry", SimpleNamespace(data={}),
+    )
+    assert asyncio.run(retriever.async_retrieve_tools(
+        [],
+        "capability",
+        minimum=1,
+        maximum=1,
+        retrieval_method=RETRIEVAL_METHOD_AUTOMATIC,
+    )) == [tool]

@@ -290,7 +290,7 @@ class RAGentSemanticSearchTool(llm.Tool):
         try:
             return await entry.embedder_backend.async_embed_text(dict(subentry.data), query) or []
         except Exception as err:
-            _logger.log_string(level=logging.ERROR, message=f"Search embedding failed: {err}")
+            _logger.log_string(logging.ERROR, f"Search embedding failed: {err}")
             return []
 
     def _shared_query_embedding(

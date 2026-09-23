@@ -105,20 +105,20 @@ class OpenAiEmbedder(ABaseEmbedder):
                 is_tool_model=None
             )
         except Exception as ex:
-            _logger.log_string(level=logging.ERROR, message=f"Error retrieving model info for {model_name}: {ex}")
+            _logger.log_string(logging.ERROR, f"Error retrieving model info for {model_name}: {ex}")
             raise
 
     async def async_preload_model(self, config_subentry: dict) -> None:
-        _logger.log_string(level=logging.INFO, message="Preloading not supported for OpenAI Compatible Embedder backend.")
+        _logger.log_string(logging.INFO, "Preloading not supported for OpenAI Compatible Embedder backend.")
 
     async def async_unload_model(self, config_subentry: dict) -> None:
-        _logger.log_string(level=logging.INFO, message="Unloading not supported for OpenAI Compatible Embedder backend.")
+        _logger.log_string(logging.INFO, "Unloading not supported for OpenAI Compatible Embedder backend.")
 
     async def async_close(self) -> None:
         if self._client is not None:
             await self._client.close()
             self._client = None
-        _logger.log_string(level=logging.INFO, message="Closed OpenAI-compatible embedding client.")
+        _logger.log_string(logging.INFO, "Closed OpenAI-compatible embedding client.")
 
     async def async_get_available_models(self) -> List[str]:
         client = await self._async_get_client()
@@ -144,7 +144,7 @@ class OpenAiEmbedder(ABaseEmbedder):
             except Exception as err:
                 if not self._is_context_length_error(err) or attempt == RAGENT_EMBEDDING_TRUNCATE_RETRIES:
                     raise
-                _logger.log_string(level=logging.WARNING, message=f"Embedding input is too large. Retrying with inputs limited to {max_chars} characters.")
+                _logger.log_string(logging.WARNING, f"Embedding input is too large. Retrying with inputs limited to {max_chars} characters.")
 
         # OpenAI-compatible embedding responses contain
         # an index for every input. Sort explicitly instead
