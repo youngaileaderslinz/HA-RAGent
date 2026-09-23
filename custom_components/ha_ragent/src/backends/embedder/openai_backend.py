@@ -1,5 +1,6 @@
 from functools import partial
 import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any, Dict, List
 from openai import AsyncOpenAI, InternalServerError
 
@@ -22,8 +23,9 @@ from custom_components.ha_ragent.src.models.model_info import ModelInfo
 from custom_components.ha_ragent.src.models.base.embeddable_model import EmbeddableModel
 from custom_components.ha_ragent.src.models.base.embedding_record import EmbeddingRecord
 from custom_components.ha_ragent.src.backends.embedder.base_backend import ABaseEmbedder
+from custom_components.ha_ragent.src.translation import RAGentTranslations
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
     
 class OpenAiEmbedder(ABaseEmbedder):
     def __init__(self, hass: HomeAssistant, client_options: dict[str, Any]):
@@ -103,14 +105,20 @@ class OpenAiEmbedder(ABaseEmbedder):
                 is_tool_model=None
             )
         except Exception as ex:
-            _logger.error(f"Error retrieving model info for {model_name}: {ex}", exc_info=True)
+            _logger.log_string(logging.ERROR, f"Error retrieving model info for {model_name}: {ex}")
             raise
 
     async def async_preload_model(self, config_subentry: dict) -> None:
-        _logger.info("Preloading not supported for OpenAI Compatible Embedder backend.")
+        _logger.log_string(logging.INFO, "Preloading not supported for OpenAI Compatible Embedder backend.")
 
     async def async_unload_model(self, config_subentry: dict) -> None:
-        _logger.info("Unloading not supported for OpenAI Compatible Embedder backend.")
+        _logger.log_string(logging.INFO, "Unloading not supported for OpenAI Compatible Embedder backend.")
+
+    async def async_close(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
+        _logger.log_string(logging.INFO, "Closed OpenAI-compatible embedding client.")
 
     async def async_get_available_models(self) -> List[str]:
         client = await self._async_get_client()
@@ -136,9 +144,7 @@ class OpenAiEmbedder(ABaseEmbedder):
             except Exception as err:
                 if not self._is_context_length_error(err) or attempt == RAGENT_EMBEDDING_TRUNCATE_RETRIES:
                     raise
-
-                max_chars //= 2
-                _logger.warning(f"Embedding input is too large. Retrying with inputs limited to {max_chars} characters.")
+                _logger.log_string(logging.WARNING, f"Embedding input is too large. Retrying with inputs limited to {max_chars} characters.")
 
         # OpenAI-compatible embedding responses contain
         # an index for every input. Sort explicitly instead
@@ -150,14 +156,14 @@ class OpenAiEmbedder(ABaseEmbedder):
         embeddings = await self._async_embed_batch(config_subentry, [text])
         return embeddings[0] if embeddings else []
 
-    async def async_embed_object(self, config_subentry: dict, objects: List[EmbeddableModel]) -> List[EmbeddingRecord]:
+    async def async_embed_object(self, config_subentry: dict, objects: List[EmbeddableModel], translations: RAGentTranslations | None = None) -> List[EmbeddingRecord]:
         if not objects:
             return []
 
         object_embeddings: List[EmbeddingRecord] = []
         for i in range(0, len(objects), RAGENT_EMBEDDING_BATCH_SIZE):
             chunk = objects[i:i + RAGENT_EMBEDDING_BATCH_SIZE]
-            texts = [obj.to_embedding_text() for obj in chunk]
+            texts = [obj.to_embedding_text(translations) for obj in chunk]
             vectors = await self._async_embed_batch(config_subentry, texts)
             object_embeddings.extend(self.build_embedding_records(chunk, vectors))
         return object_embeddings

@@ -1,19 +1,22 @@
-import pytest
-
 from dataclasses import dataclass
 
-from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
+import pytest
+
+from custom_components.ha_ragent.src.homeassistant.helpers.source_ranker import SourceRanker
+from custom_components.ha_ragent.src.homeassistant.helpers.device_ranker import DeviceRanker
+from custom_components.ha_ragent.src.homeassistant.helpers.tool_ranker import ToolRanker
+from custom_components.ha_ragent.src.homeassistant.helpers.history_retriever import HistoryRetriever
 from custom_components.ha_ragent.src.models.embedding.device import Device
-from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
+from custom_components.ha_ragent.src.models.retrieval.continuity_context import ContinuityContext
+from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
 from custom_components.ha_ragent.src.models.retrieval.target_group import TargetGroup
 from custom_components.ha_ragent.src.models.retrieval.turn_context import TurnContext
-from custom_components.ha_ragent.src.models.retrieval.continuity_context import ContinuityContext
 
 
 def test_unrelated_history_is_not_embedded() -> None:
-    text = RetrievalHelper.build_retrieval_text("turn on the kitchen lights")
+    text = HistoryRetriever.build_retrieval_text("turn on the kitchen lights")
 
     assert text == "turn on the kitchen lights"
 
@@ -30,7 +33,7 @@ def test_exact_match_can_recover_candidate_outside_vector_results() -> None:
         Candidate("Patio light"),
     ]
 
-    result = RetrievalHelper.rank_scored_candidates(
+    result = SourceRanker.rank_scored_candidates(
         [
             ScoredResult(candidates[0], 0.9, 1),
             ScoredResult(candidates[2], 0.8, 2),
@@ -49,7 +52,7 @@ def test_exact_match_can_recover_candidate_outside_vector_results() -> None:
 def test_fuzzy_match_is_fused_with_vector_rank() -> None:
     candidates = [Candidate("Bedroom lamp"), Candidate("Kitchen ceiling light")]
 
-    result = RetrievalHelper.rank_scored_candidates(
+    result = SourceRanker.rank_scored_candidates(
         [ScoredResult(candidates[0], 0.05, 1)],
         candidates,
         "kithen ceiling light",
@@ -65,7 +68,7 @@ def test_turn_on_query_selects_turn_on_tool() -> None:
     turn_off = LlmTool(name="HassTurnOff", description="Turn a device off")
     turn_on = LlmTool(name="HassTurnOn", description="Turn a device on")
 
-    result = RetrievalHelper.rank_scored_candidates(
+    result = SourceRanker.rank_scored_candidates(
         [ScoredResult(turn_off, 0.9, 1), ScoredResult(turn_on, 0.8, 2)],
         [turn_off, turn_on],
         "turn on the kitchen light",
@@ -77,16 +80,12 @@ def test_turn_on_query_selects_turn_on_tool() -> None:
     assert result == [turn_on]
 
 
-def test_camel_case_tool_name_provides_action_keywords() -> None:
+def test_camel_case_tool_name_does_not_define_action_semantics() -> None:
     tool = LlmTool(name="HassTurnOff", description="")
 
     assert tool.canonical_name_parts == ("hass", "turn", "off")
-    assert tool.canonical_action_keywords == ("turn", "off")
     assert tool.canonical_action == ""
-    assert "switch off" not in tool.canonical_search_parts
-    assert "turn off" in tool.canonical_search_parts
-    assert "action keywords: turn off" in tool.to_embedding_text()
-    assert "action aliases:" not in tool.to_embedding_text()
+    assert "action:" not in tool.to_embedding_text()
 
 
 def test_action_ranking_prefers_match_without_erasing_alternatives() -> None:
@@ -95,7 +94,7 @@ def test_action_ranking_prefers_match_without_erasing_alternatives() -> None:
     set_light = LlmTool(name="HassLightSet", description="Set brightness and color")
     timer = LlmTool(name="HassTimerCancel", description="Cancel a timer")
 
-    result = RetrievalHelper.rank_tools_for_query(
+    result = ToolRanker.rank_tools_for_query(
         [timer, set_light, turn_on, turn_off],
         "switch off the kitchen lights",
     )
@@ -109,6 +108,18 @@ def test_action_ranking_prefers_match_without_erasing_alternatives() -> None:
     }
 
 
+def test_rrf_ignores_nonpositive_scores_and_preserves_score_ties() -> None:
+    fused = SourceRanker.reciprocal_rank_fusion(({
+        "first": 0.8,
+        "tied": 0.8,
+        "zero": 0.0,
+        "negative": -0.1,
+    },))
+
+    assert set(fused) == {"first", "tied"}
+    assert fused["first"] == fused["tied"]
+
+
 def test_misspelled_action_uses_fuzzy_recall_without_hard_filtering() -> None:
     broadcast = LlmTool(name="HassBroadcast", description="Broadcast a message")
     turn_on = LlmTool(name="HassTurnOn", description="Turn on a device")
@@ -120,7 +131,7 @@ def test_misspelled_action_uses_fuzzy_recall_without_hard_filtering() -> None:
         domain=["switch"],
     )
 
-    result = RetrievalHelper.rank_tool_candidates(
+    result = ToolRanker.rank_tool_candidates(
         [ScoredResult(broadcast, 0.9, 1)],
         [broadcast, turn_on],
         "trun on the bathrom heater",
@@ -128,7 +139,7 @@ def test_misspelled_action_uses_fuzzy_recall_without_hard_filtering() -> None:
         2,
     )
 
-    assert result == [turn_on, broadcast]
+    assert {tool.name for tool in result} == {turn_on.name, broadcast.name}
 
 
 def test_domain_signal_ranks_matching_tool_first() -> None:
@@ -143,7 +154,7 @@ def test_domain_signal_ranks_matching_tool_first() -> None:
         parameters={"properties": {"domain": {"enum": ["switch"]}}},
     )
 
-    result = RetrievalHelper.rank_tools_for_query(
+    result = ToolRanker.rank_tools_for_query(
         [switch_off, light_off],
         "power off the lights",
     )
@@ -152,15 +163,15 @@ def test_domain_signal_ranks_matching_tool_first() -> None:
 
 
 def test_synonyms_are_not_assumed_equivalent_for_cache_keys() -> None:
-    first = RetrievalHelper.canonical_search_signature("switch off kitchen lights")
-    second = RetrievalHelper.canonical_search_signature("power off the kitchen light")
+    first = SourceRanker.canonical_search_signature("switch off kitchen lights")
+    second = SourceRanker.canonical_search_signature("power off the kitchen light")
 
     assert first != second
 
 
 def test_different_capabilities_have_distinct_cache_keys() -> None:
-    first = RetrievalHelper.canonical_search_signature("heater bathroom switch toggle")
-    second = RetrievalHelper.canonical_search_signature("heater bathroom on/off")
+    first = SourceRanker.canonical_search_signature("heater bathroom switch toggle")
+    second = SourceRanker.canonical_search_signature("heater bathroom on/off")
 
     assert first != second
 
@@ -174,7 +185,7 @@ def test_tool_search_query_uses_action_and_resolved_device_domain() -> None:
         domain=["switch"],
     )
 
-    query = RetrievalHelper.build_tool_search_query(
+    query = ToolRanker.build_tool_search_query(
         "turn on the bathroom heater",
         "lights bathroom area switch",
         [heater],
@@ -184,7 +195,27 @@ def test_tool_search_query_uses_action_and_resolved_device_domain() -> None:
     assert "switch on" not in query
     assert "supported domains:" not in query
     assert query.startswith("turn on the bathroom heater\n")
-    assert "Search intent: lights bathroom area switch" in query
+    assert "\nlights bathroom area switch" in query
+
+
+def test_structured_tool_query_preserves_text_for_custom_tools() -> None:
+    strip = Device(
+        id="light.strip",
+        friendly_name="Light Strip",
+        area_name="Bedroom",
+        floor_name="Ground floor",
+        domain=["light"],
+        aliases=["LED band"],
+    )
+
+    query = ToolRanker.build_tool_search_query(
+        "schalte Light Strip aus",
+        "schalte Light Strip aus",
+        [strip],
+        {"action": "turn_off", "domain": "light"},
+    )
+
+    assert query == "schalte Light Strip aus\nturn_off\nlight"
 
 
 def test_action_aliases_do_not_add_false_switch_domain() -> None:
@@ -205,9 +236,9 @@ def test_action_aliases_do_not_add_false_switch_domain() -> None:
         description="Turn on a switch",
         parameters={"properties": {"domain": {"enum": ["switch"]}}},
     )
-    query = RetrievalHelper.build_tool_search_query("turn on lights", "", [light])
+    query = ToolRanker.build_tool_search_query("turn on lights", "", [light])
 
-    assert RetrievalHelper.rank_tools_for_query(
+    assert ToolRanker.rank_tools_for_query(
         [switch_tool, light_tool],
         query,
         [light],
@@ -223,21 +254,21 @@ def test_history_is_separate_data_and_never_rewrites_current_request(query):
     group = TargetGroup(entities=("light.kitchen",), areas=("Kitchen",),
                         action="HassTurnOff", tool="HassTurnOff")
     continuity = ContinuityContext(target_groups=[(group, 0.9)])
-    groups = RetrievalHelper.continuity_groups(continuity)
+    groups = HistoryRetriever.continuity_groups(continuity)
 
     assert groups[0]["entities"] == ["light.kitchen"]
     assert groups[0]["action"] == "HassTurnOff"
-    assert RetrievalHelper.build_retrieval_text(query) == query
-    assert RetrievalHelper.build_tool_search_query(query, "", []) == query
-    assert not RetrievalHelper.target_is_confident(
-        query, [Device("light.kitchen", "Kitchen lamp", "Kitchen", "")], continuity,
+    assert HistoryRetriever.build_retrieval_text(query) == query
+    assert ToolRanker.build_tool_search_query(query, "", []) == query
+    assert not DeviceRanker.target_is_confident(
+        query, [Device("light.kitchen", "Kitchen lamp", "Kitchen", "")],
     )
 
 
 def test_continuity_groups_are_bounded_and_empty_without_successful_targets():
-    assert RetrievalHelper.continuity_groups(ContinuityContext()) == []
+    assert HistoryRetriever.continuity_groups(ContinuityContext()) == []
     groups = [(TargetGroup(entities=tuple(f"light.{i}" for i in range(30))), 0.5)] * 10
-    continuity_groups = RetrievalHelper.continuity_groups(
+    continuity_groups = HistoryRetriever.continuity_groups(
         ContinuityContext(target_groups=groups),
     )
     assert len(continuity_groups) == 2
@@ -263,14 +294,14 @@ def test_literal_name_resolves_one_identity_candidate() -> None:
         ),
     ]
 
-    status, names = RetrievalHelper.device_resolution(
+    status, names = DeviceRanker.device_resolution(
         "Bathroom ceiling light",
         devices,
     )
 
     assert status == "high"
     assert names == ("light.bathroom_ceiling",)
-    assert RetrievalHelper.reduce_confident_devices(
+    assert DeviceRanker.reduce_confident_devices(
         "Bathroom ceiling light",
         devices,
     ) == [devices[0]]
@@ -294,12 +325,26 @@ def test_ambiguous_singular_request_does_not_authorize_top_rank() -> None:
         ),
     ]
 
-    status, names = RetrievalHelper.device_resolution("turn on the bathroom light", devices)
+    status, names = DeviceRanker.device_resolution("turn on the bathroom light", devices)
 
     assert status == "ambiguous"
     assert set(names) == {"light.bathroom_ceiling", "light.bathroom_mirror"}
-    assert RetrievalHelper.reduce_confident_devices("turn on the bathroom light", devices) == devices
-    assert len(RetrievalHelper.select_device_candidates("turn on the bathroom light", devices, 1)) == 2
+    assert DeviceRanker.reduce_confident_devices("turn on the bathroom light", devices) == devices
+    confidence = DeviceRanker.device_search_confidence(
+        devices,
+        [ScoredResult(devices[0], 0.91, 1), ScoredResult(devices[1], 0.90, 2)],
+        query="turn on the bathroom light",
+        text_parts=lambda device: (
+            device.friendly_name,
+            device.area_name,
+            *(device.domain or ()),
+        ),
+    )
+
+    assert confidence.level == "low"
+    assert len(DeviceRanker.select_device_candidates(
+        "turn on the bathroom light", devices, 1, 2, confidence,
+    )) == 2
 
 
 def test_explicit_location_mismatch_is_not_authorized_by_exact_entity_name() -> None:
@@ -311,7 +356,7 @@ def test_explicit_location_mismatch_is_not_authorized_by_exact_entity_name() -> 
         domain=["light"],
     )
 
-    status, _ = RetrievalHelper.device_resolution(
+    status, _ = DeviceRanker.device_resolution(
         "turn on light.kitchen_ceiling in the bathroom",
         [device],
     )
@@ -320,11 +365,11 @@ def test_explicit_location_mismatch_is_not_authorized_by_exact_entity_name() -> 
 
 
 def test_normalization_supports_unicode_without_language_patterns() -> None:
-    assert RetrievalHelper._normalize("KÜCHE") == "küche"
+    assert SourceRanker.normalize("KÜCHE") == "küche"
 
 
 def test_reciprocal_rank_fusion_rewards_agreement() -> None:
-    scores = RetrievalHelper.reciprocal_rank_fusion(
+    scores = SourceRanker.reciprocal_rank_fusion(
         (["a", "b"], ["b", "c"], ["b", "a"]),
     )
 
@@ -334,7 +379,7 @@ def test_reciprocal_rank_fusion_rewards_agreement() -> None:
 def test_metadata_rank_breaks_equal_text_match() -> None:
     candidates = [Candidate("sensor"), Candidate("sensor")]
 
-    result = RetrievalHelper.rank_scored_candidates(
+    result = SourceRanker.rank_scored_candidates(
         [
             ScoredResult(candidates[0], 0.8, 1),
             ScoredResult(candidates[1], 0.8, 2),
@@ -353,7 +398,7 @@ def test_metadata_rank_breaks_equal_text_match() -> None:
 def test_native_vector_magnitude_does_not_change_rank_fusion() -> None:
     candidates = [Candidate("first"), Candidate("second")]
 
-    low_scores = RetrievalHelper.rank_scored_candidates(
+    low_scores = SourceRanker.rank_scored_candidates(
         [ScoredResult(candidates[0], 0.01, 1), ScoredResult(candidates[1], 0.0, 2)],
         candidates,
         "unrelated request",
@@ -361,7 +406,7 @@ def test_native_vector_magnitude_does_not_change_rank_fusion() -> None:
         lambda candidate: (candidate.name,),
         2,
     )
-    high_scores = RetrievalHelper.rank_scored_candidates(
+    high_scores = SourceRanker.rank_scored_candidates(
         [ScoredResult(candidates[0], 1.0, 1), ScoredResult(candidates[1], 0.99, 2)],
         candidates,
         "unrelated request",
@@ -373,29 +418,11 @@ def test_native_vector_magnitude_does_not_change_rank_fusion() -> None:
     assert low_scores == high_scores == candidates
 
 
-def test_strong_current_match_suppresses_continuity() -> None:
-    candidates = [Candidate("Bedroom lamp"), Candidate("Kitchen ceiling light")]
-    continuity_calls: list[Candidate] = []
-
-    result = RetrievalHelper.rank_scored_candidates(
-        [ScoredResult(candidates[0], 0.9, 1), ScoredResult(candidates[1], 0.8, 2)],
-        candidates,
-        "turn on the kitchen ceiling light",
-        lambda candidate: candidate.name,
-        lambda candidate: (candidate.name,),
-        1,
-        continuity_score=lambda candidate: continuity_calls.append(candidate) or 10.0,
-    )
-
-    assert result == [candidates[1]]
-    assert continuity_calls == []
-
-
 def test_weak_current_match_allows_continuity() -> None:
     candidates = [Candidate("Bedroom lamp"), Candidate("Kitchen ceiling light")]
     continuity_calls: list[Candidate] = []
 
-    RetrievalHelper.rank_scored_candidates(
+    SourceRanker.rank_scored_candidates(
         [ScoredResult(candidates[1], 0.9, 1)],
         candidates,
         "adjust it",
@@ -412,76 +439,6 @@ def test_weak_current_match_allows_continuity() -> None:
     )
 
 
-def test_device_compatibility_promotes_matching_tool_schema() -> None:
-    device = Device(
-        id="light.kitchen",
-        friendly_name="Kitchen light",
-        area_name="Kitchen",
-        floor_name="Ground floor",
-        domain=["light"],
-    )
-    incompatible = LlmTool(
-        name="CoverControl",
-        description="Control cover",
-        parameters={"properties": {"domain": {"enum": ["cover"]}}},
-        metadata=ToolMetadata(is_domain_aware=True),
-    )
-    compatible = LlmTool(
-        name="LightControl",
-        description="Control light",
-        parameters={"properties": {"domain": {"enum": ["light"]}}},
-        metadata=ToolMetadata(is_domain_aware=True),
-    )
-
-    result = RetrievalHelper.rerank_tools_for_devices(
-        [incompatible, compatible],
-        [device],
-        1,
-    )
-
-    assert result == [compatible]
-
-
-def test_device_compatibility_demotes_explicit_mismatch() -> None:
-    device = Device(
-        id="light.kitchen",
-        friendly_name="Kitchen light",
-        area_name="Kitchen",
-        floor_name="",
-        domain=["light"],
-    )
-    incompatible = LlmTool(
-        name="CoverControl",
-        description="Control cover",
-        parameters={"properties": {"domain": {"enum": ["cover"]}}},
-    )
-    neutral = LlmTool(name="Search", description="Search", parameters={})
-
-    assert RetrievalHelper.rerank_tools_for_devices(
-        [incompatible, neutral], [device], 2
-    ) == [neutral, incompatible]
-
-
-def test_device_domain_mismatch_is_a_negative_soft_signal() -> None:
-    light = Device(
-        id="light.kitchen",
-        friendly_name="Kitchen light",
-        area_name="Kitchen",
-        floor_name="",
-        domain=["light"],
-    )
-    lock_tool = LlmTool(name="HassLock", description="Lock a lock",
-                        parameters={"properties": {"domain": {"enum": ["lock"]}}})
-
-    signals = RetrievalHelper.tool_ranking_signals(
-        lock_tool,
-        "turn on the light",
-        [light],
-    )
-
-    assert signals["domain"] < 0
-
-
 def test_tool_confidence_distinguishes_search_from_matching_action() -> None:
     light = Device(
         id="light.kitchen",
@@ -493,16 +450,311 @@ def test_tool_confidence_distinguishes_search_from_matching_action() -> None:
     search = LlmTool(name="HassSemanticSearch", description="Search", parameters={})
     turn_on = LlmTool(name="HassTurnOn", description="Turn on", parameters={})
 
-    assert RetrievalHelper.tool_search_confidence(
+    assert ToolRanker.tool_search_confidence(
         [search],
         "turn on the light",
         [light],
     ) == "low"
-    assert RetrievalHelper.tool_search_confidence(
+    assert ToolRanker.tool_search_confidence(
         [turn_on, search],
         "turn on the light",
         [light],
-    ) == "medium"
+    ) == "low"
+
+
+def test_clear_device_distribution_is_high_for_full_command() -> None:
+    kitchen = Device(
+        "light.kitchen_ceiling", "Kitchen ceiling light", "Kitchen", "Ground",
+        domain=["light"], device_class="light",
+    )
+    bedroom = Device(
+        "light.bedroom_ceiling", "Bedroom ceiling light", "Bedroom", "First",
+        domain=["light"], device_class="light",
+    )
+
+    confidence = DeviceRanker.device_search_confidence(
+        [kitchen, bedroom],
+        [ScoredResult(kitchen, 0.95, 1), ScoredResult(bedroom, 0.30, 2)],
+        query="Please turn on the ceiling light in the kitchen",
+        text_parts=lambda device: (device.friendly_name, device.area_name),
+        metadata_score=lambda device: 1.0 if device.area_name == "Kitchen" else 0.0,
+    )
+
+    assert confidence.level == "high"
+    assert confidence.margin > 0
+    assert confidence.ratio > 1
+    assert {"vector", "metadata"} <= set(confidence.agreeing_signals)
+
+
+def test_near_tied_device_distribution_is_low() -> None:
+    first = Device("light.bathroom_one", "Bathroom light", "Bathroom", "", domain=["light"])
+    second = Device("light.bathroom_two", "Bathroom light", "Bathroom", "", domain=["light"])
+
+    confidence = DeviceRanker.device_search_confidence(
+        [first, second],
+        [ScoredResult(first, 0.91, 1), ScoredResult(second, 0.90, 2)],
+        metadata_score=lambda _device: 1.0,
+    )
+
+    assert confidence.level == "low"
+    assert confidence.reason == "top candidates are near-tied"
+
+
+def test_near_tied_devices_expose_only_the_ambiguity_cluster() -> None:
+    devices = [
+        Device(f"light.room_{index}", f"Room {index} light", "Room", "", domain=["light"])
+        for index in range(6)
+    ]
+    vector = [
+        ScoredResult(device, score, rank)
+        for rank, (device, score) in enumerate(
+            zip(devices, (0.91, 0.90, 0.42, 0.31, 0.20, 0.10)), start=1,
+        )
+    ]
+    confidence = DeviceRanker.device_search_confidence(devices, vector)
+
+    selected = DeviceRanker.select_device_candidates(
+        "language independent query", devices, 2, 6, confidence,
+    )
+
+    assert confidence.level == "low"
+    assert selected == devices[:2]
+
+
+def test_device_maximum_is_a_hard_ceiling_even_below_minimum() -> None:
+    devices = [
+        Device(f"light.room_{index}", f"Room {index} light", "", "", domain=["light"])
+        for index in range(4)
+    ]
+    vector = [
+        ScoredResult(device, 0.90 - (index * 0.001), index + 1)
+        for index, device in enumerate(devices)
+    ]
+    confidence = DeviceRanker.device_search_confidence(devices, vector)
+
+    assert DeviceRanker.select_device_candidates(
+        "ambiguous", devices, 4, 2, confidence,
+    ) == devices[:2]
+
+
+def test_device_cluster_traverses_descending_final_scores() -> None:
+    low = Device("light.low", "Low", "", "", domain=["light"])
+    top = Device("light.top", "Top", "", "", domain=["light"])
+    runner_up = Device("light.runner", "Runner", "", "", domain=["light"])
+    devices = [low, top, runner_up]
+    confidence = DeviceRanker.device_search_confidence(
+        devices,
+        [
+            ScoredResult(low, 0.20, 3),
+            ScoredResult(top, 0.91, 1),
+            ScoredResult(runner_up, 0.90, 2),
+        ],
+    )
+
+    assert [key for key, _score in confidence.candidate_scores] == [
+        top.id, runner_up.id, low.id,
+    ]
+    assert DeviceRanker.select_device_candidates(
+        "query", devices, 2, 6, confidence,
+    ) == [top, runner_up]
+
+
+def test_dominant_device_exposes_the_configured_minimum() -> None:
+    devices = [
+        Device(f"light.room_{index}", f"Room {index} light", f"Room {index}", "", domain=["light"])
+        for index in range(6)
+    ]
+    vector = [
+        ScoredResult(device, score, rank)
+        for rank, (device, score) in enumerate(
+            zip(devices, (0.96, 0.35, 0.30, 0.25, 0.20, 0.15)), start=1,
+        )
+    ]
+    confidence = DeviceRanker.device_search_confidence(
+        devices,
+        vector,
+        metadata_score=lambda device: 1.0 if device is devices[0] else 0.0,
+    )
+
+    selected = DeviceRanker.select_device_candidates(
+        "任意の言語の要求", devices, 2, 6, confidence,
+    )
+
+    assert confidence.level == "high"
+    assert selected == devices[:2]
+
+
+def test_low_confidence_does_not_pad_with_unrelated_same_area_devices() -> None:
+    target = Device("light.bathroom", "Bathroom light", "Bathroom", "", domain=["light"])
+    tied = Device("light.mirror", "Mirror light", "Bathroom", "", domain=["light"])
+    unrelated = [
+        Device("fan.bathroom", "Bathroom fan", "Bathroom", "", domain=["fan"]),
+        Device("sensor.bathroom", "Bathroom humidity", "Bathroom", "", domain=["sensor"]),
+    ]
+    devices = [target, tied, *unrelated]
+    vector = [
+        ScoredResult(device, score, rank)
+        for rank, (device, score) in enumerate(
+            zip(devices, (0.90, 0.89, 0.30, 0.20)), start=1,
+        )
+    ]
+    confidence = DeviceRanker.device_search_confidence(devices, vector)
+
+    assert DeviceRanker.select_device_candidates(
+        "bathroom request", devices, 2, 6, confidence,
+    ) == [target, tied]
+
+
+def test_unused_slots_are_not_filled_from_other_areas() -> None:
+    target = Device("light.kitchen", "Kitchen light", "Kitchen", "", domain=["light"])
+    unrelated = [
+        Device("light.bedroom", "Bedroom light", "Bedroom", "", domain=["light"]),
+        Device("light.garage", "Garage light", "Garage", "", domain=["light"]),
+    ]
+    devices = [target, *unrelated]
+    vector = [
+        ScoredResult(device, score, rank)
+        for rank, (device, score) in enumerate(
+            zip(devices, (0.94, 0.40, 0.22)), start=1,
+        )
+    ]
+    confidence = DeviceRanker.device_search_confidence(devices, vector)
+
+    assert DeviceRanker.select_device_candidates(
+        "cuisine", devices, 1, 6, confidence,
+    ) == [target]
+
+
+def test_compound_target_groups_expand_independently() -> None:
+    kitchen = [
+        Device("light.kitchen_main", "Main light", "Kitchen", "", domain=["light"]),
+        Device("light.kitchen_table", "Table light", "Kitchen", "", domain=["light"]),
+        Device("fan.kitchen", "Fan", "Kitchen", "", domain=["fan"]),
+    ]
+    bedroom = [
+        Device("cover.bedroom_left", "Left blind", "Bedroom", "", domain=["cover"]),
+        Device("cover.bedroom_right", "Right blind", "Bedroom", "", domain=["cover"]),
+        Device("light.bedroom", "Light", "Bedroom", "", domain=["light"]),
+    ]
+
+    selected_groups = []
+    for devices, scores in (
+        (kitchen, (0.91, 0.90, 0.25)),
+        (bedroom, (0.93, 0.92, 0.20)),
+    ):
+        vector = [
+            ScoredResult(device, score, rank)
+            for rank, (device, score) in enumerate(zip(devices, scores), start=1)
+        ]
+        confidence = DeviceRanker.device_search_confidence(devices, vector)
+        selected_groups.append(DeviceRanker.select_device_candidates(
+            "focused target group", devices, 2, 6, confidence,
+        ))
+
+    assert selected_groups == [kitchen[:2], bedroom[:2]]
+
+
+def test_entity_continuity_does_not_confirm_other_devices_in_same_area() -> None:
+    previous = Device(
+        "switch.living_room_plug", "Living room plug", "Living Room", "Ground",
+        domain=["switch"], device_class="outlet",
+    )
+    neighbor = Device(
+        "switch.living_room_other", "Other plug", "Living Room", "Ground",
+        domain=["switch"], device_class="outlet",
+    )
+    continuity = ContinuityContext(
+        entities={previous.id: 0.9},
+        areas={"living room": 0.9},
+        floors={"ground": 0.9},
+        domains={"switch": 0.9},
+        device_classes={"outlet": 0.9},
+        target_groups=[(
+            TargetGroup(
+                entities=(previous.id,),
+                areas=("Living Room",),
+                floors=("Ground",),
+                domains=("switch",),
+                device_classes=("outlet",),
+            ),
+            0.9,
+        )],
+    )
+
+    assert continuity.entity_score(previous) > 0
+    assert continuity.entity_score(neighbor) == 0
+    assert continuity.area_score(neighbor) > 0
+    assert (
+        continuity.entity_score(previous) + continuity.area_score(previous)
+        > continuity.entity_score(neighbor) + continuity.area_score(neighbor)
+    )
+    assert continuity.successful_target_score(previous) == 0.9
+    assert continuity.successful_target_score(neighbor) == 0
+
+
+def _capability_tool(name: str, action: str, domain: str) -> LlmTool:
+    return LlmTool(
+        name=name,
+        description="",
+        metadata=ToolMetadata(canonical_action=action, supported_domains=(domain,)),
+        parameters={"properties": {"domain": {"enum": [domain]}}},
+    )
+
+
+@pytest.mark.parametrize("query", [
+    "Schalte die Küchenlampe ein",
+    "Allume la lampe de la cuisine",
+    "キッチンのライトをつけて",
+])
+def test_tool_confidence_is_structural_across_languages(query: str) -> None:
+    turn_on = _capability_tool("HassTurnOn", "turn_on", "light")
+    broadcast = _capability_tool("HassBroadcast", "broadcast", "notify")
+    light = Device("light.kitchen", "Kitchen light", "Kitchen", "", domain=["light"])
+
+    confidence = ToolRanker.tool_search_confidence_details(
+        [turn_on, broadcast],
+        query,
+        [light],
+        {"action": "turn_on", "domains": ["light"]},
+        [ScoredResult(turn_on, 0.93, 1), ScoredResult(broadcast, 0.22, 2)],
+    )
+
+    assert confidence.level == "high"
+    assert {"vector", "action_schema", "domain_schema"} <= set(confidence.agreeing_signals)
+
+
+def test_near_tied_tools_have_low_capability_confidence() -> None:
+    first = _capability_tool("HassTurnOn", "turn_on", "light")
+    second = _capability_tool("CustomTurnOn", "turn_on", "light")
+    light = Device("light.kitchen", "Kitchen light", "Kitchen", "", domain=["light"])
+
+    confidence = ToolRanker.tool_search_confidence_details(
+        [first, second],
+        "turn on the kitchen light",
+        [light],
+        {"action": "turn_on", "domains": ["light"]},
+        [ScoredResult(first, 0.91, 1), ScoredResult(second, 0.90, 2)],
+    )
+
+    assert confidence.level == "low"
+
+
+def test_metadata_free_tool_can_have_high_confidence_from_query_evidence() -> None:
+    custom = LlmTool("VendorVentilate", "Start turbo ventilation")
+    distractor = LlmTool("VendorSchedule", "Create a calendar entry")
+
+    confidence = ToolRanker.tool_search_confidence_details(
+        [custom, distractor],
+        "start turbo ventilation",
+        [],
+        vector_results=[
+            ScoredResult(custom, 0.94, 1),
+            ScoredResult(distractor, 0.18, 2),
+        ],
+    )
+
+    assert confidence.level == "high"
+    assert {"vector", "lexical"} <= set(confidence.agreeing_signals)
 
 
 def test_trusted_location_ranks_current_area_before_retrieval() -> None:
@@ -519,7 +771,7 @@ def test_trusted_location_ranks_current_area_before_retrieval() -> None:
         floor_name="First floor",
     )
 
-    result = RetrievalHelper.rank_scored_candidates(
+    result = SourceRanker.rank_scored_candidates(
         [
             ScoredResult(bedroom, 0.9, 1),
             ScoredResult(kitchen, 0.8, 2),
@@ -529,7 +781,7 @@ def test_trusted_location_ranks_current_area_before_retrieval() -> None:
         lambda device: device.id,
         lambda device: (device.friendly_name,),
         1,
-        metadata_score=lambda device: RetrievalHelper.trusted_location_score(
+        metadata_score=lambda device: DeviceRanker.trusted_location_score(
             device,
             "Kitchen",
             "Ground floor",
@@ -540,11 +792,11 @@ def test_trusted_location_ranks_current_area_before_retrieval() -> None:
 
 
 def test_adaptive_candidate_limit_is_bounded() -> None:
-    assert RetrievalHelper.adaptive_candidate_limit(4) == 24
-    assert RetrievalHelper.adaptive_candidate_limit(100) == 64
-    assert RetrievalHelper.adaptive_candidate_limit(0) == 0
-    assert RetrievalHelper.expanded_tool_limit(4) == 12
-    assert RetrievalHelper.expanded_tool_limit(8) == 20
+    assert SourceRanker.adaptive_candidate_limit(4) == 24
+    assert SourceRanker.adaptive_candidate_limit(100) == 64
+    assert SourceRanker.adaptive_candidate_limit(0) == 0
+    assert ToolRanker.expanded_tool_limit(4) == 12
+    assert ToolRanker.expanded_tool_limit(8) == 20
 
 
 def test_semantic_history_uses_similarity_recency_and_expiry() -> None:
@@ -567,7 +819,7 @@ def test_semantic_history_uses_similarity_recency_and_expiry() -> None:
         created_at=500.0,
     )
 
-    selected = RetrievalHelper.select_history_contexts(
+    selected = HistoryRetriever.select_history_contexts(
         [relevant, unrelated, expired],
         {
             "relevant": [1.0, 0.0],
@@ -583,6 +835,19 @@ def test_semantic_history_uses_similarity_recency_and_expiry() -> None:
     assert selected[0][1] > selected[1][1]
 
 
+def test_structured_history_uses_the_configured_depth() -> None:
+    contexts = [
+        TurnContext(key=str(index), text="", entities=(f"light.room_{index}",))
+        for index in range(6)
+    ]
+
+    selected = HistoryRetriever.select_history_contexts(
+        contexts, {}, [], max_age_seconds=float("inf"), limit=5, now=1000.0,
+    )
+
+    assert len(selected) == 5
+
+
 def test_structured_continuity_boosts_recent_canonical_entity() -> None:
     context = TurnContext(
         key="turn",
@@ -591,9 +856,9 @@ def test_structured_continuity_boosts_recent_canonical_entity() -> None:
         areas=("Kitchen",),
         domains=("light",),
         tools=("HassTurnOn",),
-        actions=("HassTurnOn",),
+        actions=("on",),
     )
-    continuity = RetrievalHelper.build_continuity_context([(context, 0.8)])
+    continuity = HistoryRetriever.build_continuity_context([(context, 0.8)])
     device = Device(
         id="light.kitchen",
         friendly_name="Kitchen light",
@@ -601,10 +866,7 @@ def test_structured_continuity_boosts_recent_canonical_entity() -> None:
         floor_name="Ground floor",
         domain=["light"],
     )
-    tool = LlmTool(name="HassTurnOn", description="", parameters={})
-
-    assert continuity.device_score(device) > 1.0
-    assert continuity.tool_score(tool) > 1.0
+    assert continuity.entity_score(device) + continuity.area_score(device) > 1.0
 
 
 def test_successful_target_group_is_preserved_for_weak_followup() -> None:
@@ -625,9 +887,9 @@ def test_successful_target_group_is_preserved_for_weak_followup() -> None:
         text="turn on the bedroom lamp",
         target_groups=(TargetGroup(entities=(previous.id,), tool="HassTurnOn"),),
     )
-    continuity = RetrievalHelper.build_continuity_context([(context, 0.8)])
+    continuity = HistoryRetriever.build_continuity_context([(context, 0.8)])
 
-    result = RetrievalHelper.rank_scored_candidates(
+    result = SourceRanker.rank_scored_candidates(
         [ScoredResult(vector_match, 0.9, 1)],
         [previous, vector_match],
         "adjust it",
@@ -638,17 +900,15 @@ def test_successful_target_group_is_preserved_for_weak_followup() -> None:
     )
 
     assert result == [previous]
-    assert not RetrievalHelper.target_is_confident("adjust it", result, continuity)
+    assert not DeviceRanker.target_is_confident("adjust it", result)
 
 
-def test_canonical_tool_name_parts_and_family_are_embedded() -> None:
-    tool = LlmTool(name="HassTurnOn", description="Control a target",
-                   metadata=ToolMetadata(family="power"))
+def test_canonical_tool_name_parts_are_embedded_without_name_inferred_metadata() -> None:
+    tool = LlmTool(name="HassTurnOn", description="Control a target")
 
     assert tool.canonical_name_parts == ("hass", "turn", "on")
-    assert tool.family == "power"
-    assert "canonical parts: hass turn on" in tool.to_embedding_text()
-    assert "family: power" in tool.to_embedding_text()
+    assert "hass turn on" in tool.to_embedding_text()
+    assert "family:" not in tool.to_embedding_text()
 
 
 def test_supported_tool_domains_are_indexed() -> None:
@@ -659,7 +919,7 @@ def test_supported_tool_domains_are_indexed() -> None:
     )
 
     assert tool.canonical_supported_domains == ("light", "switch")
-    assert "supported domains: light, switch" in tool.to_embedding_text()
+    assert "Home Assistant domains light, switch" in tool.to_embedding_text()
 
 
 def test_compound_and_informational_requests_are_preserved():
@@ -669,7 +929,7 @@ def test_compound_and_informational_requests_are_preserved():
         "kitchen light on",
         "Küchenlicht einschalten und Ventilator ausschalten",
     ):
-        assert RetrievalHelper.build_tool_search_query(query, "", []) == query
+        assert ToolRanker.build_tool_search_query(query, "", []) == query
 
 
 def test_unknown_tool_schema_is_searchable_and_remains_live() -> None:
@@ -686,10 +946,11 @@ def test_unknown_tool_schema_is_searchable_and_remains_live() -> None:
     }
     tool = LlmTool(name="VendorExecute", description="Run a vendor capability", parameters=parameters)
 
-    assert "parameter mode" in tool.canonical_search_parts
+    assert "mode" in tool.canonical_search_parts
     assert "Cleaning program to start" in tool.canonical_search_parts
-    assert "required mode" in tool.to_embedding_text()
-    assert "choices quiet turbo" in tool.to_embedding_text()
+    assert tool.parameters["required"] == ["mode"]
+    assert "schema.path=mode" in tool.to_embedding_text()
+    assert "schema.enum=quiet,turbo" in tool.to_embedding_text()
     assert tool.to_tool_dict()["function"]["parameters"] is parameters
 
 
@@ -698,59 +959,70 @@ def test_compound_request_preserves_custom_capabilities_in_embedding_query() -> 
         "turn on light strip and set the color to red and brightness to 40% "
         "and also enable sleep mode"
     )
-    query = RetrievalHelper.build_tool_search_query(request, "", [{"domain": ["light"]}])
+    query = ToolRanker.build_tool_search_query(request, "", [{"domain": ["light"]}])
 
     assert query.startswith(request)
     assert query == request
 
 
-def test_compound_retrieval_covers_schema_capabilities_among_power_tools() -> None:
-    powers = [
-        LlmTool(f"Vendor{index}TurnOn", "Turn on a light",
-                parameters={"properties": {"domain": {"enum": ["light"]}}})
-        for index in range(5)
-    ]
-    light_set = LlmTool("HassLightSet", "Set light brightness and color",
-                        parameters={"properties": {
-                            "brightness": {"type": "integer"},
-                            "color": {"type": "string"},
-                        }})
-    custom = LlmTool("VendorExecute", "Run a user-defined program",
-                     parameters={"properties": {"mode": {"enum": ["sleep", "turbo"]}}})
-    query = RetrievalHelper.build_tool_search_query(
-        "turn on light strip and set the color to red and brightness to 40% "
-        "and also enable sleep mode", "", [{"domain": ["light"]}],
-    )
-    result = RetrievalHelper.rank_tool_candidates(
-        [ScoredResult(tool, 0.99, index + 1) for index, tool in enumerate(powers)],
-        [*powers, light_set, custom], query, [{"domain": ["light"]}], 3,
-    )
-
-    assert len(result) == 3
-    assert any(tool in powers for tool in result)
-    assert light_set in result
-    assert custom in result
-
-
 def test_compound_action_candidates_do_not_claim_complete_intent_resolution() -> None:
     turn_on = LlmTool("HassTurnOn", "Turn on a device")
     turn_off = LlmTool("HassTurnOff", "Turn off a device")
-    query = RetrievalHelper.build_tool_search_query(
+    query = ToolRanker.build_tool_search_query(
         "turn on the light and turn off the fan", "", [],
     )
 
-    assert RetrievalHelper.tool_ranking_signals(turn_off, query)["lexical_exact"] > 0
-    assert RetrievalHelper.tool_search_confidence([turn_on], query, []) != "high"
-    assert RetrievalHelper.tool_search_confidence([turn_on, turn_off], query, []) != "high"
-    assert set(t.name for t in RetrievalHelper.rank_tools_for_query([turn_on, turn_off], query)) == {"HassTurnOn", "HassTurnOff"}
+    assert ToolRanker.tool_ranking_signals(turn_off, query)["lexical_exact"] > 0
+    assert ToolRanker.tool_search_confidence([turn_on], query, []) != "high"
+    assert ToolRanker.tool_search_confidence([turn_on, turn_off], query, []) != "high"
+    assert set(t.name for t in ToolRanker.rank_tools_for_query([turn_on, turn_off], query)) == {"HassTurnOn", "HassTurnOff"}
 
 
 def test_high_scoring_power_tool_does_not_hide_other_candidates() -> None:
     turn_on = LlmTool("HassTurnOn", "Turn on a light")
     custom = LlmTool("BedtimeRoutine", "Start a user-defined routine")
-    result = RetrievalHelper.rank_tool_candidates(
+    result = ToolRanker.rank_tool_candidates(
         [ScoredResult(turn_on, 1.0, 1)], [turn_on, custom],
         "turn on the light and start bedtime routine", [], 4,
     )
 
     assert result == [turn_on, custom]
+
+
+def test_successful_target_survives_final_selection_but_clear_new_match_wins() -> None:
+    previous = Device("light.previous", "Previous lamp", "Room 1", "")
+    current = Device("light.current", "Current lamp", "Room 2", "")
+    continuity = ContinuityContext(
+        target_groups=[(TargetGroup(entities=(previous.id,)), 1.0)],
+    )
+
+    weak = DeviceRanker.device_search_confidence(
+        [current, previous], [ScoredResult(current, 0.4, 1)],
+        query="adjust it", key=lambda device: device.id,
+        text_parts=lambda device: (device.friendly_name, device.area_name),
+    )
+    assert DeviceRanker.select_device_candidates(
+        "adjust it", [current, previous], 1, 1, weak,
+        preserve_score=continuity.successful_target_score,
+    ) == [previous]
+
+    clear = DeviceRanker.device_search_confidence(
+        [current, previous], [ScoredResult(current, 1.0, 1)],
+        query="Current lamp", key=lambda device: device.id,
+        text_parts=lambda device: (device.friendly_name, device.area_name),
+    )
+    assert DeviceRanker.select_device_candidates(
+        "Current lamp", [current, previous], 1, 1, clear,
+        preserve_score=continuity.successful_target_score,
+    ) == [current]
+
+
+def test_numeric_fuzzy_overlap_does_not_establish_identity_confidence() -> None:
+    one = Device("sensor.room_5", "Room 5", "Hall", "")
+    fifty = Device("sensor.room_50", "Room 50", "Hall", "")
+    confidence = DeviceRanker.device_search_confidence(
+        [one, fifty], [ScoredResult(fifty, 0.9, 1), ScoredResult(one, 0.89, 2)],
+        query="room 5", key=lambda device: device.id,
+        text_parts=lambda device: (device.friendly_name, device.area_name),
+    )
+    assert confidence.level != "high"

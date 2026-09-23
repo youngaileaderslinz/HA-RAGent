@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
-from homeassistant.const import CONF_HOST, CONF_PORT, CONF_SSL
 from homeassistant.config_entries import (
     ConfigEntriesFlowManager,
     ConfigFlow,
@@ -110,9 +110,13 @@ class RagentConfigFlow(ConfigFlow, domain=DOMAIN):
             embedding_hostname = user_input.get(CONF_EMBEDDING_HOST)
             llm_hostname = user_input.get(CONF_LLM_HOST)
             
-            vector_db_is_valid = self.client_config.get(CONF_VECTOR_DB_BACKEND_TYPE) == BACKEND_VECTOR_DB_TYPE_FAISS or is_valid_host(vector_db_hostname)
-            embedding_is_valid = is_valid_host(embedding_hostname)
-            llm_is_valid = is_valid_host(llm_hostname)
+            vector_db_is_valid, embedding_is_valid, llm_is_valid = await asyncio.gather(
+                self.hass.async_add_executor_job(
+                    is_valid_host, vector_db_hostname,
+                ) if self.client_config.get(CONF_VECTOR_DB_BACKEND_TYPE) != BACKEND_VECTOR_DB_TYPE_FAISS else asyncio.sleep(0, result=True),
+                self.hass.async_add_executor_job(is_valid_host, embedding_hostname),
+                self.hass.async_add_executor_job(is_valid_host, llm_hostname),
+            )
 
             if not vector_db_is_valid or not embedding_is_valid or not llm_is_valid:
                 errors["base"] = "invalid_hostname"
@@ -127,7 +131,7 @@ class RagentConfigFlow(ConfigFlow, domain=DOMAIN):
                     connect_err = await llm_backend_to_class(self.client_config.get(CONF_LLM_BACKEND_TYPE)).async_validate_connection(self.hass, self.client_config)
 
                 if connect_err:
-                    errors["base"] = f"failed_to_connect"
+                    errors["base"] = "failed_to_connect"
                     description_placeholders["exception"] = str(connect_err)
                 else:
                     return await self._step_finish_async(user_input)
@@ -163,7 +167,6 @@ class RagentConfigFlow(ConfigFlow, domain=DOMAIN):
         title += " | " + embedding_backend_to_class(embedding_backend).get_name()
         title += " | " + llm_backend_to_class(llm_backend).get_name()
         title += " | Language: " + self.client_config.get(CONF_SELECTED_LANGUAGE, "en") 
-        _logger.debug(f"Creating provider with config: {self.client_config}")
 
         return self.async_create_entry(
             title=title,

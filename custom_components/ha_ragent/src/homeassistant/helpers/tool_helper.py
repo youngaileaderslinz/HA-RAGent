@@ -1,4 +1,6 @@
 import logging
+from custom_components.ha_ragent.src.homeassistant.helpers.source_ranker import SourceRanker
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 import json
 from typing import Any, Dict, List, Tuple
 
@@ -10,16 +12,26 @@ from homeassistant.helpers.entity_registry import RegistryEntry as EntityEntry
 from custom_components.ha_ragent.src.const import (
     RAGENT_SEMANTIC_SEARCH_TOOL_NAME,
     TOOL_REGEX_PATTERN,
+    RAGENT_PLANNED_ACTION_TOOL_NAME,
 )
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
-from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 class ToolHelper:
-    def __init__(self, hass: HomeAssistant) -> None:
+    def __init__(self, hass: HomeAssistant, tools: list[LlmTool] | None = None) -> None:
         self._hass = hass
+        self._tools_by_name = {
+            tool.name: tool
+            for tool in tools or []
+        }
+        self._tool_metadata_index = {
+            name: tool.metadata
+            for name, tool in self._tools_by_name.items()
+            if isinstance(tool.metadata, ToolMetadata)
+        }
+
 
     @staticmethod
     def _copy_tool_input(tool_call: ToolInput, tool_name: str, arguments: dict[str, Any]) -> ToolInput:
@@ -38,7 +50,7 @@ class ToolHelper:
         try:
             return json.loads(json_string)
         except json.JSONDecodeError as e:
-            _logger.debug(f"Failed to parse JSON: {e}")
+            _logger.log_string(logging.DEBUG, f"Failed to parse JSON: {e}")
             return None
 
     def _tool_string_to_dict(self, tool_string: str) -> dict | None:
@@ -149,6 +161,7 @@ class ToolHelper:
             tool_metadata.is_device_class_aware,
         )):
             return
+        
         is_domain_aware = tool_metadata.is_domain_aware if tool_metadata else False
         is_area_aware = tool_metadata.is_area_aware if tool_metadata else False
 
@@ -175,25 +188,20 @@ class ToolHelper:
             if floor_name:
                 parameters["floor"] = floor_name
 
-    def parse_tool_calls(
-        self,
-        llm_response: str,
-        tool_metadata_dic: Dict[str, ToolMetadata] | None = None,
-    ) -> List[ToolInput]:
-        """Parse tool calls from LLM response."""
+    def parse_tool_calls(self, llm_response: str) -> List[ToolInput]:
+        """Parse tool calls from LLM response using indexed tool metadata."""
         parsed_calls = []
-        tool_metadata_dic = tool_metadata_dic or {}
         
         for match in TOOL_REGEX_PATTERN.finditer(llm_response):
             tool_json = self._tool_string_to_dict(match.group(1))
 
             if tool_json is None:
-                _logger.debug(f"Failed to parse tool call from LLM response: {match.group(1)}")
+                _logger.log_string(logging.DEBUG, f"Failed to parse tool call from LLM response: {match.group(1)}")
                 continue
 
             tool_name = tool_json.get("tool")
             if not tool_name:
-                _logger.debug(f"Tool name missing in tool call: {tool_json}")
+                _logger.log_string(logging.DEBUG, f"Tool name missing in tool call: {tool_json}")
                 continue
 
             parameters = tool_json.get("arguments")
@@ -201,10 +209,10 @@ class ToolHelper:
                 parameters = self._save_json_load(parameters)
 
             if not isinstance(parameters, dict):
-                _logger.debug(f"Empty tool arguments: {tool_json.get('arguments')}")
+                _logger.log_string(logging.DEBUG, f"Empty tool arguments: {tool_json.get('arguments')}")
                 continue
 
-            self._parse_parameters(parameters, tool_metadata_dic.get(tool_name))
+            self._parse_parameters(parameters, self._tool_metadata_index.get(tool_name))
             parsed_call = ToolInput(tool_name=tool_name, tool_args=parameters)
             parsed_calls.append(parsed_call)
 
@@ -230,7 +238,12 @@ class ToolHelper:
     @staticmethod
     def _normalize_search_query(query: object) -> str:
         """Normalize semantically identical search text for turn-local reuse."""
-        return RetrievalHelper.canonical_search_signature(query)
+        return SourceRanker.canonical_search_signature(query)
+
+    @staticmethod
+    def is_scheduled_action_tool(tool_name: str) -> bool:
+        """Return whether a name identifies the scheduled-action tool."""
+        return str(tool_name or "").rsplit("__", 1)[-1] == RAGENT_PLANNED_ACTION_TOOL_NAME
 
     @staticmethod
     def is_semantic_search_tool(tool_name: str) -> bool:
@@ -263,7 +276,6 @@ class ToolHelper:
         self,
         tool_call: ToolInput,
         exposed_names: set[str],
-        metadata_by_name: dict[str, ToolMetadata] | None = None,
     ) -> ToolInput | None:
         """Return a call using an exposed name, or reject an invented name."""
         tool_name = ToolHelper.resolve_exposed_tool_name(tool_call.tool_name, exposed_names)
@@ -272,7 +284,7 @@ class ToolHelper:
         if tool_name == tool_call.tool_name:
             return tool_call
         arguments = dict(tool_call.tool_args)
-        self._parse_parameters(arguments, (metadata_by_name or {}).get(tool_name))
+        self._parse_parameters(arguments, self._tool_metadata_index.get(tool_name))
         return self._copy_tool_input(tool_call, tool_name, arguments)
 
     @staticmethod
@@ -285,54 +297,30 @@ class ToolHelper:
             return []
         return [candidate for candidate in candidates if isinstance(candidate, dict)]
 
+
     @staticmethod
-    def discovered_tools(result: object, existing_names: set[str]) -> list[LlmTool]:
-        """Convert newly discovered candidate tools for the next iteration."""
-        if not isinstance(result, dict):
+    def failed_target_candidates(
+        tool_call: ToolInput,
+        result: object,
+        candidates: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        """Return only explicitly attempted targets that the tool reported failed."""
+        failed = result.get("failed", []) if isinstance(result, dict) else []
+        if isinstance(failed, str):
+            failed = [failed]
+        failed_names = {
+            str(value).casefold()
+            for value in failed
+            if value
+        }
+        if not failed_names:
             return []
-        candidates = result.get("candidate_tools", result.get("tools", []))
-        if not isinstance(candidates, list):
-            return []
+        return [
+            candidate
+            for candidate in candidates
+            if str(candidate.get("name", "")).casefold() in failed_names
+        ]
 
-        discovered: list[LlmTool] = []
-        for candidate in candidates:
-            if not isinstance(candidate, dict):
-                continue
-            name = str(candidate.get("name", "") or "")
-            if not name or name in existing_names:
-                continue
-            metadata = candidate.get("metadata")
-            discovered.append(
-                LlmTool(
-                    name=name,
-                    description=str(candidate.get("description", "") or ""),
-                    parameters=candidate.get("parameters") or {},
-                    metadata=ToolMetadata.from_dict(metadata) if isinstance(metadata, dict) else ToolMetadata(),
-                )
-            )
-            existing_names.add(name)
-        return discovered
-
-    @staticmethod
-    def successful_target_names(tool_call: ToolInput, result: object) -> list[str]:
-        """Return target names confirmed by a successful tool result."""
-        success = result.get("success") if isinstance(result, dict) else None
-        if isinstance(success, str):
-            return [success]
-        if isinstance(success, (list, tuple, set)):
-            return [str(value) for value in success if value]
-
-        names = tool_call.tool_args.get("name") if isinstance(tool_call.tool_args, dict) else None
-        if isinstance(names, str):
-            return [names]
-        if isinstance(names, (list, tuple, set)):
-            return [str(value) for value in names if value]
-        return []
-
-    @staticmethod
-    def is_identical_failed_retry(tool_call: ToolInput, failed_signatures: set[str] | dict[str, Any]) -> bool:
-        """Return whether the same canonical call has already failed."""
-        return ToolHelper.tool_call_signature(tool_call) in failed_signatures
 
 
     @staticmethod
@@ -363,9 +351,10 @@ class ToolHelper:
 
         return tool_result
 
-    @staticmethod
-    def to_home_assistant_tool_call(tool_call: ToolInput, metadata: ToolMetadata | None = None) -> ToolInput:
-        """Create the Home Assistant call with parser metadata removed."""
+    def to_home_assistant_tool_call(self, tool_call: ToolInput) -> ToolInput:
+        """Create the Home Assistant call using the internally indexed tool schema."""
+        tool = self._tools_by_name.get(tool_call.tool_name)
+        metadata = self._tool_metadata_index.get(tool_call.tool_name)
         args = dict(tool_call.tool_args)
         if metadata and not any((
             metadata.is_domain_aware,
@@ -373,11 +362,57 @@ class ToolHelper:
             metadata.is_device_class_aware,
         )):
             return ToolHelper._copy_tool_input(tool_call, tool_call.tool_name, args)
-        args.pop("original_name", None)
+        original_name = args.pop("original_name", None)
         friendly_name = args.pop("friendly_name", None)
+        # Some integrations (notably scripts) explicitly declare entity_id.
+        # That is a service argument, not the Home Assistant intent's friendly
+        # target name. Preserve the original entity ID so templates receive a
+        # valid target rather than a display label such as "Media Player".
+        properties = (tool.parameters or {}).get("properties", {}) if tool else {}
+        if isinstance(properties, dict) and "entity_id" in properties and original_name:
+            args.pop("name", None)
+            args["entity_id"] = original_name
+            return ToolHelper._copy_tool_input(tool_call, tool_call.tool_name, args)
         if friendly_name is not None:
             args["name"] = friendly_name
         return ToolHelper._copy_tool_input(tool_call, tool_call.tool_name, args)
+
+    def sanitize_tool_call(
+        self,
+        tool_call: ToolInput,
+        candidates: list[dict[str, object]],
+    ) -> ToolInput:
+        """Build execution arguments using the internally indexed tool name."""
+        tool = self._tools_by_name.get(tool_call.tool_name)
+        metadata = self._tool_metadata_index.get(tool_call.tool_name)
+        args = dict(tool_call.tool_args)
+        requested = str(args.get("name", args.get("entity_id", "")) or "").casefold()
+        match = next((candidate for candidate in candidates if requested in {
+            str(candidate.get("name", "")).casefold(),
+            str(candidate.get("friendly_name", "")).casefold(),
+            *(str(value).casefold() for value in (candidate.get("aliases") or [])),
+        }), None)
+        if match is not None:
+            args["name"] = match.get("friendly_name") or match.get("name")
+            # An entity_id schema requires the canonical current entity ID,
+            # even when the model supplied its friendly name.
+            if tool and "entity_id" in ((tool.parameters or {}).get("properties", {}) or {}):
+                args["original_name"] = match.get("name")
+            if metadata and metadata.is_domain_aware:
+                domains = match.get("domain") or []
+                args["domain"] = list(domains) if isinstance(domains, (list, tuple)) else [domains]
+            if metadata and metadata.is_area_aware:
+                for key in ("area", "floor"):
+                    if match.get(key):
+                        args[key] = match[key]
+            if metadata and metadata.is_device_class_aware:
+                if match.get("device_class"):
+                    args["device_class"] = match["device_class"]
+                else:
+                    args.pop("device_class", None)
+        return self.to_home_assistant_tool_call(
+            self._copy_tool_input(tool_call, tool_call.tool_name, args),
+        )
 
     @staticmethod
     def to_history_tool_call(tool_call: ToolInput) -> ToolInput:

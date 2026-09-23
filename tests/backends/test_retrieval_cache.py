@@ -171,13 +171,13 @@ def test_empty_memory_recall_skips_embedding_and_observes_later_writes(tmp_path)
         hass.data = {DOMAIN: {"entry": SimpleNamespace(subentries={"agent": SimpleNamespace(data={})}, vector_db_backend=db)}}
         manager = MemoryManager(hass, "entry", "agent")
         embed = AsyncMock(return_value=[1.0, 0.0])
-        assert await manager.async_recall(QueryEmbedding(embed), 3) == []
+        assert await manager.async_recall(QueryEmbedding(embed), 0, 3) == []
         embed.assert_not_awaited()
         await db.async_save_objects({}, manager.collection_name, [record()])
-        assert await manager.async_recall(QueryEmbedding(embed), 3)
+        assert await manager.async_recall(QueryEmbedding(embed), 0, 3)
         embed.assert_awaited_once()
         await db.async_delete_objects({}, manager.collection_name, "id", ["one"])
-        assert await manager.async_recall(QueryEmbedding(embed), 3) == []
+        assert await manager.async_recall(QueryEmbedding(embed), 0, 3) == []
         embed.assert_awaited_once()
         await db.async_flush()
     asyncio.run(run())

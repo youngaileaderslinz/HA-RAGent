@@ -71,6 +71,7 @@ class HistoryManager:
         entities: set[str],
         tools: set[str],
         areas: set[str],
+        floors: set[str],
         domains: set[str],
         device_classes: set[str],
         ambiguous_entities: set[str],
@@ -78,6 +79,18 @@ class HistoryManager:
         if not isinstance(result, dict):
             return
         cls._add_values(entities, result.get("success"))
+        nested_result = result.get("result")
+        if isinstance(nested_result, dict):
+            cls._collect_tool_result(
+                nested_result,
+                entities,
+                tools,
+                areas,
+                floors,
+                domains,
+                device_classes,
+                ambiguous_entities,
+            )
         devices = result.get("devices")
         if isinstance(devices, list):
             candidate_ids: list[str] = []
@@ -89,6 +102,7 @@ class HistoryManager:
                 if isinstance(name, str):
                     candidate_ids.append(name)
                 cls._add_values(areas, device.get("area"))
+                cls._add_values(floors, device.get("floor"))
                 cls._add_values(domains, device.get("domain"))
                 cls._add_values(device_classes, device.get("device_class"))
             if len(candidate_ids) > 1:
@@ -132,6 +146,12 @@ class HistoryManager:
         reported_entities: set[str] = set()
         success_value = result.get("success")
         cls._add_values(reported_entities, success_value)
+        nested_result = result.get("result")
+        if isinstance(nested_result, dict):
+            nested_success = nested_result.get("success")
+            cls._add_values(reported_entities, nested_success)
+            if isinstance(nested_success, (str, list, tuple, set)):
+                return reported_entities
         if isinstance(success_value, (str, list, tuple, set)):
             return reported_entities
         return argument_entities | reported_entities
@@ -162,6 +182,7 @@ class HistoryManager:
             entities: set[str] = set()
             tools: set[str] = set()
             areas: set[str] = set()
+            floors: set[str] = set()
             domains: set[str] = set()
             device_classes: set[str] = set()
             actions: set[str] = set()
@@ -183,25 +204,50 @@ class HistoryManager:
             for message in turn:
                 if isinstance(message, conversation.ToolResultContent):
                     result = getattr(message, "tool_result", None)
+                    execution_status = result.get("execution_status") if isinstance(result, dict) else None
+                    if isinstance(execution_status, dict):
+                        self._add_values(actions, execution_status.get("executed_capability"))
+                        self._add_values(device_classes, execution_status.get("device_classes"))
+                        unresolved_targets = execution_status.get("unresolved_targets", [])
+                        self._collect_search_candidates(
+                            {"candidate_devices": unresolved_targets},
+                            ambiguous_entities,
+                        )
+                        requested = execution_status.get("requested_capabilities", [])
+                        if isinstance(requested, dict):
+                            requested = [requested]
+                        if isinstance(requested, list):
+                            for capability in requested:
+                                if not isinstance(capability, dict):
+                                    continue
+                                self._add_values(actions, capability.get("action"))
+                                self._add_values(
+                                    domains,
+                                    capability.get("domains", capability.get("domain")),
+                                )
                     if not MessageHelper.tool_result_succeeded(result):
+                        # Do not persist failed model-supplied identifiers:
+                        # they may be invented and therefore are not retrieval
+                        # evidence. Retrieved candidates are collected through
+                        # successful search results and validated separately.
                         continue
+                    
                     tool_name = str(getattr(message, "tool_name", "") or "")
                     if self._is_semantic_search(tool_name):
                         self._collect_search_candidates(result, ambiguous_entities)
                         continue
                     if tool_name:
                         tools.add(tool_name)
-                        actions.add(tool_name)
                     self._collect_tool_result(
                         result,
                         entities,
                         tools,
                         areas,
+                        floors,
                         domains,
                         device_classes,
                         ambiguous_entities,
                     )
-
                     tool_call = self._take_matching_tool_call(
                         message,
                         calls_by_id,
@@ -214,7 +260,6 @@ class HistoryManager:
                     arguments = getattr(tool_call, "tool_args", None) or {}
                     if call_tool_name:
                         tools.add(call_tool_name)
-                        actions.add(call_tool_name)
                     if not isinstance(arguments, dict):
                         continue
 
@@ -229,7 +274,7 @@ class HistoryManager:
                     self._add_values(group_classes, arguments.get("device_class"))
                     entities.update(group_entities)
                     areas.update(group_areas)
-                    areas.update(group_floors)
+                    floors.update(group_floors)
                     domains.update(group_domains)
                     device_classes.update(group_classes)
                     self._add_values(actions, arguments.get("action"))
@@ -241,10 +286,24 @@ class HistoryManager:
                             domains=tuple(sorted(group_domains)),
                             device_classes=tuple(sorted(group_classes)),
                             tool=call_tool_name,
-                            action=str(arguments.get("action", "") or call_tool_name),
+                            action=str(
+                                (execution_status or {}).get("executed_capability", "")
+                                or arguments.get("action", "")
+                            ),
                         ))
 
             created_at = getattr(user_message, "created_at", None)
+            if not hasattr(created_at, "timestamp"):
+                # Some HA content implementations omit the user timestamp but
+                # retain it on another message in the turn.
+                created_at = next(
+                    (
+                        getattr(message, "created_at", None)
+                        for message in turn
+                        if hasattr(getattr(message, "created_at", None), "timestamp")
+                    ),
+                    dt_util.utcnow(),
+                )
             timestamp = created_at.timestamp() if hasattr(created_at, "timestamp") else None
             text = str(getattr(user_message, "content", "") or "").strip()
             key = "\x1f".join((
@@ -252,6 +311,7 @@ class HistoryManager:
                 *sorted(entities),
                 *sorted(tools),
                 *sorted(areas),
+                *sorted(floors),
                 *sorted(domains),
                 *sorted(device_classes),
             ))
@@ -261,6 +321,7 @@ class HistoryManager:
                 entities=tuple(sorted(entities)),
                 tools=tuple(sorted(tools)),
                 areas=tuple(sorted(areas)),
+                floors=tuple(sorted(floors)),
                 domains=tuple(sorted(domains)),
                 device_classes=tuple(sorted(device_classes)),
                 actions=tuple(sorted(actions)),

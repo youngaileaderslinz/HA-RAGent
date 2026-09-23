@@ -4,13 +4,17 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from custom_components.ha_ragent.src.homeassistant.helpers.source_ranker import SourceRanker
+from custom_components.ha_ragent.src.homeassistant.helpers.device_ranker import DeviceRanker
+from custom_components.ha_ragent.src.homeassistant.helpers.tool_ranker import ToolRanker
+from custom_components.ha_ragent.src.homeassistant.helpers.history_retriever import HistoryRetriever
 from custom_components.ha_ragent.src.const import (
     CONF_RETRIEVAL_METHOD,
     RETRIEVAL_METHOD_AUTOMATIC,
     RETRIEVAL_METHOD_LEXICAL,
     RETRIEVAL_METHOD_VECTOR,
 )
-from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
+from custom_components.ha_ragent.src.homeassistant.helpers.source_retriever import SourceRetriever
 from custom_components.ha_ragent.src.models.embedding.device import Device
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
@@ -18,6 +22,39 @@ from custom_components.ha_ragent.src.models.retrieval.lexical_index import lexic
 from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
 from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
 from custom_components.ha_ragent.src.models.retrieval.turn_context import TurnContext
+
+
+@pytest.mark.parametrize("user_text", [
+    "Schalte die Küchenlampe ein",
+    "Allume la lampe de la cuisine",
+    "أضئ مصباح المطبخ",
+    "厨房のランプをつけて",
+])
+def test_multilingual_requests_keep_command_text_for_retrieval(user_text):
+    """Retrieval receives the complete request; no language phrase is removed."""
+    assert HistoryRetriever.build_retrieval_text(user_text) == user_text
+
+
+@pytest.mark.parametrize("query,alias", [
+    ("Schalte die Küchenlampe ein", "Küchenlampe"),
+    ("Allume la lampe de la cuisine", "lampe de la cuisine"),
+    ("أضئ مصباح المطبخ", "مصباح المطبخ"),
+    ("厨房のランプをつけて", "厨房のランプ"),
+])
+def test_multilingual_target_aliases_rank_without_keyword_rules(query, alias):
+    target = Device("light.kitchen", "Kitchen lamp", "Kitchen", "", aliases=[alias])
+    unrelated = Device("switch.bedroom", "Bedroom switch", "Bedroom", "")
+
+    result = SourceRanker.rank_scored_candidates(
+        [ScoredResult(unrelated, 0.9, 1)],
+        [unrelated, target],
+        query,
+        lambda device: device.id,
+        lambda device: (device.friendly_name, *(device.aliases or ())),
+        1,
+    )
+
+    assert result == [target]
 
 
 @pytest.mark.parametrize(
@@ -32,7 +69,7 @@ from custom_components.ha_ragent.src.models.retrieval.turn_context import TurnCo
     ],
 )
 def test_retrieval_method_normalizes_and_defaults(configured, expected):
-    assert RetrievalHelper.retrieval_method(configured) == expected
+    assert SourceRetriever.retrieval_method(configured) == expected
 
 
 @pytest.mark.parametrize("query,name", [
@@ -45,7 +82,7 @@ def test_retrieval_method_normalizes_and_defaults(configured, expected):
 def test_registered_aliases_resolve_without_language_dictionary(query, name):
     device = Device("light.a", "A", "", "", domain=["light"], aliases=[name])
     unrelated = Device("switch.b", "B", "", "", domain=["switch"])
-    assert RetrievalHelper.device_resolution(query, [device, unrelated]) == ("high", (device.id,))
+    assert DeviceRanker.device_resolution(query, [device, unrelated]) == ("high", (device.id,))
 
 
 @pytest.mark.parametrize("query", [
@@ -54,16 +91,15 @@ def test_registered_aliases_resolve_without_language_dictionary(query, name):
 ])
 def test_raw_commands_and_group_words_never_resolve_a_target_by_themselves(query):
     device = Device("light.a", "Küchenlampe", "Kitchen", "", aliases=["厨房吊灯"])
-    assert RetrievalHelper.device_resolution(query, [device])[0] == "weak"
-    assert not RetrievalHelper.local_candidates_confident(query, [device])
+    assert DeviceRanker.device_resolution(query, [device])[0] == "weak"
+    assert not SourceRanker.local_candidates_confident(query, [device])
 
 
 def test_unknown_tool_compatibility_is_neutral_even_with_an_english_name():
     tool = LlmTool("HassLock", "Lock a door", parameters={})
-    signals = RetrievalHelper.tool_ranking_signals(tool, "Licht einschalten", [{"domain": ["light"]}])
-    assert signals["domain"] == 0
+    signals = ToolRanker.tool_ranking_signals(tool, "Licht einschalten", [{"domain": ["light"]}])
     assert tool.canonical_action == ""
-    assert tool.family == ""
+    assert signals["device_relevance"] == 0
 
 
 def test_declared_capabilities_round_trip_without_name_inference():
@@ -72,15 +108,57 @@ def test_declared_capabilities_round_trip_without_name_inference():
     restored = LlmTool.from_dict(tool.to_dict())
     assert restored.canonical_action == "vendor_mode"
     assert restored.canonical_supported_domains == ("fan",)
-    assert RetrievalHelper.tool_ranking_signals(restored, "", [{"domain": ["fan"]}])["domain"] > 0
-    assert RetrievalHelper.tool_ranking_signals(restored, "", [{"domain": ["light"]}])["domain"] < 0
+
+
+@pytest.mark.parametrize("query", [
+    "stop playback", "Wiedergabe anhalten", "arrêter la lecture", "再生を停止",
+])
+def test_translated_requests_use_the_same_structured_capability(query):
+    stop = LlmTool(
+        "vendor__MediaControlA",
+        "Opaque media control",
+        metadata=ToolMetadata(canonical_action="stop", supported_domains=("media_player",)),
+    )
+    pause = LlmTool(
+        "vendor__MediaControlB",
+        "Opaque media control",
+        metadata=ToolMetadata(canonical_action="pause", supported_domains=("media_player",)),
+    )
+    result = ToolRanker.rank_tool_candidates(
+        [], [pause, stop], query, [], 2,
+        requested_capability={"action": "stop", "domain": "media_player"},
+    )
+    assert result == [stop, pause]
+
+
+def test_requested_media_capability_ranks_ahead_of_timer_and_other_actions():
+    media_stop = LlmTool(
+        "vendor__A",
+        "Stop something",
+        metadata=ToolMetadata(canonical_action="stop", supported_domains=("media_player",)),
+    )
+    timer_stop = LlmTool(
+        "vendor__B",
+        "Stop something",
+        metadata=ToolMetadata(canonical_action="stop", supported_domains=("timer",)),
+    )
+    unpause = LlmTool(
+        "vendor__C",
+        "Control playback",
+        metadata=ToolMetadata(canonical_action="unpause", supported_domains=("media_player",)),
+    )
+    result = ToolRanker.rank_tool_candidates(
+        [], [timer_stop, unpause, media_stop], "", [], 3,
+        requested_capability={"action": "stop", "domain": "media_player"},
+    )
+    assert result == [media_stop, timer_stop, unpause]
 
 
 def test_area_and_floor_aliases_round_trip_and_are_searchable():
     device = Device("light.a", "Lamp", "Kitchen", "Ground", domain=["light"],
                     area_aliases=["Küche"], floor_aliases=["Erdgeschoss"])
     restored = Device.from_dict(device.to_dict())
-    assert "Küche" in RetrievalHelper._candidate_location_values(restored)
+    assert "Küche" in DeviceRanker._candidate_location_values(restored)
     assert "Erdgeschoss" in restored.to_embedding_text()
     legacy = Device.from_dict({"device_id": "light.old"})
     assert legacy.area_aliases is None
@@ -109,7 +187,7 @@ def test_vector_order_does_not_rebuild_local_index():
     tools = [LlmTool("Alpha", "First device"), LlmTool("Beta", "Second device")]
     lexical_index.cache_clear()
     for order in (tools, tools[::-1]):
-        RetrievalHelper.rank_scored_candidates(
+        SourceRanker.rank_scored_candidates(
             [ScoredResult(tool, 0.9, i + 1) for i, tool in enumerate(order)],
             tools, "device", lambda tool: tool.name, lambda tool: (tool.description,), 2,
         )
@@ -117,7 +195,7 @@ def test_vector_order_does_not_rebuild_local_index():
 
 
 def test_cache_keys_preserve_negation_order_and_distinct_numeric_values():
-    signature = RetrievalHelper.canonical_search_signature
+    signature = SourceRanker.canonical_search_signature
     assert signature("  KÜCHE  AUS ") == signature("Küche aus")
     assert signature("Ku\u0308che aus") == signature("Küche aus")
     assert signature("kitchen on bedroom off") != signature("kitchen off bedroom on")
@@ -127,16 +205,16 @@ def test_cache_keys_preserve_negation_order_and_distinct_numeric_values():
 
 def test_recent_unfinished_conversation_is_retained_without_embeddings():
     pending = TurnContext(key="pending", text="Licht einschalten", created_at=880.0)
-    selected = RetrievalHelper.select_history_contexts([pending], {}, [], now=1000.0)
-    continuity = RetrievalHelper.build_continuity_context(selected)
+    selected = HistoryRetriever.select_history_contexts([pending], {}, [], now=1000.0)
+    continuity = HistoryRetriever.build_continuity_context(selected)
     assert continuity.selected_turn_keys == {"pending"}
     assert continuity.target_groups == []
-    assert RetrievalHelper.select_history_contexts([pending], {}, [], now=1500.0) == []
-    assert RetrievalHelper.select_history_contexts([], {}, [], now=1000.0) == []
+    assert HistoryRetriever.select_history_contexts([pending], {}, [], now=1500.0) == []
+    assert HistoryRetriever.select_history_contexts([], {}, [], now=1000.0) == []
 
 
 @pytest.mark.parametrize("mode,query,embeddings,vectors,lexical", [
-    ("automatic", "Küchenlampe", 0, 0, 1),
+    ("automatic", "Küchenlampe", 1, 1, 1),
     ("automatic", "schalte sie ein", 1, 1, 1),
     ("lexical", "schalte sie ein", 0, 0, 1),
     ("vector", "Küchenlampe", 1, 1, 0),
@@ -148,7 +226,7 @@ def test_modes_obey_embedding_budget(mode, query, embeddings, vectors, lexical):
         async_get_lexical_objects=AsyncMock(return_value=[device]),
         async_retrieve_scored_objects=AsyncMock(return_value=[ScoredResult(device, 1, 1)]),
     )
-    asyncio.run(RetrievalHelper.async_retrieve_sources(
+    asyncio.run(SourceRetriever.async_retrieve_sources(
         backend, Device, {CONF_RETRIEVAL_METHOD: mode}, "devices", QueryEmbedding(embed), 4, query,
     ))
     assert embed.await_count == embeddings
@@ -182,7 +260,7 @@ def test_retrieval_modes_isolate_backends_and_fall_back(
     embedding = AsyncMock(return_value=[1.0, 0.0])
 
     vector, lexical = asyncio.run(
-        RetrievalHelper.async_retrieve_sources(
+        SourceRetriever.async_retrieve_sources(
             backend,
             Device,
             {CONF_RETRIEVAL_METHOD: mode},
@@ -216,7 +294,7 @@ def test_automatic_mode_uses_vector_when_local_identity_is_ambiguous():
     )
 
     vector, lexical = asyncio.run(
-        RetrievalHelper.async_retrieve_sources(
+        SourceRetriever.async_retrieve_sources(
             backend,
             Device,
             {CONF_RETRIEVAL_METHOD: RETRIEVAL_METHOD_AUTOMATIC},
@@ -240,8 +318,8 @@ def test_devices_tools_and_memory_share_one_concurrent_embedding():
         backend = SimpleNamespace(async_get_lexical_objects=AsyncMock(return_value=[]),
                                  async_retrieve_scored_objects=AsyncMock(return_value=[]))
         await asyncio.gather(
-            RetrievalHelper.async_retrieve_sources(backend, Device, {}, "devices", query, 4, "dort"),
-            RetrievalHelper.async_retrieve_sources(backend, LlmTool, {}, "tools", query, 4, "dort"),
+            SourceRetriever.async_retrieve_sources(backend, Device, {}, "devices", query, 4, "dort"),
+            SourceRetriever.async_retrieve_sources(backend, LlmTool, {}, "tools", query, 4, "dort"),
             query.get(),  # The memory consumer uses the same vector.
         )
         assert embed.await_count == 1
@@ -257,7 +335,7 @@ def test_failed_shared_embedding_falls_back_locally_without_retrying():
         backend = SimpleNamespace(async_get_lexical_objects=AsyncMock(return_value=items),
                                  async_retrieve_scored_objects=AsyncMock())
         for collection in ("devices", "tools"):
-            assert await RetrievalHelper.async_retrieve_sources(
+            assert await SourceRetriever.async_retrieve_sources(
                 backend, LlmTool, {}, collection, query, 4, "lüften",
             ) == ([], items)
         assert embed.await_count == 1
@@ -267,10 +345,10 @@ def test_failed_shared_embedding_falls_back_locally_without_retrying():
 
 def test_duplicate_aliases_and_zero_limit_do_not_trigger_false_confidence():
     items = [Device("light.a", "Lampe", "", ""), Device("light.b", "Lampe", "", "")]
-    assert not RetrievalHelper.local_candidates_confident("Lampe", items)
+    assert not SourceRanker.local_candidates_confident("Lampe", items)
     embed = AsyncMock()
     backend = SimpleNamespace(async_get_lexical_objects=AsyncMock(), async_retrieve_scored_objects=AsyncMock())
-    assert asyncio.run(RetrievalHelper.async_retrieve_sources(
+    assert asyncio.run(SourceRetriever.async_retrieve_sources(
         backend, Device, {}, "devices", QueryEmbedding(embed), 0, "Lampe",
     )) == ([], [])
     embed.assert_not_awaited()

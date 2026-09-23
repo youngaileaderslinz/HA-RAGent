@@ -11,6 +11,8 @@ from custom_components.ha_ragent.src.models.embedding.tool_metadata import (
     ToolMetadata,
     split_canonical_name,
 )
+from custom_components.ha_ragent.src.models.embedding.schema_constraints import root_property_values
+from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 @dataclass
 class LlmTool(SerializableModel, EmbeddableModel):
@@ -23,12 +25,6 @@ class LlmTool(SerializableModel, EmbeddableModel):
     def canonical_name_parts(self) -> tuple[str, ...]:
         """Get the canonical parts of the tool's name."""
         return self.split_canonical_name(self.name)
-
-    @property
-    def canonical_action_keywords(self) -> tuple[str, ...]:
-        """Return the action-bearing canonical name parts."""
-        parts = self.split_canonical_name(self.name.rsplit("__", 1)[-1])
-        return parts[1:] if parts and parts[0] == "hass" else parts
 
     @property
     def canonical_action(self) -> str:
@@ -52,37 +48,103 @@ class LlmTool(SerializableModel, EmbeddableModel):
         return values
 
     @staticmethod
-    def _schema_search_parts(schema: object, path: str = "", depth: int = 0) -> tuple[str, ...]:
-        """Return bounded names, descriptions, required fields, types, and enums."""
-        if depth > 4 or not isinstance(schema, dict):
+    def _resolve_local_ref(schema: dict[str, Any], root: dict[str, Any]) -> dict[str, Any] | None:
+        """Resolve a local JSON pointer; external and invalid refs stay neutral."""
+        ref = schema.get("$ref")
+        if not isinstance(ref, str) or not ref.startswith("#/"):
+            return schema if "$ref" not in schema else None
+        value: object = root
+        for part in ref[2:].split("/"):
+            if not isinstance(value, dict):
+                return None
+            value = value.get(part.replace("~1", "/").replace("~0", "~"))
+        return value if isinstance(value, dict) else None
+
+    @staticmethod
+    def _schema_search_parts(
+        schema: object, path: str = "", depth: int = 0,
+        root: dict[str, Any] | None = None, refs: frozenset[str] = frozenset(),
+    ) -> tuple[str, ...]:
+        """Return literal schema structure, resolving safe local definitions."""
+        if depth > 16 or not isinstance(schema, dict):
             return ()
+        root = root or schema
+        ref = schema.get("$ref")
+        if isinstance(ref, str):
+            if ref in refs:
+                return ()
+            resolved = LlmTool._resolve_local_ref(schema, root)
+            if resolved is None:
+                return ()
+            schema = {**resolved, **{key: value for key, value in schema.items() if key != "$ref"}}
+            refs = refs | {ref}
         parts: list[str] = []
-        description = schema.get("description")
-        schema_type = schema.get("type")
-        required = schema.get("required")
-        enum = schema.get("enum")
         if path:
-            parts.append(f"parameter {path}")
-        if isinstance(description, str) and description:
-            parts.append(description)
-        if schema_type:
-            parts.append(f"type {schema_type}")
-        if isinstance(required, list) and required:
-            parts.append("required " + " ".join(str(name) for name in required))
-        if isinstance(enum, list) and enum:
-            parts.append("choices " + " ".join(str(value) for value in enum))
-        if "const" in schema:
-            parts.append(f"constant {schema['const']}")
+            parts.append(path)
+        if isinstance(schema.get("description"), str) and schema["description"]:
+            parts.append(schema["description"])
+        for key in ("type", "enum", "const"):
+            value = schema.get(key)
+            if value not in (None, "", [], {}):
+                parts.append(",".join(str(item) for item in value) if isinstance(value, list) else str(value))
         for keyword in ("anyOf", "oneOf", "allOf"):
             for variant in schema.get(keyword, []):
-                parts.extend(LlmTool._schema_search_parts(variant, path, depth + 1))
+                parts.extend(LlmTool._schema_search_parts(variant, path, depth + 1, root, refs))
         for name, value in (schema.get("properties") or {}).items():
             child_path = f"{path}.{name}" if path else str(name)
-            parts.extend(LlmTool._schema_search_parts(value, child_path, depth + 1))
+            parts.extend(LlmTool._schema_search_parts(value, child_path, depth + 1, root, refs))
         items = schema.get("items")
         if isinstance(items, dict):
-            parts.extend(LlmTool._schema_search_parts(items, f"{path} item".strip(), depth + 1))
-        return tuple(parts[:80])
+            parts.extend(LlmTool._schema_search_parts(items, f"{path} item".strip(), depth + 1, root, refs))
+        return tuple(parts)
+
+    @staticmethod
+    def _schema_embedding_parts(
+        schema: object, path: str = "", depth: int = 0,
+        root: dict[str, Any] | None = None, refs: frozenset[str] = frozenset(),
+    ) -> tuple[str, ...]:
+        """Serialize bounded schema content in a stable structural form."""
+        if depth > 16 or not isinstance(schema, dict):
+            return ()
+        root = root or schema
+        ref = schema.get("$ref")
+        if isinstance(ref, str):
+            if ref in refs:
+                return ()
+            resolved = LlmTool._resolve_local_ref(schema, root)
+            if resolved is None:
+                return ()
+            schema = {**resolved, **{key: value for key, value in schema.items() if key != "$ref"}}
+            refs = refs | {ref}
+        parts: list[str] = []
+        if path:
+            parts.append(f"schema.path={path}")
+        for key in ("description", "type", "enum", "const"):
+            value = schema.get(key)
+            if value not in (None, "", [], {}):
+                encoded = ",".join(str(item) for item in value) if isinstance(value, list) else str(value)
+                parts.append(f"schema.{key}={encoded}")
+        for keyword in ("anyOf", "oneOf", "allOf"):
+            for index, variant in enumerate(schema.get(keyword, ())):
+                parts.extend(LlmTool._schema_embedding_parts(variant, f"{path}.{keyword}.{index}".strip("."), depth + 1, root, refs))
+        for name, value in (schema.get("properties") or {}).items():
+            parts.extend(LlmTool._schema_embedding_parts(value, f"{path}.{name}".strip("."), depth + 1, root, refs))
+        if isinstance(schema.get("items"), dict):
+            parts.extend(LlmTool._schema_embedding_parts(schema["items"], f"{path}.items".strip("."), depth + 1, root, refs))
+        return tuple(parts)
+
+    @staticmethod
+    def _bounded_schema_parts(schema: dict[str, Any], embedding: bool = False) -> tuple[str, ...]:
+        """Allocate the schema budget across root parameters fairly."""
+        properties = schema.get("properties")
+        walker = LlmTool._schema_embedding_parts if embedding else LlmTool._schema_search_parts
+        if not isinstance(properties, dict) or not properties:
+            return walker(schema, root=schema)[:80]
+        budget = max(1, 80 // len(properties))
+        parts: list[str] = []
+        for name, value in properties.items():
+            parts.extend(walker(value, str(name), root=schema)[:budget])
+        return tuple(dict.fromkeys(parts))[:80]
 
     @property
     def canonical_schema_parts(self) -> tuple[str, ...]:
@@ -96,12 +158,11 @@ class LlmTool(SerializableModel, EmbeddableModel):
         cached = getattr(self, "_cached_schema_features", None)
         if cached is None or cached[0] != parameters:
             snapshot = deepcopy(parameters)
-            properties = snapshot.get("properties") or {}
             cached = (
                 snapshot,
-                self._schema_search_parts(snapshot),
-                frozenset(self._schema_values(properties.get("domain", {}))),
-                frozenset(self._schema_values(properties.get("device_class", {}))),
+                self._bounded_schema_parts(snapshot),
+                frozenset(root_property_values(snapshot, "domain")),
+                frozenset(root_property_values(snapshot, "device_class")),
             )
             self._cached_schema_features = cached
         return cached
@@ -119,22 +180,25 @@ class LlmTool(SerializableModel, EmbeddableModel):
         """Return explicit target domains declared by the tool schema."""
         domains = set(self.schema_domains)
         if self.metadata:
-            domains.update(self.metadata.supported_domains)
+            metadata_domains = (
+                self.metadata.get("supported_domains", ())
+                if isinstance(self.metadata, dict)
+                else self.metadata.supported_domains
+            )
+            domains.update(metadata_domains or ())
         return tuple(sorted(domains))
 
     @property
     def canonical_search_parts(self) -> tuple[str, ...]:
-        """Return phrase-oriented text used to retrieve this tool."""
+        """Return searchable identity, capability, domain, and schema metadata."""
         canonical_name = " ".join(self.canonical_name_parts)
-        action_keywords = " ".join(self.canonical_action_keywords)
         return tuple(
             value
             for value in (
                 self.name,
                 canonical_name,
-                action_keywords,
+                self.canonical_action,
                 *self.canonical_supported_domains,
-                self.family,
                 self.description,
                 *self.canonical_schema_parts,
             )
@@ -142,11 +206,20 @@ class LlmTool(SerializableModel, EmbeddableModel):
         )
 
     @property
-    def family(self) -> str:
-        """Determine the family of the tool based on its metadata or name."""
-        if self.metadata and self.metadata.family:
-            return self.metadata.family
-        return ""
+    def canonical_action_document(self) -> str:
+        """Return compact language-independent action metadata for lexical retrieval."""
+        parts: list[object] = [
+            self.canonical_action or " ".join(self.canonical_name_parts),
+            *self.canonical_supported_domains,
+        ]
+        if self.metadata:
+            expected_states = (
+                self.metadata.get("expected_states", ())
+                if isinstance(self.metadata, dict)
+                else self.metadata.expected_states
+            )
+            parts.extend(expected_states or ())
+        return " ".join(str(part) for part in parts if part)
 
     @staticmethod
     def split_canonical_name(name: str) -> tuple[str, ...]:
@@ -155,10 +228,16 @@ class LlmTool(SerializableModel, EmbeddableModel):
     
     def to_dict(self) -> dict[str, Any]:
         """Return a dictionary representation of the tool."""
+        metadata = self.metadata.to_dict() if self.metadata else None
+        if metadata is not None:
+            # Existing indexes can contain metadata written before schema
+            # domains were extracted. Always serialize the live schema-derived
+            # value so re-exposure does not preserve stale empty metadata.
+            metadata["supported_domains"] = list(self.canonical_supported_domains)
         return {
             "name": self.name,
             "description": self.description,
-            "metadata": self.metadata.to_json_str() if self.metadata else None,
+            "metadata": json.dumps(metadata) if metadata is not None else None,
             "parameters": json.dumps(self.parameters)
         }
 
@@ -174,25 +253,28 @@ class LlmTool(SerializableModel, EmbeddableModel):
             parameters=parameters,
         )
 
-    def to_embedding_text(self) -> str:
-        """Return a string representation of the tool for embedding purposes."""
-        parts = [ f"Tool name: {self.name}" ]
-        self.append_if_exists(
-            parts,
-            "canonical parts",
-            " ".join(self.canonical_name_parts),
-        )
-        self.append_if_exists(parts, "family", self.family)
-        self.append_if_exists(parts, "action keywords", " ".join(self.canonical_action_keywords))
-        self.append_if_exists(
-            parts,
-            "supported domains",
-            ", ".join(self.canonical_supported_domains),
-        )
-        self.append_if_exists(parts, "Description", self.description)
-        self.append_if_exists(parts, "schema", "; ".join(self.canonical_schema_parts))
+    def to_embedding_text(self, translations: RAGentTranslations | None = None) -> str:
+        """Return a compact action concept for multilingual semantic search."""
+        translations = self._translations(translations)
+        parts = []
 
-        return " | ".join(parts)
+        self.append_if_exists(parts, translations.embedding("tool_action", value="{}"), self.canonical_action)
+        self.append_if_exists(parts, translations.embedding("tool_domains", value="{}"), list(self.canonical_supported_domains))
+
+        if self.metadata:
+            expected_states = self.metadata.get("expected_states", ()) if isinstance(self.metadata, dict) else self.metadata.expected_states
+            self.append_if_exists(parts, translations.embedding("tool_expected_states", value="{}"), list(expected_states or ()))
+
+        self.append_if_exists(parts, translations.embedding("tool_description", value="{}"), self.description)
+        # Keep schema structure literal and stable: it is both useful content
+        # for a custom integration and does not require a query-time model.
+        parts.extend(value for value in (
+            self.name,
+            " ".join(self.canonical_name_parts),
+            *self._bounded_schema_parts(self.parameters or {}, embedding=True),
+        ) if value)
+
+        return " ".join(parts)
 
     def to_tool_dict(self) -> Dict[str, Any]:
         """Return a dictionary representation of the tool suitable for use in an LLM context."""

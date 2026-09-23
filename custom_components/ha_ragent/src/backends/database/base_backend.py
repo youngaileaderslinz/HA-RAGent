@@ -1,4 +1,6 @@
 import asyncio
+import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any, Dict, List
 from abc import ABC, abstractmethod
 from functools import wraps
@@ -12,6 +14,8 @@ from custom_components.ha_ragent.src.models.embedding.tool_embedding import LlmT
 from custom_components.ha_ragent.src.models.embedding.memory import Memory
 from custom_components.ha_ragent.src.models.embedding.memory_embedding import MemoryEmbedding
 from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
+
+_logger = BaseLogger(__name__)
 
 
 def invalidates_cache(method):
@@ -51,12 +55,25 @@ class ABaseDbBackend(ABC):
         self._lexical_object_cache[collection_name] = tuple(objects)
         self._collection_presence[collection_name] = bool(objects)
         self._collection_revisions[collection_name] = self._collection_revisions.get(collection_name, 0) + 1
+        _logger.log_payload(
+            "cache.replace", 
+            collection=collection_name,
+            revision=self._collection_revision(collection_name), 
+            objects=objects
+        )
 
     def _collection_revision(self, collection_name: str) -> tuple[int, int]:
         return self._cache_revision, self._collection_revisions.get(collection_name, 0)
 
     def invalidate_collection_cache(self, collection_name: str | None = None, *, contents_changed: bool = True) -> None:
         """Invalidate one metadata snapshot or all collection snapshots."""
+        previous = None
+        if _logger.is_enabled_for(logging.DEBUG):
+            previous = (
+                dict(self._lexical_object_cache)
+                if collection_name is None
+                else self._lexical_object_cache.get(collection_name)
+            )
         if collection_name is None:
             self._cache_revision += 1
             self._collection_revisions.clear()
@@ -68,6 +85,15 @@ class ABaseDbBackend(ABC):
             self._lexical_object_cache.pop(collection_name, None)
             if contents_changed:
                 self._collection_presence.pop(collection_name, None)
+        _logger.log_payload(
+            "cache.invalidate", 
+            collection=collection_name,
+            contents_changed=contents_changed, 
+            previous=previous,
+            cache_revision=self._cache_revision,
+            collection_revisions=self._collection_revisions,
+            cached_collections=list(self._lexical_object_cache)
+        )
 
     async def async_collection_has_objects(self, config_subentry: dict, collection_name: str) -> bool:
         """Cache an authoritative existence check until the collection changes."""
@@ -78,7 +104,14 @@ class ABaseDbBackend(ABC):
                 present = await self._async_collection_has_objects(config_subentry, collection_name)
                 if revision == self._collection_revision(collection_name):
                     self._collection_presence[collection_name] = present
-            return self._collection_presence[collection_name]
+            present = self._collection_presence[collection_name]
+            _logger.log_payload(
+                "cache.presence", 
+                collection=collection_name,
+                present=present, 
+                presence_cache=self._collection_presence
+            )
+            return present
 
     async def _async_collection_has_objects(self, config_subentry: dict, collection_name: str) -> bool:
         return bool(await self.async_list_objects(MemoryEmbedding, config_subentry, collection_name))
@@ -93,6 +126,7 @@ class ABaseDbBackend(ABC):
     async def async_get_lexical_objects(self, object_type: type[DeviceEmbedding | LlmToolEmbedding | MemoryEmbedding], config_subentry: dict, collection_name: str) -> List[Device | LlmTool | Memory]:
         """Return cached lexical metadata, loading it once when necessary."""
         cached = self._lexical_object_cache.get(collection_name)
+        cache_hit = cached is not None
         if cached is None:
             lock = self._lexical_cache_locks.setdefault(collection_name, asyncio.Lock())
             async with lock:
@@ -110,7 +144,15 @@ class ABaseDbBackend(ABC):
                         self._collection_presence[collection_name] = bool(cached)
                     else:
                         cached = self._lexical_object_cache.get(collection_name)
-        return list(cached)
+        objects = list(cached)
+        _logger.log_payload(
+            "cache.lexical_snapshot", 
+            collection=collection_name,
+            cache_hit=cache_hit, 
+            revision=self._collection_revision(collection_name),
+            objects=objects
+        )
+        return objects
 
     @staticmethod
     @abstractmethod
@@ -158,6 +200,20 @@ class ABaseDbBackend(ABC):
         """Retrieve objects, discarding scores from the canonical result."""
         results = await self.async_retrieve_scored_objects(object_type, config_subentry, collection_name, query_embedding, top_k)
         return [result.item for result in results]
+
+    @staticmethod
+    def sort_scored_results(
+        results: List[ScoredResult[Device | LlmTool | Memory]],
+        top_k: int | None = None,
+    ) -> List[ScoredResult[Device | LlmTool | Memory]]:
+        """Return deterministic best-first results with ranks matching order."""
+        ordered = sorted(results, key=lambda result: (-result.score, result.rank))
+        if top_k is not None:
+            ordered = ordered[:max(0, top_k)]
+        return [
+            ScoredResult(result.item, result.score, rank)
+            for rank, result in enumerate(ordered, start=1)
+        ]
 
     @abstractmethod
     async def async_retrieve_scored_objects(self, object_type: type[DeviceEmbedding | LlmToolEmbedding | MemoryEmbedding], config_subentry: dict, collection_name: str, query_embedding: List[float], top_k: int = 10) -> List[ScoredResult[Device | LlmTool | Memory]]:

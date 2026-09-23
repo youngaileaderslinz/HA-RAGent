@@ -12,11 +12,31 @@ from custom_components.ha_ragent.src.homeassistant.tools.forget_fact import RAGe
 from custom_components.ha_ragent.src.homeassistant.tools.remember_fact import RAGentRememberTool
 from custom_components.ha_ragent.src.models.embedding.memory import Memory
 from custom_components.ha_ragent.src.models.embedding.memory_embedding import MemoryEmbedding
+from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
 from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 
+def test_missing_translation_language_falls_back_to_english() -> None:
+    RAGentTranslations._cache.clear()
+
+    missing = RAGentTranslations._load("missing")
+    english = RAGentTranslations._load("en")
+
+    assert missing == english
+
+
+def test_missing_translation_values_use_safe_defaults() -> None:
+    translations = RAGentTranslations.__new__(RAGentTranslations)
+    translations._data = {}
+
+    assert translations.get("Tools", "missing_tool", "fallback") == "fallback"
+    assert not translations.has_tool("missing_tool")
+
+
 class FakeEmbedder:
-    async def async_embed_text(self, config: dict[str, Any], text: str) -> list[float]:
+    async def async_embed_text(
+        self, config: dict[str, Any], text: str, input_type: str = "query",
+    ) -> list[float]:
         return [1.0, float(len(text)), 0.5]
 
 
@@ -48,8 +68,11 @@ class FakeVectorDb:
         ]
         self.objects[collection_name] = [*retained, *embeddings]
 
-    async def async_retrieve_objects(self, object_type, config_subentry: dict[str, Any], collection_name: str, query_embedding: list[float], top_k: int):
-        return [object_type.parse_object(item.to_dict()) for item in self.objects.get(collection_name, [])[:top_k]]
+    async def async_retrieve_scored_objects(self, object_type, config_subentry: dict[str, Any], collection_name: str, query_embedding: list[float], top_k: int):
+        return [
+            ScoredResult(object_type.parse_object(item.to_dict()), 1.0, rank)
+            for rank, item in enumerate(self.objects.get(collection_name, [])[:top_k], start=1)
+        ]
 
 
 def create_memory_hass() -> tuple[SimpleNamespace, FakeVectorDb]:
@@ -59,6 +82,7 @@ def create_memory_hass() -> tuple[SimpleNamespace, FakeVectorDb]:
         subentries={"agent": SimpleNamespace(data={"model": "embed"})},
         embedder_backend=FakeEmbedder(),
         vector_db_backend=vector_db,
+        translations=RAGentTranslations("en"),
     )
     hass = SimpleNamespace(data={DOMAIN: {"entry": entry}})
     return hass, vector_db
@@ -75,6 +99,38 @@ def test_memory_model_round_trip() -> None:
     assert "memory_id" not in embedding.to_dict()
 
 
+def test_memory_confidence_controls_exposed_count() -> None:
+    memories = [
+        Memory(str(index), f"Memory {index}", "2026-09-01T12:00:00+00:00")
+        for index in range(4)
+    ]
+
+    weak = [
+        ScoredResult(memory, score, rank)
+        for rank, (memory, score) in enumerate(
+            zip(memories, (0.59, 0.58, 0.57, 0.56)), start=1
+        )
+    ]
+    assert MemoryManager.select_confident_memories(weak, 0, 4) == []
+    assert MemoryManager.select_confident_memories(weak, 1, 4) == [memories[0]]
+
+    mixed = [
+        ScoredResult(memory, score, rank)
+        for rank, (memory, score) in enumerate(
+            zip(memories, (0.95, 0.82, 0.70, 0.55)), start=1
+        )
+    ]
+    assert MemoryManager.select_confident_memories(mixed, 0, 4) == memories[:2]
+
+    strong = [
+        ScoredResult(memory, score, rank)
+        for rank, (memory, score) in enumerate(
+            zip(memories, (0.95, 0.90, 0.86, 0.82)), start=1
+        )
+    ]
+    assert MemoryManager.select_confident_memories(strong, 0, 4) == memories
+
+
 def test_memory_manager_remember_recall_replace_and_forget() -> None:
     async def run() -> None:
         hass, vector_db = create_memory_hass()
@@ -86,10 +142,10 @@ def test_memory_manager_remember_recall_replace_and_forget() -> None:
         assert first.id == replacement.id
         assert replacement.content == "The reading lamp is beside the sofa."
         assert len(vector_db.objects[manager.collection_name]) == 1
-        assert await manager.async_recall([1.0, 1.0, 1.0], 4) == [replacement]
+        assert await manager.async_recall([1.0, 1.0, 1.0], 0, 4) == [replacement]
         assert await manager.async_forget(replacement.id) is True
         assert await manager.async_forget(replacement.id) is False
-        assert await manager.async_recall([1.0, 1.0, 1.0], 4) == []
+        assert await manager.async_recall([1.0, 1.0, 1.0], 0, 4) == []
 
     asyncio.run(run())
 

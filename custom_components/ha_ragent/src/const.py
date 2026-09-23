@@ -7,6 +7,7 @@ CONFIG_FLOW_VERSION = 1
 # General constants
 #-----------------------------------------------
 DOMAIN = "ha_ragent"
+TRACE = 5
 RAGENT_LLM_API_ID = "ha_ragent_api"
 RAGENT_LLM_API_NAME = "HA-RAGent"
 HOME_ASSISTANT_SCRIPT_DOMAIN = "script"
@@ -75,7 +76,6 @@ SELECTED_LANGUAGE_OPTIONS = [
 TRANSLATION_PROMPT_PERSONA = "PERSONA_PROMPTS"
 TRANSLATION_PROMPT_AREAS = "AREAS_PROMPT"
 TRANSLATION_PROMPT_DEVICES = "DEVICES_PROMPT"
-TRANSLATION_PROMPT_CONTINUITY = "CONTINUITY_PROMPT"
 TRANSLATION_PROMPT_MEMORIES = "MEMORIES_CONTEXT_PROMPT"
 TRANSLATION_PROMPT_RETRIES = "MAX_RETRIES_PROMPT"
 TRANSLATION_PROMPT_SCHEDULED_ACTION = "SCHEDULED_ACTION_PROMPT"
@@ -96,6 +96,11 @@ TRANSLATION_ERROR_MEMORY_ID_INVALID = "memory_id_invalid"
 TRANSLATION_ERROR_MEMORY_NOT_FOUND = "memory_not_found"
 TRANSLATION_ERROR_SEARCH_QUERY_EMPTY = "search_query_empty"
 TRANSLATION_ERROR_SEARCH_QUERIES_TOO_MANY = "search_queries_too_many"
+TRANSLATION_ERROR_NO_SPEECH = "no_speech"
+TRANSLATION_ERROR_TOOL_NOT_EXPOSED = "tool_not_exposed"
+TRANSLATION_ERROR_TOOL_CALL_PREVIOUSLY_FAILED = "tool_call_previously_failed"
+TRANSLATION_ERROR_TOOL_CALL_ALREADY_EXECUTED = "tool_call_already_executed"
+TRANSLATION_ERROR_TOOL_CALLING_INACTIVE = "tool_calling_inactive"
 
 
 #-----------------------------------------------
@@ -118,20 +123,21 @@ RETRIEVAL_METHOD_OPTIONS = (
     RETRIEVAL_METHOD_LEXICAL,
 )
 
+DEVICE_CONFIDENCE_NEAR_TIE_MARGIN = 0.05
+DEVICE_SELECTION_ABSOLUTE_FLOOR = 0.28
+DEVICE_SELECTION_RELATIVE_FLOOR = 0.82
+DEVICE_SELECTION_GAP_THRESHOLD = 0.09
+DEVICE_CONTINUITY_MAX_BOOST = 0.04
+
+TOOL_CONFIDENCE_NEAR_TIE_MARGIN = 0.05
+TOOL_SELECTION_ABSOLUTE_FLOOR = 0.20
+TOOL_SELECTION_RELATIVE_FLOOR = 0.60
+TOOL_SELECTION_GAP_THRESHOLD = 0.11
+
+MEMORY_ABSOLUTE_CONFIDENCE_FLOOR = 0.60
+MEMORY_RELATIVE_CONFIDENCE_FLOOR = 0.80
+
 CANONICAL_NAME_SPLIT_PATTERN = r"_|(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])"
-RETRIEVAL_TOOL_SIGNAL_WEIGHTS = {
-    "semantic_rank": 0.75,
-    "semantic_similarity": 1.0,
-    "lexical_exact": 2.0,
-    "lexical_fuzzy": 0.75,
-    "lexical_corpus": 3.0,
-    "lexical_action": 4.0,
-    "domain": 1.5,
-    "device_metadata": 0.5,
-    "continuity": 0.5,
-}
-
-
 #-----------------------------------------------
 # Vector database backend constants
 #-----------------------------------------------
@@ -185,6 +191,9 @@ RAGENT_CHAT_TRUNCATE_MAX_CHARS = 12000
 RAGENT_CHAT_TRUNCATE_RETRIES = 3
 RAGENT_MAX_SEARCH_QUERY_CHARS = 4000
 RAGENT_MAX_SEARCH_QUERIES = 4
+TOOL_RESULT_MAX_ITEMS = 12
+TOOL_RESULT_MAX_TEXT = 2000
+TOOL_RESULT_MAX_DEPTH = 4
 
 CONF_LLM_BACKEND_TYPE = "rag_llm_backend"
 CONF_LLM_MODEL = "rag_llm_model"
@@ -207,9 +216,12 @@ LLM_BACKENDS_WITH_API_KEY = [ BACKEND_LLM_TYPE_OPENAI_COMPATIBLE ]
 #-----------------------------------------------
 # Prompt configuration constants
 #----------------------------------------------
-CONF_NUM_DEVICES_TO_EXTRACT = "rag_num_devices_to_extract"
-CONF_NUM_TOOLS_TO_EXTRACT = "rag_num_tools_to_extract"
-CONF_NUM_MEMORIES_TO_EXTRACT = "rag_num_memories_to_extract"
+CONF_MIN_DEVICES_TO_EXTRACT = "rag_min_devices_to_extract"
+CONF_MAX_DEVICES_TO_EXTRACT = "rag_max_devices_to_extract"
+CONF_MIN_TOOLS_TO_EXTRACT = "rag_min_tools_to_extract"
+CONF_MAX_TOOLS_TO_EXTRACT = "rag_max_tools_to_extract"
+CONF_MIN_MEMORIES_TO_EXTRACT = "rag_min_memories_to_extract"
+CONF_MAX_MEMORIES_TO_EXTRACT = "rag_max_memories_to_extract"
 CONF_MAX_MEMORY_ENTRIES = "rag_max_memory_entries"
 CONF_EXCLUDED_TOOLS = "rag_excluded_tools"
 CONF_CONTEXT_LENGTH = "rag_context_length"
@@ -227,10 +239,6 @@ CONF_REMEMBER_CONVERSATION_TIME_MINUTES = "rag_remember_conversation_time_minute
 CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS = "rag_remember_conversation_num_interactions"
 
 CONF_TEMPERATURE = "rag_temperature"
-CONF_K_TOP = "rag_k_top"
-CONF_P_MIN = "rag_p_min"
-CONF_P_TOP = "rag_p_top"
-CONF_P_TYPICAL = "rag_p_typical"
 
 TOOL_REGEX_PATTERN = re.compile(r"```homeassistant\s*(.*?)\s*```", re.DOTALL)
 
@@ -254,13 +262,6 @@ DEFAULT_PROMPT = """<persona_prompt>
 {% endfor %}
 {% endif %}
 
-{% if continuity_list %}
-<continuity_prompt>
-{% for continuity in continuity_list %}
-- {{ {"entities": continuity.entities, "areas": continuity.areas, "floors": continuity.floors, "domains": continuity.domains, "device_classes": continuity.device_classes, "tool": continuity.tool, "action": continuity.action} | tojson }}
-{% endfor %}
-{% endif %}
-
 <devices_prompt>
 {% for device in device_list %}
 - {{ {"name": device.id, "friendly_name": device.friendly_name, "aliases": device.aliases or [], "domain": device.domain or [], "device_class": device.device_class, "floor": device.floor_name, "area": device.area_name, "area_aliases": device.area_aliases or [], "floor_aliases": device.floor_aliases or [], "state": device.state, "unit_of_measurement": (device.attributes or {}).get('unit_of_measurement', device.unit_of_measurement), "attributes": device.attributes or {}} | tojson }}
@@ -276,20 +277,20 @@ DEFAULT_SETTINGS = {
     CONF_CONTEXT_LENGTH: 4096,
     CONF_EMBEDDING_BACKEND_TYPE: BACKEND_EMBEDDING_TYPE_OLLAMA,
     CONF_ENABLE_MODEL_THINKING: False,
-    CONF_K_TOP: 40,
     CONF_LLM_BACKEND_TYPE: BACKEND_LLM_TYPE_OLLAMA,
+    CONF_LLM_HASS_API: "assist",
     CONF_MAX_MEMORY_ENTRIES: 100,
     CONF_MAX_TOKENS: 1000,
     CONF_MAX_TOOL_CALL_ITERATIONS: 4,
-    CONF_NUM_DEVICES_TO_EXTRACT: 4,
-    CONF_NUM_MEMORIES_TO_EXTRACT: 4,
-    CONF_NUM_TOOLS_TO_EXTRACT: 4,
-    CONF_P_MIN: 0.1,
-    CONF_P_TOP: 0.9,
-    CONF_P_TYPICAL: 1.0,
+    CONF_MIN_DEVICES_TO_EXTRACT: 2,
+    CONF_MAX_DEVICES_TO_EXTRACT: 5,
+    CONF_MIN_MEMORIES_TO_EXTRACT: 0,
+    CONF_MAX_MEMORIES_TO_EXTRACT: 4,
+    CONF_MIN_TOOLS_TO_EXTRACT: 2,
+    CONF_MAX_TOOLS_TO_EXTRACT: 5,
     CONF_PROMPT: DEFAULT_PROMPT,
     CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS: 8,
-    CONF_REMEMBER_CONVERSATION_TIME_MINUTES: 15,
+    CONF_REMEMBER_CONVERSATION_TIME_MINUTES: 30,
     CONF_RETRIEVAL_METHOD: RETRIEVAL_METHOD_AUTOMATIC,
     CONF_SELECTED_LANGUAGE: "en",
     CONF_TEMPERATURE: 0.5,

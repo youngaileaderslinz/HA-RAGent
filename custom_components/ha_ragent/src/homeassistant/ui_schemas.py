@@ -1,4 +1,5 @@
 import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any
 import voluptuous as vol
 from uuid import uuid4
@@ -23,8 +24,10 @@ from homeassistant.helpers.selector import (
 from custom_components.ha_ragent.src.const import (
     BACKEND_VECTOR_DB_TYPE_FAISS,
     BACKEND_VECTOR_DB_TYPE_OPTIONS,
-    CONF_NUM_TOOLS_TO_EXTRACT,
-    CONF_NUM_MEMORIES_TO_EXTRACT,
+    CONF_MIN_TOOLS_TO_EXTRACT,
+    CONF_MAX_TOOLS_TO_EXTRACT,
+    CONF_MIN_MEMORIES_TO_EXTRACT,
+    CONF_MAX_MEMORIES_TO_EXTRACT,
     CONF_MAX_MEMORY_ENTRIES,
     CONF_EXCLUDED_TOOLS,
     CONF_VECTOR_DB_BACKEND_TYPE,
@@ -42,7 +45,6 @@ from custom_components.ha_ragent.src.const import (
     CONF_MAX_TOKENS,
     CONF_MAX_TOOL_CALL_ITERATIONS,
     CONF_PROMPT,
-    CONF_RETRIEVAL_METHOD,
     RETRIEVAL_METHOD_OPTIONS,
     CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
     CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
@@ -51,11 +53,8 @@ from custom_components.ha_ragent.src.const import (
     CONF_ALLOW_AUTO_EMBEDDING,
     CONF_ALLOW_QUESTIONS,
     CONF_TEMPERATURE,
-    CONF_K_TOP,
-    CONF_P_MIN,
-    CONF_P_TOP,
-    CONF_P_TYPICAL,
-    CONF_NUM_DEVICES_TO_EXTRACT,
+    CONF_MIN_DEVICES_TO_EXTRACT,
+    CONF_MAX_DEVICES_TO_EXTRACT,
     DEFAULT_PROMPT,
     
     CONF_VECTOR_DB_PORT,
@@ -86,7 +85,7 @@ from custom_components.ha_ragent.src.utils import get_value, get_setting_value
 
 from custom_components.ha_ragent.src.homeassistant.ragent import RAGent
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 
 def _backend_connection_defaults(backend_type: str, *, ollama_port: int, openai_port: int) -> tuple[int, bool]:
@@ -288,7 +287,7 @@ def ui_schema_config_options(
             api_label = getattr(api, "name", None) or api.id
             llm_api_options.append(SelectOptionDict(value=api.id, label=str(api_label)))
     except Exception as err:
-        _logger.warning("Failed to load LLM APIs: %s", err)
+        _logger.log_string(logging.WARNING, f"Failed to load LLM APIs: {err}")
 
     result: dict = {
         vol.Optional(
@@ -344,22 +343,6 @@ def ui_schema_config_options(
             description={"suggested_value": options.get(CONF_CONTEXT_LENGTH)},
             default=get_setting_value(CONF_CONTEXT_LENGTH, options),
         ): NumberSelector(NumberSelectorConfig(min=512, max=1_048_576, step=512)),
-        # vol.Required(
-        #     CONF_K_TOP,
-        #     description={"suggested_value": options.get(CONF_K_TOP)},
-        # ): NumberSelector(NumberSelectorConfig(min=1, max=256, step=1)),
-        # vol.Required(
-        #     CONF_P_TOP,
-        #     description={"suggested_value": options.get(CONF_P_TOP)},
-        # ): NumberSelector(NumberSelectorConfig(min=0, max=1, step=0.05)),
-        #  vol.Required(
-        #     CONF_P_MIN,
-        #     description={"suggested_value": options.get(CONF_P_MIN)},
-        # ): NumberSelector(NumberSelectorConfig(min=0, max=1, step=0.05)),
-        # vol.Required(
-        #     CONF_P_TYPICAL,
-        #     description={"suggested_value": options.get(CONF_P_TYPICAL)},
-        # ): NumberSelector(NumberSelectorConfig(min=0, max=1, step=0.05)),
         vol.Optional(
             CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
             description={"suggested_value": get_setting_value(CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS, options)},
@@ -381,19 +364,34 @@ def ui_schema_config_options(
             default=get_setting_value(CONF_ENABLE_MODEL_THINKING, options),
         ): BooleanSelector(BooleanSelectorConfig()),
         vol.Required(
-            CONF_NUM_DEVICES_TO_EXTRACT,
-            description={"suggested_value": options.get(CONF_NUM_DEVICES_TO_EXTRACT)},
-            default=get_setting_value(CONF_NUM_DEVICES_TO_EXTRACT, options),
-        ): int,
+            CONF_MIN_DEVICES_TO_EXTRACT,
+            description={"suggested_value": options.get(CONF_MIN_DEVICES_TO_EXTRACT)},
+            default=get_setting_value(CONF_MIN_DEVICES_TO_EXTRACT, options),
+        ): NumberSelector(NumberSelectorConfig(min=0, max=50, mode=NumberSelectorMode.BOX)),
         vol.Required(
-            CONF_NUM_TOOLS_TO_EXTRACT,
-            description={"suggested_value": options.get(CONF_NUM_TOOLS_TO_EXTRACT)},
-            default=get_setting_value(CONF_NUM_TOOLS_TO_EXTRACT, options),
-        ): int,
+            CONF_MAX_DEVICES_TO_EXTRACT,
+            description={"suggested_value": options.get(CONF_MAX_DEVICES_TO_EXTRACT)},
+            default=get_setting_value(CONF_MAX_DEVICES_TO_EXTRACT, options),
+        ): NumberSelector(NumberSelectorConfig(min=0, max=50, mode=NumberSelectorMode.BOX)),
+        vol.Required(
+            CONF_MIN_TOOLS_TO_EXTRACT,
+            description={"suggested_value": options.get(CONF_MIN_TOOLS_TO_EXTRACT)},
+            default=get_setting_value(CONF_MIN_TOOLS_TO_EXTRACT, options),
+        ): NumberSelector(NumberSelectorConfig(min=0, max=50, mode=NumberSelectorMode.BOX)),
+        vol.Required(
+            CONF_MAX_TOOLS_TO_EXTRACT,
+            description={"suggested_value": options.get(CONF_MAX_TOOLS_TO_EXTRACT)},
+            default=get_setting_value(CONF_MAX_TOOLS_TO_EXTRACT, options),
+        ): NumberSelector(NumberSelectorConfig(min=0, max=50, mode=NumberSelectorMode.BOX)),
         vol.Optional(
-            CONF_NUM_MEMORIES_TO_EXTRACT,
-            description={"suggested_value": get_setting_value(CONF_NUM_MEMORIES_TO_EXTRACT, options)},
-            default=get_setting_value(CONF_NUM_MEMORIES_TO_EXTRACT, options),
+            CONF_MIN_MEMORIES_TO_EXTRACT,
+            description={"suggested_value": get_setting_value(CONF_MIN_MEMORIES_TO_EXTRACT, options)},
+            default=get_setting_value(CONF_MIN_MEMORIES_TO_EXTRACT, options),
+        ): NumberSelector(NumberSelectorConfig(min=0, max=20, mode=NumberSelectorMode.BOX)),
+        vol.Optional(
+            CONF_MAX_MEMORIES_TO_EXTRACT,
+            description={"suggested_value": get_setting_value(CONF_MAX_MEMORIES_TO_EXTRACT, options)},
+            default=get_setting_value(CONF_MAX_MEMORIES_TO_EXTRACT, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=20, mode=NumberSelectorMode.BOX)),
         vol.Optional(
             CONF_MAX_MEMORY_ENTRIES,
@@ -423,18 +421,17 @@ def ui_schema_config_options(
         CONF_ENABLE_MODEL_THINKING,
         CONF_RETRIEVAL_METHOD,
         CONF_EXCLUDED_TOOLS,
-        CONF_NUM_DEVICES_TO_EXTRACT,
-        CONF_NUM_TOOLS_TO_EXTRACT,
-        CONF_NUM_MEMORIES_TO_EXTRACT,
+        CONF_MIN_DEVICES_TO_EXTRACT,
+        CONF_MAX_DEVICES_TO_EXTRACT,
+        CONF_MIN_TOOLS_TO_EXTRACT,
+        CONF_MAX_TOOLS_TO_EXTRACT,
+        CONF_MIN_MEMORIES_TO_EXTRACT,
+        CONF_MAX_MEMORIES_TO_EXTRACT,
         CONF_MAX_MEMORY_ENTRIES,
         CONF_CONTEXT_LENGTH,
         CONF_MAX_TOKENS,
         # sampling parameters
         CONF_TEMPERATURE,
-        CONF_P_TOP,
-        CONF_P_MIN,
-        CONF_P_TYPICAL,
-        CONF_K_TOP,
         # tool and memory parameters
         CONF_MAX_TOOL_CALL_ITERATIONS,
         CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from custom_components.ha_ragent.src.const import DEVICE_ATTRIBUTES_MAX_JSON_LENGTH, DEVICE_ATTRIBUTES_TO_EXCLUDE
 from custom_components.ha_ragent.src.models.base.serializeable_model import SerializableModel
 from custom_components.ha_ragent.src.models.base.embeddable_model import EmbeddableModel
+from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 @dataclass
 class Device(SerializableModel, EmbeddableModel):
@@ -60,21 +61,27 @@ class Device(SerializableModel, EmbeddableModel):
             device_class=data.get("device_class", None)
         )
 
-    def to_embedding_text(self) -> str:
+    def to_embedding_text(self, translations: RAGentTranslations | None = None) -> str:
         """Return a string representation of the device for embedding purposes."""
-        parts = [ f"Device ID: {self.id}" ]
-        self.append_if_exists(parts, "Friendly Name", self.friendly_name)
-        self.append_if_exists(parts, "Aliases", self.aliases)
-        self.append_if_exists(parts, "Area", self.area_name)
-        self.append_if_exists(parts, "Floor", self.floor_name)
-        self.append_if_exists(parts, "Area Aliases", self.area_aliases)
-        self.append_if_exists(parts, "Floor Aliases", self.floor_aliases)
-        self.append_if_exists(parts, "Domain", self.domain)
-        self.append_if_exists(parts, "Device Labels", self.device_labels)
-        self.append_if_exists(parts, "Unit of Measurement", self.unit_of_measurement)
-        self.append_if_exists(parts, "Device Class", self.device_class)
+        translations = self._translations(translations)
+        parts = []
 
-        return " | ".join(parts)
+        self.append_if_exists(parts, translations.embedding("device_name", value="{}"), self.friendly_name)
+        self.append_if_exists(parts, translations.embedding("device_aliases", value="{}"), self.aliases)
+
+        self.append_if_exists(parts, translations.embedding("device_area", value="{}"), self.area_name)
+        self.append_if_exists(parts, translations.embedding("device_area_aliases", value="{}"), self.area_aliases)
+
+        self.append_if_exists(parts, translations.embedding("device_floor", value="{}"), self.floor_name)
+        self.append_if_exists(parts, translations.embedding("device_floor_aliases", value="{}"), self.floor_aliases)
+
+        self.append_if_exists(parts, translations.embedding("device_domain", value="{}"), self.domain)
+        self.append_if_exists(parts, translations.embedding("device_class", value="{}"), self.device_class)
+
+        self.append_if_exists(parts, translations.embedding("device_labels", value="{}"), self.device_labels)
+        self.append_if_exists(parts, translations.embedding("device_unit", value="{}"), self.unit_of_measurement)
+
+        return " ".join(parts)
 
     @staticmethod
     def clean_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
@@ -82,13 +89,14 @@ class Device(SerializableModel, EmbeddableModel):
         cleaned_attributes = attributes.copy()
         for key, value in attributes.items():
             if key in DEVICE_ATTRIBUTES_TO_EXCLUDE:
-                cleaned_attributes.pop(key)
+                cleaned_attributes.pop(key, None)
+                continue
 
             try:
                 json_value = json.dumps(value)
                 if len(json_value) > DEVICE_ATTRIBUTES_MAX_JSON_LENGTH:
-                    cleaned_attributes.pop(key)
+                    cleaned_attributes.pop(key, None)
             except (TypeError, OverflowError):
-                cleaned_attributes.pop(key)
+                cleaned_attributes.pop(key, None)
 
         return cleaned_attributes

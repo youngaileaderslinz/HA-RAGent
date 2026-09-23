@@ -159,6 +159,7 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
                     candidates=candidates,
                 )
 
+
     def set_scheduling_context(self, request: str, messages: list[dict], candidates: list[dict]) -> None:
         """Supply runtime context directly; the model only specifies the action."""
         for tool in self.tools:
@@ -174,11 +175,14 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
             if isinstance(tool, RAGentSemanticSearchTool):
                 tool.refresh_candidates(candidates)
 
-    def prune_search_candidates(self, completed_names: set[str]) -> None:
-        """Remove completed targets from semantic-search context."""
+
+    def requested_capabilities(self) -> list[dict[str, object]]:
+        """Return structured operations from the latest semantic search."""
         for tool in self.tools:
             if isinstance(tool, RAGentSemanticSearchTool):
-                tool.prune_candidates(completed_names)
+                if tool.requested_capabilities:
+                    return tool.requested_capabilities
+        return []
 
     async def async_call_tool(self, tool_input: llm.ToolInput) -> Any:
         """Intercept calls to RAGent tools and delegate to the appropriate tool instance."""

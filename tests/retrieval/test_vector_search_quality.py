@@ -83,9 +83,9 @@ def test_tool_embedding_includes_parameter_schema() -> None:
 
     embedding_text = tool.to_embedding_text()
 
-    assert "canonical parts: hass turn off" in embedding_text
-    assert "parameter area" in embedding_text
-    assert "type string" in embedding_text
+    assert "hass turn off" in embedding_text
+    assert "schema.path=area" in embedding_text
+    assert "schema.type=string" in embedding_text
 
 
 def test_device_embedding_includes_device_class() -> None:
@@ -98,7 +98,7 @@ def test_device_embedding_includes_device_class() -> None:
         device_class="door",
     )
 
-    assert "Device Class: door" in device.to_embedding_text()
+    assert "device class is door" in device.to_embedding_text()
 
 
 def test_recovery_instruction_searches_for_missing_action_tool() -> None:

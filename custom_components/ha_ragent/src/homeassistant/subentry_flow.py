@@ -1,10 +1,9 @@
-import logging
-import os
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any
+import logging
 import voluptuous as vol
 from types import SimpleNamespace
 
-from homeassistant.const import CONF_LLM_HASS_API
 from homeassistant.config_entries import (
     ConfigEntryState,
     ConfigSubentryFlow,
@@ -27,16 +26,15 @@ from custom_components.ha_ragent.src.const import (
     CONF_PROMPT,
     CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
     CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
-    CONF_SELECTED_LANGUAGE,
-
     DEFAULT_SETTINGS,
     CONF_EXCLUDED_TOOLS,
-    CONF_NUM_MEMORIES_TO_EXTRACT,
+    CONF_MIN_MEMORIES_TO_EXTRACT,
+    CONF_MAX_MEMORIES_TO_EXTRACT,
     CONF_MAX_MEMORY_ENTRIES
 )
 
 from custom_components.ha_ragent.src.utils import (
-    try_parse_int, get_setting_value
+    get_entry_language, try_parse_int, get_setting_value
 )
 
 from custom_components.ha_ragent.src.homeassistant.ui_schemas import (
@@ -47,7 +45,7 @@ from custom_components.ha_ragent.src.homeassistant.ui_schemas import (
 from custom_components.ha_ragent.src.homeassistant.ragent import RAGent
 from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 class RagentSubentryFlowHandler(ConfigSubentryFlow):
     def __init__(self) -> None:
@@ -80,8 +78,8 @@ class RagentSubentryFlowHandler(ConfigSubentryFlow):
 
         embedding_models = await self._embedding_client.async_get_available_models()
         llm_models = await self._llm_client.async_get_available_models()
-        _logger.debug("Available embedding models: %s", embedding_models)
-        _logger.debug("Available LLM models: %s", llm_models)
+        _logger.log_string(logging.DEBUG, f"Available embedding models: {embedding_models}")
+        _logger.log_string(logging.DEBUG, f"Available LLM models: {llm_models}")
         schema = ui_schema_pick_models(
             embedding_models,
             llm_models,
@@ -121,11 +119,11 @@ class RagentSubentryFlowHandler(ConfigSubentryFlow):
             subentry = self._get_reconfigure_subentry() if not self._is_new else SimpleNamespace(data=self.model_config, title="new subentry")
             excluded_tool_names.update(await ToolExtractor(self.hass, entry).async_get_embeddable_tool_names(subentry))
         except Exception:
-            _logger.exception("Failed to load extracted tools for exclusion selector")
+            _logger.log_string(logging.ERROR, "Failed to load extracted tools for exclusion selector")
 
         schema = ui_schema_config_options(
                 self.hass,
-                entry.options.get(CONF_SELECTED_LANGUAGE, "en"),
+                get_entry_language(entry),
                 self.model_config,
                 entry.data[CONF_VECTOR_DB_BACKEND_TYPE],
                 entry.data[CONF_EMBEDDING_BACKEND_TYPE],
@@ -142,7 +140,8 @@ class RagentSubentryFlowHandler(ConfigSubentryFlow):
                 CONF_MAX_TOOL_CALL_ITERATIONS,
                 CONF_CONTEXT_LENGTH,
                 CONF_MAX_TOKENS,
-                CONF_NUM_MEMORIES_TO_EXTRACT,
+                CONF_MIN_MEMORIES_TO_EXTRACT,
+                CONF_MAX_MEMORIES_TO_EXTRACT,
                 CONF_MAX_MEMORY_ENTRIES,
              ):
                 if key in user_input:
@@ -155,7 +154,7 @@ class RagentSubentryFlowHandler(ConfigSubentryFlow):
                     
                     return await self.async_step_finish()
                 except Exception:
-                    _logger.exception("An unknown error has occurred!")
+                    _logger.log_string(logging.ERROR, "An unknown error has occurred!")
                     errors["base"] = "unknown"
 
         return self.async_show_form(

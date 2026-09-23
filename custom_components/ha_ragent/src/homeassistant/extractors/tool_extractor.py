@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from collections.abc import Iterable
 from typing import Any, List, Tuple
 
@@ -24,12 +25,16 @@ from custom_components.ha_ragent.src.const import (
     RAGENT_TIMER_DEVICE_ID,
 )
 
-from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
+from custom_components.ha_ragent.src.models.embedding.tool_metadata import (
+    ToolMetadata,
+    split_canonical_name,
+)
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
+from custom_components.ha_ragent.src.models.embedding.schema_constraints import root_property_values
 from custom_components.ha_ragent.src.homeassistant.ragent_api import resolve_llm_api_id
 from custom_components.ha_ragent.src.homeassistant.ragent_config_entry import RAGentConfigEntry
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 class ToolExtractor:
     _timer_handlers: dict[int, tuple[Any, int]] = {}
@@ -44,33 +49,46 @@ class ToolExtractor:
     def _normalize_strings(values: Iterable[Any]) -> set[str]:
         return {str(value).lower() for value in values if isinstance(value, str) and value}
 
-    def _extract_values_from_validator(self, validator: Any) -> Tuple[set[str], bool]:
+    @classmethod
+    def _extract_values_from_validator(cls, validator: Any) -> Tuple[set[str], bool]:
         values: set[str] = set()
         universal = False
 
         if isinstance(validator, vol.In):
-            return self._normalize_strings(validator.container), False
+            return cls._normalize_strings(validator.container), False
 
-        if isinstance(validator, vol.All) or isinstance(validator, vol.Any):
+        if isinstance(validator, vol.All):
+            constrained: list[set[str]] = []
             for nested in validator.validators:
-                nested_values, nested_universal = self._extract_values_from_validator(nested)
+                nested_values, nested_universal = cls._extract_values_from_validator(nested)
+                if nested_values:
+                    constrained.append(nested_values)
+                universal = universal or nested_universal
+            # A free-form conjunct is neutral; multiple literal conjuncts
+            # narrow their intersection rather than broadening a domain list.
+            return (set.intersection(*constrained) if constrained else set()), universal
+
+        if isinstance(validator, vol.Any):
+            for nested in validator.validators:
+                nested_values, nested_universal = cls._extract_values_from_validator(nested)
                 values.update(nested_values)
                 universal = universal or nested_universal
             return values, universal
 
         if isinstance(validator, (list, tuple, set)):
             for nested in validator:
-                nested_values, nested_universal = self._extract_values_from_validator(nested)
+                nested_values, nested_universal = cls._extract_values_from_validator(nested)
                 values.update(nested_values)
                 universal = universal or nested_universal
             return values, universal
 
-        if callable(validator) and getattr(validator, "__name__", "") == "string":
+        if callable(validator) and getattr(validator, "__name__", "") in {"string", "str"}:
             return set(), True
 
         return set(), False
 
-    def _extract_field_constraints(self, schema_dict: dict[Any, Any], field_name: str) -> Tuple[List[str], bool, bool]:
+    @classmethod
+    def _extract_field_constraints(cls, schema_dict: dict[Any, Any], field_name: str) -> Tuple[List[str], bool, bool]:
         values = set()
         universal = False
         has_field = False
@@ -80,27 +98,110 @@ class ToolExtractor:
                 continue
 
             has_field = True
-            found_values, found_universal = self._extract_values_from_validator(validator)
+            found_values, found_universal = cls._extract_values_from_validator(validator)
             values.update(found_values)
             universal = universal or found_universal
 
         return list(values), universal, has_field
 
-    def _extract_tool_metadata(self, tool_name: str, parameters: Any) -> ToolMetadata:
+    @staticmethod
+    def _schema_values(schema: object) -> set[str]:
+        """Extract explicit const/enum values from an OpenAPI schema."""
+        values: set[str] = set()
+        if isinstance(schema, dict):
+            constant = schema.get("const")
+            if isinstance(constant, (str, int, float)):
+                values.add(str(constant).casefold())
+            enum = schema.get("enum")
+            if isinstance(enum, list):
+                values.update(str(value).casefold() for value in enum)
+            for keyword in ("anyOf", "oneOf", "allOf"):
+                for nested in schema.get(keyword, []):
+                    values.update(ToolExtractor._schema_values(nested))
+        return values
+
+    @staticmethod
+    def _metadata_value(metadata: object, *names: str, default: Any = None) -> Any:
+        for name in names:
+            if isinstance(metadata, dict) and name in metadata:
+                return metadata[name]
+            value = getattr(metadata, name, None)
+            if value is not None:
+                return value
+        return default
+
+    @classmethod
+    def extract_tool_metadata(cls, tool: Any, parameters: Any) -> ToolMetadata:
+        """Build capability metadata from explicit tool metadata and schema only."""
         metadata = ToolMetadata()
-
-        if not isinstance(parameters, dict):
-            return metadata
-
-        properties = parameters.get("properties")
-        if not properties or not isinstance(properties, dict):
-            return metadata
+        properties = parameters.get("properties", {}) if isinstance(parameters, dict) else {}
+        if not isinstance(properties, dict):
+            properties = {}
 
         metadata.is_domain_aware = "domain" in properties
         metadata.is_area_aware = "area" in properties or "floor" in properties
         metadata.is_device_class_aware = "device_class" in properties
 
+        source = getattr(tool, "metadata", None)
+        action = cls._metadata_value(source, "canonical_action", "action", "capability_id", default="")
+        if not action and (intent_type := getattr(tool, "intent_type", "")):
+            parts = split_canonical_name(intent_type)
+            action = "_".join(parts[1:] if parts[:1] == ("hass",) else parts)
+        if not action:
+            schema_actions = cls._schema_values(properties.get("action", {}))
+            if len(schema_actions) == 1:
+                action = next(iter(schema_actions))
+        metadata.canonical_action = str(action or "").casefold()
+
+        domains = cls._metadata_value(source, "supported_domains", "domains", "domain", default=())
+        if isinstance(domains, str):
+            domains = (domains,)
+        # Metadata restrictions and ranking use the same conservative schema
+        # interpreter.  Literal values in an unrestricted alternative remain
+        # searchable schema content, but are not a supported-domain claim.
+        schema_domains = root_property_values(parameters, "domain")
+        # Keep the original voluptuous schema as a fallback. Some HA/API
+        # adapters flatten constrained fields while converting to OpenAPI and
+        # silently drop the enum, even though the source schema still has it.
+        raw_parameters = getattr(tool, "parameters", None)
+        raw_schema = (
+            raw_parameters
+            if isinstance(raw_parameters, dict)
+            else getattr(raw_parameters, "schema", None)
+        )
+        if isinstance(raw_schema, dict):
+            raw_domains, _universal, has_domain = cls._extract_field_constraints(
+                raw_schema, "domain",
+            )
+            if has_domain:
+                # Voluptuous can express a union with a free-form string.  In
+                # that case the source schema is likewise neutral.
+                if not _universal:
+                    schema_domains.update(raw_domains)
+        metadata.supported_domains = tuple(sorted({
+            *(str(value).casefold() for value in (domains or ())),
+            *schema_domains,
+        }))
+
+        expected_states = cls._metadata_value(source, "expected_states", "expected_state", default=())
+        if isinstance(expected_states, str):
+            expected_states = (expected_states,)
+        if not expected_states:
+            expected_states = {
+                *cls._schema_values(properties.get("expected_state", {})),
+                *cls._schema_values(properties.get("expected_states", {})),
+            }
+        if not expected_states:
+            expected_states = {
+                "turn_on": ("on",),
+                "turn_off": ("off",),
+            }.get(metadata.canonical_action, ())
+        metadata.expected_states = tuple(sorted(str(value).casefold() for value in (expected_states or ())))
         return metadata
+
+    def _extract_tool_metadata(self, tool: Any, parameters: Any) -> ToolMetadata:
+        """Compatibility wrapper for existing callers."""
+        return self.extract_tool_metadata(tool, parameters)
 
     def _register_fake_timer_device(self) -> None:
         @callback
@@ -117,9 +218,9 @@ class ToolExtractor:
             remove = async_register_timer_handler(self._hass, RAGENT_TIMER_DEVICE_ID, handle_timer_event)
             self._timer_handlers[self._timer_handler_key] = (remove, 1)
             self._fake_timer_remove = True
-            _logger.debug("Registered timer support for HA-RAGent")
+            _logger.log_string(logging.DEBUG, "Registered timer support for HA-RAGent")
         except Exception as err:
-            _logger.warning(f"Failed to register timer device: {err}")
+            _logger.log_string(logging.WARNING, f"Failed to register timer device: {err}")
     
     def _remove_fake_timer_device(self) -> None:
         if not self._fake_timer_remove:
@@ -137,9 +238,9 @@ class ToolExtractor:
                 remove()
                 self._timer_handlers.pop(self._timer_handler_key, None)
             self._fake_timer_remove = None
-            _logger.debug("Unregistered timer support for HA-RAGent")
+            _logger.log_string(logging.DEBUG, "Unregistered timer support for HA-RAGent")
         except Exception as err:
-            _logger.warning(f"Failed to unregister timer device: {err}")
+            _logger.log_string(logging.WARNING, f"Failed to unregister timer device: {err}")
 
     async def _async_get_embeddable_tools(self, subentry: ConfigSubentry) -> List[LlmTool]:
         tool_list: list[LlmTool] = []
@@ -171,10 +272,10 @@ class ToolExtractor:
             )
 
             if not llm_api or not hasattr(llm_api, "tools"):
-                _logger.debug(f"LLM API {selected_api} did not expose any tools attribute for subentry {subentry.title}")
+                _logger.log_string(logging.DEBUG, f"LLM API {selected_api} did not expose any tools attribute for subentry {subentry.title}")
                 return tool_list
 
-            _logger.debug(f"LLM API {selected_api} exposed {len(llm_api.tools)} raw tools for subentry {subentry.title}")
+            _logger.log_string(logging.DEBUG, f"LLM API {selected_api} exposed {len(llm_api.tools)} raw tools for subentry {subentry.title}")
 
             for tool in llm_api.tools:
                 tool_name = getattr(tool, "name", "unknown")
@@ -192,29 +293,38 @@ class ToolExtractor:
                     try:
                         parameters = to_openapi(tool.parameters, custom_serializer=llm_api.custom_serializer)
                         if not isinstance(parameters, dict):
-                            _logger.warning(f"Could not convert parameters for tool {tool_name}: converter returned {type(parameters).__name__}")
+                            _logger.log_string(logging.WARNING, f"Could not convert parameters for tool {tool_name}: converter returned {type(parameters).__name__}")
                             parameters = {}
                     except Exception as param_err:
-                        _logger.warning(f"Could not convert parameters for tool {tool_name}: {param_err}")
+                        _logger.log_string(logging.WARNING, f"Could not convert parameters for tool {tool_name}: {param_err}")
                         parameters = {}
                 else:
                     parameters = {}
+
+                try:
+                    metadata = self._extract_tool_metadata(tool, parameters)
+                except Exception as metadata_err:
+                    # One malformed tool must not erase every other tool from
+                    # the startup index. Preserve the live schema for ranking
+                    # and use neutral metadata for this individual tool.
+                    _logger.log_string(logging.WARNING, f"Could not extract metadata for tool {tool_name}: {metadata_err}")
+                    metadata = ToolMetadata()
 
                 tool_list.append(
                     LlmTool(
                         name=tool_name,
                         description=getattr(tool, "description", ""),
                         parameters=parameters,
-                        metadata=self._extract_tool_metadata(tool_name, parameters),
+                        metadata=metadata,
                     )
                 )
                 seen_tool_names.add(tool_name)
 
         except HomeAssistantError as err:
-            _logger.warning(f"Error getting LLM API for tool extraction: {err}")
+            _logger.log_string(logging.WARNING, f"Error getting LLM API for tool extraction: {err}")
             return []
         except Exception as err:
-            _logger.error(f"Error extracting tools from LLM API: {err}", exc_info=True)
+            _logger.log_string(logging.ERROR, f"Error extracting tools from LLM API: {err}")
             return []
         finally:
             self._remove_fake_timer_device()
@@ -229,44 +339,47 @@ class ToolExtractor:
     async def async_embed_exposed_tools(self, subentry_id: str) -> None:
         total_embedded_tools = 0
         try:
-            _logger.debug("Device embedding function starting, checking for subentries")
+            _logger.log_string(logging.DEBUG, "Device embedding function starting, checking for subentries")
             if not hasattr(self._entry, "subentries") or not self._entry.subentries:
-                _logger.debug("No subentries found in config entry. Cannot embed tools.")
+                _logger.log_string(logging.DEBUG, "No subentries found in config entry. Cannot embed tools.")
                 return
 
             subentry = self._entry.subentries.get(subentry_id)
             if not subentry:
-                _logger.debug("No matching subentries found for tool embedding.")
+                _logger.log_string(logging.DEBUG, "No matching subentries found for tool embedding.")
                 return
             try:
                 exposed_tools = await self._async_get_embeddable_tools(subentry)
-                _logger.debug(f"Tool embedding starting: {len(exposed_tools)} exposed to conversation. ({[tool.name for tool in exposed_tools]})")
+                _logger.log_string(logging.DEBUG, f"Tool embedding starting: {len(exposed_tools)} exposed to conversation. ({[tool.name for tool in exposed_tools]})")
                 if not exposed_tools:
                     collection_name = f"tools_{subentry_id}"
                     await self._entry.vector_db_backend.async_cleanup_collection(dict(subentry.data), collection_name)
                     self._entry.vector_db_backend.cache_collection_objects(collection_name, [])
-                    _logger.info("Cleared tool embeddings for empty subentry %s", subentry_id)
+                    _logger.log_string(logging.INFO, f"Cleared tool embeddings for empty subentry {subentry_id}")
                     return
 
                 collection_name = f"tools_{subentry_id}"
-                tool_embeddings = await self._entry.embedder_backend.async_embed_object(dict(subentry.data), exposed_tools)
+                tool_embeddings = await self._entry.embedder_backend.async_embed_object(
+                    dict(subentry.data), exposed_tools,
+                    getattr(self._entry, "translations", None),
+                )
 
                 if tool_embeddings:
                     embedding_len = len(tool_embeddings[0].vector_embedding)
                     self._entry.vector_db_backend.invalidate_collection_cache(collection_name)
                     await self._entry.vector_db_backend.async_reset_collection(dict(subentry.data), collection_name, embedding_len)
-                    _logger.debug(f"Saving {len(tool_embeddings)} tool embeddings to collection {collection_name}.")
+                    _logger.log_string(logging.DEBUG, f"Saving {len(tool_embeddings)} tool embeddings to collection {collection_name}.")
                     await self._entry.vector_db_backend.async_save_objects(dict(subentry.data), collection_name, tool_embeddings)
                     self._entry.vector_db_backend.cache_collection_objects(collection_name, exposed_tools)
                     total_embedded_tools += len(tool_embeddings)
                 else:
-                    _logger.warning(f"No tools to embed for subentry {subentry_id}")
+                    _logger.log_string(logging.WARNING, f"No tools to embed for subentry {subentry_id}")
             except Exception as err:
-                _logger.error(f"Error in background embedding job for subentry {subentry_id}: {err}", exc_info=True)
+                _logger.log_string(logging.ERROR, f"Error in background embedding job for subentry {subentry_id}: {err}")
         except Exception as err:
-            _logger.error(f"Error in tool embedding job: {err}", exc_info=True)
+            _logger.log_string(logging.ERROR, f"Error in tool embedding job: {err}")
         finally:
-            if _logger.isEnabledFor(logging.DEBUG):
-                _logger.debug(f"Tool embedding function finished with {total_embedded_tools} embedded tools.")
+            if _logger.is_enabled_for(logging.DEBUG):
+                _logger.log_string(logging.DEBUG, f"Tool embedding function finished with {total_embedded_tools} embedded tools.")
             else:
-                _logger.info(f"Finished embedding {total_embedded_tools} tools.")
+                _logger.log_string(logging.INFO, f"Finished embedding {total_embedded_tools} tools.")

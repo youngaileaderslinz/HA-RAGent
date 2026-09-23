@@ -1,7 +1,6 @@
-import asyncio
-import time
-from typing import Any, Dict, List
 import logging
+from typing import Any, Dict, List
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from pymongo import AsyncMongoClient
 from pymongo.errors import OperationFailure
 from pymongo.asynchronous.database import AsyncDatabase
@@ -27,7 +26,7 @@ from custom_components.ha_ragent.src.const import (
     CONF_VECTOR_DB_PASSWORD
 )
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 class MongoDbBackend(ABaseDbBackend):
     def __init__(self, hass: HomeAssistant, client_options: dict[str, Any]):
@@ -70,9 +69,6 @@ class MongoDbBackend(ABaseDbBackend):
         result = await database.command(command)
         return result.get("ok") == 1.0
 
-    async def _async_database_exists(self, connection: AsyncMongoClient) -> bool:
-        db_names = await connection.list_database_names()
-        return self.db_name in db_names
     
     async def _async_collection_exists(self, connection: AsyncMongoClient, collection_name: str) -> bool:
         database = self._get_database(connection)
@@ -89,11 +85,7 @@ class MongoDbBackend(ABaseDbBackend):
             return any(index.get("name") == index_name for index in indexes)
         except OperationFailure as err:
             if err.code == 125:
-                _logger.warning(
-                    "Search Index Management service unavailable while listing indexes for %s; "
-                    "skipping vector index initialization for now.",
-                    collection_name,
-                )
+                _logger.log_string(logging.WARNING, f"Search Index Management service unavailable while listing indexes for {collection_name}; skipping vector index initialization for now.")
                 return True
             raise
     
@@ -123,14 +115,10 @@ class MongoDbBackend(ABaseDbBackend):
                     ]
                 })
                 if not result:
-                    _logger.warning(f"Vector search index creation failed for collection {collection_name}")
+                    _logger.log_string(logging.WARNING, f"Vector search index creation failed for collection {collection_name}")
             except OperationFailure as err:
                 if err.code == 125:
-                    _logger.warning(
-                        "Search Index Management service unavailable while creating vector index for %s; "
-                        "continuing without resetting the index.",
-                        collection_name,
-                    )
+                    _logger.log_string(logging.WARNING, f"Search Index Management service unavailable while creating vector index for {collection_name}; continuing without resetting the index.")
                 else:
                     raise
 
@@ -160,9 +148,9 @@ class MongoDbBackend(ABaseDbBackend):
         try:
             conn = self._get_connection()
             await conn.drop_database(self.db_name)
-            _logger.info(f"Database cleanup for {self.db_name} successful.")
+            _logger.log_string(logging.INFO, f"Database cleanup for {self.db_name} successful.")
         except Exception as e:
-            _logger.error(f"Error cleaning up database: {e}", exc_info=True)
+            _logger.log_string(logging.ERROR, f"Error cleaning up database: {e}")
         finally:
             if conn:
                 await conn.close()
@@ -176,9 +164,9 @@ class MongoDbBackend(ABaseDbBackend):
 
             await self._async_init_database(conn, database, collection_name, embedding_length)
             await database[collection_name].delete_many({})
-            _logger.info(f"Collection {collection_name} reset successfully")
+            _logger.log_string(logging.INFO, f"Collection {collection_name} reset successfully")
         except Exception as e:
-            _logger.error(f"Error resetting database: {e}", exc_info=True)
+            _logger.log_string(logging.ERROR, f"Error resetting database: {e}")
         finally:
             if conn:
                 await conn.close()
@@ -190,7 +178,7 @@ class MongoDbBackend(ABaseDbBackend):
             database = self._get_database(conn)
             await self._async_init_database(conn, database, collection_name, embedding_length)
         except Exception as e:
-            _logger.error(f"Error ensuring collection: {e}", exc_info=True)
+            _logger.log_string(logging.ERROR, f"Error ensuring collection: {e}")
             raise
         finally:
             if conn:
@@ -205,9 +193,9 @@ class MongoDbBackend(ABaseDbBackend):
 
             if await self._async_collection_exists(conn, collection_name):
                 await database.drop_collection(collection_name)
-                _logger.info(f"Collection {collection_name} deleted successfully")
+                _logger.log_string(logging.INFO, f"Collection {collection_name} deleted successfully")
         except Exception as e:
-            _logger.error(f"Error cleaning up collection: {e}", exc_info=True)
+            _logger.log_string(logging.ERROR, f"Error cleaning up collection: {e}")
         finally:
             if conn:
                 await conn.close()
@@ -219,9 +207,9 @@ class MongoDbBackend(ABaseDbBackend):
             conn = self._get_connection()
             collection = self._get_collection(conn, collection_name)
             await collection.insert_many([embedding.to_dict() for embedding in device_embeddings], ordered=False)
-            _logger.info(f"Saved {len(device_embeddings)} device embeddings to collection {collection_name}")
+            _logger.log_string(logging.INFO, f"Saved {len(device_embeddings)} device embeddings to collection {collection_name}")
         except Exception as e:
-            _logger.error(f"Error saving device embeddings: {e}", exc_info=True)
+            _logger.log_string(logging.ERROR, f"Error saving device embeddings: {e}")
             raise
         finally:
             if conn:
@@ -243,7 +231,7 @@ class MongoDbBackend(ABaseDbBackend):
                     upsert=True,
                 )
         except Exception as e:
-            _logger.error(f"Error upserting objects: {e}", exc_info=True)
+            _logger.log_string(logging.ERROR, f"Error upserting objects: {e}")
             raise
         finally:
             if conn:
@@ -269,16 +257,16 @@ class MongoDbBackend(ABaseDbBackend):
             ]
             cursor = await collection.aggregate(pipeline)
             results = await cursor.to_list(length=top_k)
-            return [
+            return self.sort_scored_results([
                 ScoredResult(
                     object_type.parse_object(document),
                     min(1.0, max(0.0, float(document.get("vector_score", 0.0)))),
                     rank,
                 )
                 for rank, document in enumerate(results, start=1)
-            ]
+            ], top_k)
         except Exception as err:
-            _logger.error(f"Error retrieving scored objects: {err}", exc_info=True)
+            _logger.log_string(logging.ERROR, f"Error retrieving scored objects: {err}")
             return []
         finally:
             if conn:
@@ -296,7 +284,7 @@ class MongoDbBackend(ABaseDbBackend):
             results = await cursor.to_list(length=None)
             return [object_type.parse_object(doc) for doc in results]
         except Exception as e:
-            _logger.error(f"Error listing objects: {e}", exc_info=True)
+            _logger.log_string(logging.ERROR, f"Error listing objects: {e}")
             raise
         finally:
             if conn:
@@ -332,7 +320,7 @@ class MongoDbBackend(ABaseDbBackend):
             result = await collection.delete_many({id_field: {"$in": object_ids}})
             return result.deleted_count
         except Exception as e:
-            _logger.error(f"Error deleting objects: {e}", exc_info=True)
+            _logger.log_string(logging.ERROR, f"Error deleting objects: {e}")
             raise
         finally:
             if conn:

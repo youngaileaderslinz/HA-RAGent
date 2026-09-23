@@ -1,4 +1,4 @@
-import logging
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any
 
 from homeassistant.config_entries import (
@@ -25,10 +25,10 @@ from custom_components.ha_ragent.src.const import (
     CONF_VECTOR_DB_USERNAME
 )
 
-from custom_components.ha_ragent.src.utils import embedding_backend_to_class, embedding_backend_to_class, llm_backend_to_class, vector_db_to_class
+from custom_components.ha_ragent.src.utils import embedding_backend_to_class, llm_backend_to_class, vector_db_to_class
 from custom_components.ha_ragent.src.homeassistant.ui_schemas import ui_schema_backend_connections
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 class RagentOptionsFlow(OptionsFlow):
     def __init__(self):
