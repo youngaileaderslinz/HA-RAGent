@@ -94,3 +94,19 @@ class HistoryRetriever:
             continuity=continuity
         )
         return continuity
+
+    @staticmethod
+    def continuity_groups(continuity: ContinuityContext) -> list[dict[str, object]]:
+        """Return bounded historical target data for prompt rendering."""
+        return [
+            {
+                "entities": list(group.entities[:12]),
+                "areas": list(group.areas[:4]),
+                "floors": list(group.floors[:4]),
+                "domains": list(group.domains[:4]),
+                "device_classes": list(group.device_classes[:4]),
+                "tool": group.tool,
+                "action": group.action,
+            }
+            for group, _ in continuity.target_groups[:2]
+        ]

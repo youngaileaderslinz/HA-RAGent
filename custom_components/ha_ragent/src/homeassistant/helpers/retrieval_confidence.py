@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from custom_components.ha_ragent.src.models.retrieval.confidence_assessment import ConfidenceAssessment
 
 
-_logger = BaseLogger("custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper")
+_logger = BaseLogger(__name__)
 
 
 class RetrievalConfidence:

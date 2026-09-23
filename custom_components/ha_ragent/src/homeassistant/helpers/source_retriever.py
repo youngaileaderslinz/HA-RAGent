@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
+import logging
 from typing import Any
 
 from custom_components.ha_ragent.src.const import (
@@ -9,9 +9,9 @@ from custom_components.ha_ragent.src.const import (
     RETRIEVAL_METHOD_LEXICAL,
     RETRIEVAL_METHOD_VECTOR,
 )
-from custom_components.ha_ragent.src.homeassistant.helpers.lexical_retriever import LexicalRetriever
-from custom_components.ha_ragent.src.homeassistant.helpers.vector_retriever import VectorRetriever
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
+from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
 from custom_components.ha_ragent.src.utils import get_setting_value
 
 
@@ -19,6 +19,8 @@ _logger = BaseLogger(__name__)
 
 
 class SourceRetriever:
+    """Fetch lexical and vector candidates, isolating source failures."""
+
     @staticmethod
     def retrieval_method(options: dict) -> str:
         """Return the configured retrieval mode, defaulting safely to hybrid."""
@@ -54,7 +56,7 @@ class SourceRetriever:
 
         lexical = []
         if method != RETRIEVAL_METHOD_VECTOR:
-            lexical = await LexicalRetriever.async_retrieve(
+            lexical = await cls._async_retrieve_lexical(
                 backend, object_type, options, collection,
             )
         if method == RETRIEVAL_METHOD_LEXICAL:
@@ -67,7 +69,7 @@ class SourceRetriever:
             )
             return [], lexical
 
-        vector, resolved_embedding, failure = await VectorRetriever.async_retrieve(
+        vector, resolved_embedding, failure = await cls._async_retrieve_vector(
             backend, object_type, options, collection, embedding, limit,
         )
         payload: dict[str, object] = {
@@ -85,3 +87,52 @@ class SourceRetriever:
             **payload
         )
         return vector, lexical
+
+    @staticmethod
+    async def _async_retrieve_lexical(
+        backend: Any,
+        object_type: type,
+        options: dict,
+        collection: str,
+    ) -> list:
+        """Return lexical candidates, treating a backend failure as no result."""
+        try:
+            return await backend.async_get_lexical_objects(
+                object_type, options, collection,
+            )
+        except Exception as err:
+            _logger.log(logging.WARNING, "Lexical retrieval failed for %s: %s", collection, err)
+            return []
+
+    @staticmethod
+    async def _async_retrieve_vector(
+        backend: Any,
+        object_type: type,
+        options: dict,
+        collection: str,
+        embedding: list[float] | QueryEmbedding,
+        limit: int,
+    ) -> tuple[list, list[float] | None, dict[str, str] | None]:
+        """Return candidates, the resolved embedding, and an optional failure."""
+        if isinstance(embedding, QueryEmbedding):
+            try:
+                embedding = await embedding.get()
+            except Exception as err:
+                _logger.log(logging.WARNING, "Query embedding failed for %s: %s", collection, err)
+                return [], None, {"stage": "embedding", "error": repr(err)}
+        if not embedding:
+            return [], None, {"stage": "embedding", "error": "empty embedding"}
+        try:
+            raw_results = await backend.async_retrieve_scored_objects(
+                object_type, options, collection, embedding, limit,
+            )
+        except Exception as err:
+            _logger.log(logging.WARNING, "Vector retrieval failed for %s: %s", collection, err)
+            return [], embedding, {"stage": "vector", "error": repr(err)}
+        return [
+            ScoredResult(result.item, result.score, rank)
+            for rank, result in enumerate(
+                sorted(raw_results, key=lambda result: (-result.score, result.rank)),
+                start=1,
+            )
+        ], embedding, None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import logging
 
+from custom_components.ha_ragent.src.homeassistant.helpers.tool_ranker import ToolRanker
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 import json
 from types import SimpleNamespace
@@ -27,7 +28,6 @@ from custom_components.ha_ragent.src.const import (
 )
 from custom_components.ha_ragent.src.models.embedding.device import Device
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
-from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_helper import RetrievalHelper
 from custom_components.ha_ragent.src.homeassistant.helpers.source_retriever import SourceRetriever
 from custom_components.ha_ragent.src.homeassistant.helpers.conversation_retriever import ConversationRetriever
 from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
@@ -222,7 +222,7 @@ class RAGentSemanticSearchTool(llm.Tool):
         if isinstance(raw, dict):
             raw = [raw]
         return [
-            RetrievalHelper.normalize_requested_capability(capability)
+            ToolRanker.normalize_requested_capability(capability)
             if isinstance(capability, dict) else {}
             for capability in raw
         ]
@@ -327,12 +327,12 @@ class RAGentSemanticSearchTool(llm.Tool):
     ) -> str:
         """Build tool intent independently from the natural-language target."""
         if requested_capability:
-            return RetrievalHelper.build_tool_search_query(
+            return ToolRanker.build_tool_search_query(
                 self._latest_request, model_search_query, (), requested_capability,
             )[:RAGENT_MAX_SEARCH_QUERY_CHARS]
         if focused:
             return model_search_query[:RAGENT_MAX_SEARCH_QUERY_CHARS]
-        return RetrievalHelper.build_tool_search_query(
+        return ToolRanker.build_tool_search_query(
             self._latest_request,
             model_search_query,
             devices,
@@ -509,7 +509,7 @@ class RAGentSemanticSearchTool(llm.Tool):
                             result.item.name: result.score
                             for result in scored_tools
                         }
-                        confidence = RetrievalHelper.tool_search_confidence_details(
+                        confidence = ToolRanker.tool_search_confidence_details(
                             retrieved_tools[:max_tools],
                             tool_query,
                             query_devices,
@@ -544,7 +544,7 @@ class RAGentSemanticSearchTool(llm.Tool):
                                 metadata["supported_domains"] = list(
                                     tool.canonical_supported_domains
                                 )
-                            ranking_signals = RetrievalHelper.tool_ranking_signals(
+                            ranking_signals = ToolRanker.tool_ranking_signals(
                                 tool,
                                 tool_query,
                                 query_devices,
@@ -571,7 +571,7 @@ class RAGentSemanticSearchTool(llm.Tool):
                                         for name, value in ranking_signals.items()
                                     },
                                     "retrieval_score": round(
-                                        RetrievalHelper.tool_signal_score(ranking_signals),
+                                        ToolRanker.tool_signal_score(ranking_signals),
                                         4,
                                     ),
                                 }
