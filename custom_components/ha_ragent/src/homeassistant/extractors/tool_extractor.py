@@ -379,7 +379,7 @@ class ToolExtractor:
         except Exception as err:
             _logger.log_string(logging.ERROR, f"Error in tool embedding job: {err}")
         finally:
-            if _logger.isEnabledFor(logging.DEBUG):
+            if _logger.is_enabled_for(logging.DEBUG):
                 _logger.log_string(logging.DEBUG, f"Tool embedding function finished with {total_embedded_tools} embedded tools.")
             else:
                 _logger.log_string(logging.INFO, f"Finished embedding {total_embedded_tools} tools.")

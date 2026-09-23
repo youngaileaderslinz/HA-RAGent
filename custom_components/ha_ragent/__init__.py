@@ -7,6 +7,7 @@ from homeassistant.config_entries import ConfigEntryState, OperationNotAllowed
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import llm
 
+from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from custom_components.ha_ragent.src.homeassistant.ragent_config_entry import RAGentConfigEntry
 from custom_components.ha_ragent.src.backends.database.base_backend import ABaseDbBackend
 from custom_components.ha_ragent.src.backends.embedder.base_backend import ABaseEmbedder
@@ -42,7 +43,7 @@ from custom_components.ha_ragent.src.utils import (
 )
 from custom_components.ha_ragent.src.translation import RAGentTranslations
 
-_logger = logging.getLogger(__name__)
+_logger = BaseLogger(__name__)
 
 def _ensure_llm_api_registered(hass: HomeAssistant) -> None:
     if any(api.id == RAGENT_LLM_API_ID for api in llm.async_get_apis(hass)):

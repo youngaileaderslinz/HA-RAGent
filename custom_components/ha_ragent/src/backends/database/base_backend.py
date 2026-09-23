@@ -68,7 +68,7 @@ class ABaseDbBackend(ABC):
     def invalidate_collection_cache(self, collection_name: str | None = None, *, contents_changed: bool = True) -> None:
         """Invalidate one metadata snapshot or all collection snapshots."""
         previous = None
-        if _logger.isEnabledFor(logging.DEBUG):
+        if _logger.is_enabled_for(logging.DEBUG):
             previous = (
                 dict(self._lexical_object_cache)
                 if collection_name is None

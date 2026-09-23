@@ -52,6 +52,10 @@ class BaseLogger:
         """Log using a numeric standard-library logging level."""
         self._logger.log(self._parse_level(level), message, *args, **kwargs)
 
+    def is_enabled_for(self, level: LogLevel) -> bool:
+        """Return whether the underlying logger accepts the specified level."""
+        return self._logger.isEnabledFor(self._parse_level(level))
+
     def log_string(self, level: LogLevel, message: str) -> None:
         """Log a string message at the specified level."""
         if self._logger.isEnabledFor(self._parse_level(level)):
