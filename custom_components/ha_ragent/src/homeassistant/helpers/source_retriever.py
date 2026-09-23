@@ -101,7 +101,7 @@ class SourceRetriever:
                 object_type, options, collection,
             )
         except Exception as err:
-            _logger.log(logging.WARNING, "Lexical retrieval failed for %s: %s", collection, err)
+            _logger.log_string(logging.WARNING, f"Lexical retrieval failed for {collection}: {err}")
             return []
 
     @staticmethod
@@ -118,7 +118,7 @@ class SourceRetriever:
             try:
                 embedding = await embedding.get()
             except Exception as err:
-                _logger.log(logging.WARNING, "Query embedding failed for %s: %s", collection, err)
+                _logger.log_string(logging.WARNING, f"Query embedding failed for {collection}: {err}")
                 return [], None, {"stage": "embedding", "error": repr(err)}
         if not embedding:
             return [], None, {"stage": "embedding", "error": "empty embedding"}
@@ -127,7 +127,7 @@ class SourceRetriever:
                 object_type, options, collection, embedding, limit,
             )
         except Exception as err:
-            _logger.log(logging.WARNING, "Vector retrieval failed for %s: %s", collection, err)
+            _logger.log_string(logging.WARNING, f"Vector retrieval failed for {collection}: {err}")
             return [], embedding, {"stage": "vector", "error": repr(err)}
         return [
             ScoredResult(result.item, result.score, rank)

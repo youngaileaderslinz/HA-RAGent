@@ -218,9 +218,9 @@ class ToolExtractor:
             remove = async_register_timer_handler(self._hass, RAGENT_TIMER_DEVICE_ID, handle_timer_event)
             self._timer_handlers[self._timer_handler_key] = (remove, 1)
             self._fake_timer_remove = True
-            _logger.debug("Registered timer support for HA-RAGent")
+            _logger.log_string(logging.DEBUG, "Registered timer support for HA-RAGent")
         except Exception as err:
-            _logger.warning(f"Failed to register timer device: {err}")
+            _logger.log_string(logging.WARNING, f"Failed to register timer device: {err}")
     
     def _remove_fake_timer_device(self) -> None:
         if not self._fake_timer_remove:
@@ -238,9 +238,9 @@ class ToolExtractor:
                 remove()
                 self._timer_handlers.pop(self._timer_handler_key, None)
             self._fake_timer_remove = None
-            _logger.debug("Unregistered timer support for HA-RAGent")
+            _logger.log_string(logging.DEBUG, "Unregistered timer support for HA-RAGent")
         except Exception as err:
-            _logger.warning(f"Failed to unregister timer device: {err}")
+            _logger.log_string(logging.WARNING, f"Failed to unregister timer device: {err}")
 
     async def _async_get_embeddable_tools(self, subentry: ConfigSubentry) -> List[LlmTool]:
         tool_list: list[LlmTool] = []
@@ -272,10 +272,10 @@ class ToolExtractor:
             )
 
             if not llm_api or not hasattr(llm_api, "tools"):
-                _logger.debug(f"LLM API {selected_api} did not expose any tools attribute for subentry {subentry.title}")
+                _logger.log_string(logging.DEBUG, f"LLM API {selected_api} did not expose any tools attribute for subentry {subentry.title}")
                 return tool_list
 
-            _logger.debug(f"LLM API {selected_api} exposed {len(llm_api.tools)} raw tools for subentry {subentry.title}")
+            _logger.log_string(logging.DEBUG, f"LLM API {selected_api} exposed {len(llm_api.tools)} raw tools for subentry {subentry.title}")
 
             for tool in llm_api.tools:
                 tool_name = getattr(tool, "name", "unknown")
@@ -293,10 +293,10 @@ class ToolExtractor:
                     try:
                         parameters = to_openapi(tool.parameters, custom_serializer=llm_api.custom_serializer)
                         if not isinstance(parameters, dict):
-                            _logger.warning(f"Could not convert parameters for tool {tool_name}: converter returned {type(parameters).__name__}")
+                            _logger.log_string(logging.WARNING, f"Could not convert parameters for tool {tool_name}: converter returned {type(parameters).__name__}")
                             parameters = {}
                     except Exception as param_err:
-                        _logger.warning(f"Could not convert parameters for tool {tool_name}: {param_err}")
+                        _logger.log_string(logging.WARNING, f"Could not convert parameters for tool {tool_name}: {param_err}")
                         parameters = {}
                 else:
                     parameters = {}
@@ -307,10 +307,7 @@ class ToolExtractor:
                     # One malformed tool must not erase every other tool from
                     # the startup index. Preserve the live schema for ranking
                     # and use neutral metadata for this individual tool.
-                    _logger.warning(
-                        "Could not extract metadata for tool %s: %s",
-                        tool_name, metadata_err,
-                    )
+                    _logger.log_string(logging.WARNING, f"Could not extract metadata for tool {tool_name}: {metadata_err}")
                     metadata = ToolMetadata()
 
                 tool_list.append(
@@ -324,10 +321,10 @@ class ToolExtractor:
                 seen_tool_names.add(tool_name)
 
         except HomeAssistantError as err:
-            _logger.warning(f"Error getting LLM API for tool extraction: {err}")
+            _logger.log_string(logging.WARNING, f"Error getting LLM API for tool extraction: {err}")
             return []
         except Exception as err:
-            _logger.error(f"Error extracting tools from LLM API: {err}", exc_info=True)
+            _logger.log_string(logging.ERROR, f"Error extracting tools from LLM API: {err}")
             return []
         finally:
             self._remove_fake_timer_device()
@@ -342,23 +339,23 @@ class ToolExtractor:
     async def async_embed_exposed_tools(self, subentry_id: str) -> None:
         total_embedded_tools = 0
         try:
-            _logger.debug("Device embedding function starting, checking for subentries")
+            _logger.log_string(logging.DEBUG, "Device embedding function starting, checking for subentries")
             if not hasattr(self._entry, "subentries") or not self._entry.subentries:
-                _logger.debug("No subentries found in config entry. Cannot embed tools.")
+                _logger.log_string(logging.DEBUG, "No subentries found in config entry. Cannot embed tools.")
                 return
 
             subentry = self._entry.subentries.get(subentry_id)
             if not subentry:
-                _logger.debug("No matching subentries found for tool embedding.")
+                _logger.log_string(logging.DEBUG, "No matching subentries found for tool embedding.")
                 return
             try:
                 exposed_tools = await self._async_get_embeddable_tools(subentry)
-                _logger.debug(f"Tool embedding starting: {len(exposed_tools)} exposed to conversation. ({[tool.name for tool in exposed_tools]})")
+                _logger.log_string(logging.DEBUG, f"Tool embedding starting: {len(exposed_tools)} exposed to conversation. ({[tool.name for tool in exposed_tools]})")
                 if not exposed_tools:
                     collection_name = f"tools_{subentry_id}"
                     await self._entry.vector_db_backend.async_cleanup_collection(dict(subentry.data), collection_name)
                     self._entry.vector_db_backend.cache_collection_objects(collection_name, [])
-                    _logger.info("Cleared tool embeddings for empty subentry %s", subentry_id)
+                    _logger.log_string(logging.INFO, f"Cleared tool embeddings for empty subentry {subentry_id}")
                     return
 
                 collection_name = f"tools_{subentry_id}"
@@ -371,18 +368,18 @@ class ToolExtractor:
                     embedding_len = len(tool_embeddings[0].vector_embedding)
                     self._entry.vector_db_backend.invalidate_collection_cache(collection_name)
                     await self._entry.vector_db_backend.async_reset_collection(dict(subentry.data), collection_name, embedding_len)
-                    _logger.debug(f"Saving {len(tool_embeddings)} tool embeddings to collection {collection_name}.")
+                    _logger.log_string(logging.DEBUG, f"Saving {len(tool_embeddings)} tool embeddings to collection {collection_name}.")
                     await self._entry.vector_db_backend.async_save_objects(dict(subentry.data), collection_name, tool_embeddings)
                     self._entry.vector_db_backend.cache_collection_objects(collection_name, exposed_tools)
                     total_embedded_tools += len(tool_embeddings)
                 else:
-                    _logger.warning(f"No tools to embed for subentry {subentry_id}")
+                    _logger.log_string(logging.WARNING, f"No tools to embed for subentry {subentry_id}")
             except Exception as err:
-                _logger.error(f"Error in background embedding job for subentry {subentry_id}: {err}", exc_info=True)
+                _logger.log_string(logging.ERROR, f"Error in background embedding job for subentry {subentry_id}: {err}")
         except Exception as err:
-            _logger.error(f"Error in tool embedding job: {err}", exc_info=True)
+            _logger.log_string(logging.ERROR, f"Error in tool embedding job: {err}")
         finally:
             if _logger.isEnabledFor(logging.DEBUG):
-                _logger.debug(f"Tool embedding function finished with {total_embedded_tools} embedded tools.")
+                _logger.log_string(logging.DEBUG, f"Tool embedding function finished with {total_embedded_tools} embedded tools.")
             else:
-                _logger.info(f"Finished embedding {total_embedded_tools} tools.")
+                _logger.log_string(logging.INFO, f"Finished embedding {total_embedded_tools} tools.")

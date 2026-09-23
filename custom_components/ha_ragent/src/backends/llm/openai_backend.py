@@ -195,7 +195,7 @@ class OpenAiLlmBackend(ALlmBaseBackend):
 
                                 reasoning_content = getattr(delta, "reasoning_content", None)
                                 if reasoning_content and not thinking_enabled and not unexpected_reasoning_logged:
-                                    _logger.warning("Model returned reasoning although model thinking is disabled in the UI.")
+                                    _logger.log_string(logging.WARNING, "Model returned reasoning although model thinking is disabled in the UI.")
                                     unexpected_reasoning_logged = True
 
                                 for tool_call in delta.tool_calls or []:
@@ -236,5 +236,5 @@ class OpenAiLlmBackend(ALlmBaseBackend):
                 )
 
         except Exception as err:
-            _logger.error(f"Error calling llama.cpp API through OpenAI client: {err}", exc_info=True)
+            _logger.log_string(logging.ERROR, f"Error calling llama.cpp API through OpenAI client: {err}")
             raise

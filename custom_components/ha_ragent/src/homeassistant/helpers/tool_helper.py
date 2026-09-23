@@ -1,3 +1,4 @@
+import logging
 from custom_components.ha_ragent.src.homeassistant.helpers.source_ranker import SourceRanker
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 import json
@@ -49,7 +50,7 @@ class ToolHelper:
         try:
             return json.loads(json_string)
         except json.JSONDecodeError as e:
-            _logger.debug(f"Failed to parse JSON: {e}")
+            _logger.log_string(logging.DEBUG, f"Failed to parse JSON: {e}")
             return None
 
     def _tool_string_to_dict(self, tool_string: str) -> dict | None:
@@ -195,12 +196,12 @@ class ToolHelper:
             tool_json = self._tool_string_to_dict(match.group(1))
 
             if tool_json is None:
-                _logger.debug(f"Failed to parse tool call from LLM response: {match.group(1)}")
+                _logger.log_string(logging.DEBUG, f"Failed to parse tool call from LLM response: {match.group(1)}")
                 continue
 
             tool_name = tool_json.get("tool")
             if not tool_name:
-                _logger.debug(f"Tool name missing in tool call: {tool_json}")
+                _logger.log_string(logging.DEBUG, f"Tool name missing in tool call: {tool_json}")
                 continue
 
             parameters = tool_json.get("arguments")
@@ -208,7 +209,7 @@ class ToolHelper:
                 parameters = self._save_json_load(parameters)
 
             if not isinstance(parameters, dict):
-                _logger.debug(f"Empty tool arguments: {tool_json.get('arguments')}")
+                _logger.log_string(logging.DEBUG, f"Empty tool arguments: {tool_json.get('arguments')}")
                 continue
 
             self._parse_parameters(parameters, self._tool_metadata_index.get(tool_name))

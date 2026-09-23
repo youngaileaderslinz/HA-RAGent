@@ -1,3 +1,4 @@
+import logging
 import asyncio
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from functools import partial
@@ -38,7 +39,7 @@ async def _handle_embed_subentry(hass: HomeAssistant, call: ServiceCall) -> None
             continue
 
         processed_subentries.add(subentry_key)
-        _logger.debug("Embedding devices and tools for subentry: %s", subentry.title)
+        _logger.log_string(logging.DEBUG, f"Embedding devices and tools for subentry: {subentry.title}")
 
         tool_extractor = ToolExtractor(hass, parent)
         device_extractor = DeviceExtractor(hass, parent)

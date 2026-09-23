@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 
 from datetime import datetime, timedelta
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
@@ -83,12 +84,12 @@ class RAGentPlannedActionTool(llm.Tool):
                 device_id=self.device_id,
             )
             if result.response.error_code is not None:
-                _logger.error(f"Planned action failed for agent {self.agent_id}: {description}. Error: {result.response.error_code}")
+                _logger.log_string(logging.ERROR, f"Planned action failed for agent {self.agent_id}: {description}. Error: {result.response.error_code}")
             else:
-                _logger.info(f"Executed planned action for agent {self.agent_id}: {description}")
+                _logger.log_string(logging.INFO, f"Executed planned action for agent {self.agent_id}: {description}")
 
         except Exception:
-            _logger.error(f"Failed to execute planned action for agent {self.agent_id}: {description}", exc_info=True)
+            _logger.log_string(logging.ERROR, f"Failed to execute planned action for agent {self.agent_id}: {description}")
         finally:
             contexts.pop(execution_id, None)
 

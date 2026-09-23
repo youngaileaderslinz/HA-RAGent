@@ -1,3 +1,4 @@
+import logging
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any
 import voluptuous as vol
@@ -286,7 +287,7 @@ def ui_schema_config_options(
             api_label = getattr(api, "name", None) or api.id
             llm_api_options.append(SelectOptionDict(value=api.id, label=str(api_label)))
     except Exception as err:
-        _logger.warning("Failed to load LLM APIs: %s", err)
+        _logger.log_string(logging.WARNING, f"Failed to load LLM APIs: {err}")
 
     result: dict = {
         vol.Optional(

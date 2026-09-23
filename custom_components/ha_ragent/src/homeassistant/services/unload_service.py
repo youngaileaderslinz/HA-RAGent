@@ -1,3 +1,4 @@
+import logging
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from functools import partial
 
@@ -28,7 +29,7 @@ async def _handle_unload_models(hass: HomeAssistant, call: ServiceCall) -> None:
         if not sub:
             continue
 
-        _logger.debug("Unloading model for: %s", sub.title)
+        _logger.log_string(logging.DEBUG, f"Unloading model for: {sub.title}")
         await parent.embedder_backend.async_unload_model(dict(sub.data))
         await parent.llm_backend.async_unload_model(dict(sub.data))
 
