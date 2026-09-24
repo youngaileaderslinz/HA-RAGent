@@ -3,8 +3,8 @@ from __future__ import annotations
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .src.homeassistant.ragent_config_entry import RAGentConfigEntry
-from .src.homeassistant.ragent import RAGent
+from custom_components.ha_ragent.src.homeassistant.ragent_config_entry import RAGentConfigEntry
+from custom_components.ha_ragent.src.homeassistant.ragent import RAGent
 
 async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback) -> bool:
     """Set up HA Ragent Conversation from a config entry."""

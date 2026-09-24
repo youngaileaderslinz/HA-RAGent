@@ -24,6 +24,7 @@ from custom_components.ha_ragent.src.const import (
     RETRY_BACKOFF_BASE_SECONDS,
     RETRY_BACKOFF_MULTIPLIER,
 )
+from custom_components.ha_ragent.src.utils import get_setting_value
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.model_info import ModelInfo
 from custom_components.ha_ragent.src.models.chat.chat_message import ChatMessage

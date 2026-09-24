@@ -12,9 +12,9 @@ from homeassistant.config_entries import (
     ConfigSubentryFlow
 )
 
-from .src.homeassistant.ragent_config_entry import RAGentConfigEntry
+from custom_components.ha_ragent.src.homeassistant.ragent_config_entry import RAGentConfigEntry
 
-from .src.const import (
+from custom_components.ha_ragent.src.const import (
     BACKEND_VECTOR_DB_TYPE_FAISS,
     CONF_VECTOR_DB_BACKEND_TYPE,
     CONF_EMBEDDING_BACKEND_TYPE,
@@ -35,20 +35,20 @@ from .src.const import (
     CONFIG_FLOW_VERSION,
 )
 
-from .src.homeassistant.option_flow import RagentOptionsFlow
-from .src.homeassistant.subentry_flow import RagentSubentryFlowHandler
+from custom_components.ha_ragent.src.homeassistant.option_flow import RagentOptionsFlow
+from custom_components.ha_ragent.src.homeassistant.subentry_flow import RagentSubentryFlowHandler
 
-from .src.homeassistant.ui_schemas import (
+from custom_components.ha_ragent.src.homeassistant.ui_schemas import (
     ui_schema_backend_connections,
     ui_schema_pick_backends
 )
 
-from .src.utils import (
-    is_valid_host,
+from custom_components.ha_ragent.src.backends.backends import (
     vector_db_to_class,
     embedding_backend_to_class,
-    llm_backend_to_class
+    llm_backend_to_class,
 )
+from custom_components.ha_ragent.src.utils import is_valid_host
 
 _logger = logging.getLogger(__name__)
 
