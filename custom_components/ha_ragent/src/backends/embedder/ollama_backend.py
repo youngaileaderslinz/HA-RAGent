@@ -9,6 +9,7 @@ from custom_components.ha_ragent.src.models.base.embedding_record import Embeddi
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from custom_components.ha_ragent.src.utils import get_setting_value
 from custom_components.ha_ragent.src.const import (
     CONF_EMBEDDING_HOST,
     CONF_EMBEDDING_PORT,
@@ -115,7 +116,7 @@ class OllamaEmbedder(ABaseEmbedder):
         return available
 
     async def _async_embed_batch(self, config_subentry: dict, inputs: list[str], keep_alive: int | None = None) -> list[list[float]]:
-        payload = {"model": config_subentry[CONF_EMBEDDING_MODEL]}
+        payload = {"model": get_setting_value(CONF_EMBEDDING_MODEL, config_subentry)}
         if keep_alive is not None:
             payload["keep_alive"] = keep_alive
         else:

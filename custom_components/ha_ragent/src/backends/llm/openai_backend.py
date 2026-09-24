@@ -151,11 +151,11 @@ class OpenAiLlmBackend(ALlmBaseBackend):
     async def async_send_chat_request(self, config_subentry: dict, messages: List[ChatMessage], tools: List[LlmTool], **kwargs) -> AsyncGenerator[str, None]:
         prepared_messages = self.format_messages_for_backend(messages)
         request: Dict[str, Any] = {
-            "model": config_subentry[CONF_LLM_MODEL],
+            "model": get_setting_value(CONF_LLM_MODEL, config_subentry),
             "messages": prepared_messages,
             "stream": True,
-            "temperature": config_subentry[CONF_TEMPERATURE],
-            "max_tokens": config_subentry[CONF_MAX_TOKENS],
+            "temperature": get_setting_value(CONF_TEMPERATURE, config_subentry),
+            "max_tokens": get_setting_value(CONF_MAX_TOKENS, config_subentry),
         }
         thinking_enabled = bool(get_setting_value(CONF_ENABLE_MODEL_THINKING, config_subentry))
 

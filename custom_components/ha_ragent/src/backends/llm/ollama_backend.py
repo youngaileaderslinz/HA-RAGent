@@ -175,13 +175,13 @@ class OllamaLlmBackend(ALlmBaseBackend):
         thinking_enabled = bool(get_setting_value(CONF_ENABLE_MODEL_THINKING, config_subentry))
 
         payload = {
-            "model": config_subentry[CONF_LLM_MODEL],
+            "model": get_setting_value(CONF_LLM_MODEL, config_subentry),
             "stream": "keep_alive" not in kwargs,
             "think": thinking_enabled,
             "options": {
-                "temperature": config_subentry[CONF_TEMPERATURE],
-                "num_ctx": config_subentry[CONF_CONTEXT_LENGTH],
-                "num_predict": config_subentry[CONF_MAX_TOKENS],
+                "temperature": get_setting_value(CONF_TEMPERATURE, config_subentry),
+                "num_ctx": get_setting_value(CONF_CONTEXT_LENGTH, config_subentry),
+                "num_predict": get_setting_value(CONF_MAX_TOKENS, config_subentry),
             },
         }
         

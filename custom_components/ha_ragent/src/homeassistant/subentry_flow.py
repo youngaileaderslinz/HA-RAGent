@@ -83,8 +83,8 @@ class RagentSubentryFlowHandler(ConfigSubentryFlow):
         schema = ui_schema_pick_models(
             embedding_models,
             llm_models,
-            embedding_model=self.model_config.get(CONF_EMBEDDING_MODEL),
-            llm_model=self.model_config.get(CONF_LLM_MODEL),
+            embedding_model=get_setting_value(CONF_EMBEDDING_MODEL, self.model_config),
+            llm_model=get_setting_value(CONF_LLM_MODEL, self.model_config),
         )
 
         if user_input and "result" not in user_input:
@@ -114,7 +114,7 @@ class RagentSubentryFlowHandler(ConfigSubentryFlow):
             )
             self.model_config = {**selected_default_options, **self.model_config}
 
-        excluded_tool_names = { name for name in self.model_config.get(CONF_EXCLUDED_TOOLS, []) if isinstance(name, str) }
+        excluded_tool_names = { name for name in (get_setting_value(CONF_EXCLUDED_TOOLS, self.model_config) or []) if isinstance(name, str) }
         try:
             subentry = self._get_reconfigure_subentry() if not self._is_new else SimpleNamespace(data=self.model_config, title="new subentry")
             excluded_tool_names.update(await ToolExtractor(self.hass, entry).async_get_embeddable_tool_names(subentry))
@@ -125,9 +125,9 @@ class RagentSubentryFlowHandler(ConfigSubentryFlow):
                 self.hass,
                 get_entry_language(entry),
                 self.model_config,
-                entry.data[CONF_VECTOR_DB_BACKEND_TYPE],
-                entry.data[CONF_EMBEDDING_BACKEND_TYPE],
-                entry.data[CONF_LLM_BACKEND_TYPE],
+                get_setting_value(CONF_VECTOR_DB_BACKEND_TYPE, entry.data),
+                get_setting_value(CONF_EMBEDDING_BACKEND_TYPE, entry.data),
+                get_setting_value(CONF_LLM_BACKEND_TYPE, entry.data),
                 self._subentry_type,
                 entry.translations,
                 list(excluded_tool_names),
@@ -169,7 +169,7 @@ class RagentSubentryFlowHandler(ConfigSubentryFlow):
     ) -> SubentryFlowResult:
         if self._is_new:
             return self.async_create_entry(
-                title=f"{self.model_config.get(CONF_EMBEDDING_MODEL, "Embedder")} + {self.model_config.get(CONF_LLM_MODEL, "LLM")}",
+                title=f"{(get_setting_value(CONF_EMBEDDING_MODEL, self.model_config) or 'Embedder')} + {(get_setting_value(CONF_LLM_MODEL, self.model_config) or 'LLM')}",
                 data=self.model_config,
             )
         else:

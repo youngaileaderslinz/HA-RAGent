@@ -473,7 +473,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 llm_api: llm.APIInstance | None = None
 
                 try:
-                    llm_api = await llm.async_get_api(self.hass, resolve_llm_api_id(self.runtime_options[CONF_LLM_HASS_API]), llm_context=llm_context,)
+                    llm_api = await llm.async_get_api(self.hass, resolve_llm_api_id(get_setting_value(CONF_LLM_HASS_API, self.runtime_options)), llm_context=llm_context,)
                     if isinstance(llm_api, RAGentAugmentedAPIInstance):
                         llm_api.set_conversation_agent_id(user_input.agent_id)
                         llm_api.set_search_scope(self.entry_id,self.subentry_id)

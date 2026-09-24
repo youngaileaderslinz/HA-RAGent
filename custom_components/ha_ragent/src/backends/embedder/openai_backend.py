@@ -8,6 +8,7 @@ from openai import AsyncOpenAI, InternalServerError
 
 from homeassistant.core import HomeAssistant
 
+from custom_components.ha_ragent.src.utils import get_setting_value
 from custom_components.ha_ragent.src.const import (
     CONF_EMBEDDING_API_KEY,
     CONF_EMBEDDING_HOST,
@@ -136,7 +137,7 @@ class OpenAiEmbedder(ABaseEmbedder):
             request_inputs = self._truncate_inputs(inputs, max_chars)
             try:
                 response = await client.embeddings.create(
-                    model=config_subentry[CONF_EMBEDDING_MODEL],
+                    model=get_setting_value(CONF_EMBEDDING_MODEL, config_subentry),
                     input=request_inputs,
                     encoding_format="float",
                 )

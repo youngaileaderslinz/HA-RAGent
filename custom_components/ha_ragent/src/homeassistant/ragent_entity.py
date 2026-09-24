@@ -12,7 +12,7 @@ from custom_components.ha_ragent.src.const import (
     CONF_LLM_MODEL
 )
 from custom_components.ha_ragent.src.homeassistant.ragent_config_entry import RAGentConfigEntry
-from custom_components.ha_ragent.src.utils import get_entry_language
+from custom_components.ha_ragent.src.utils import get_entry_language, get_setting_value
 
 _logger = BaseLogger(__name__)
 
@@ -29,7 +29,7 @@ class RAGentEntity(entity.Entity):
         self._attr_device_info = device_registry.DeviceInfo(
             identifiers={(DOMAIN, subentry.subentry_id)},
             name=subentry.title,
-            model=subentry.data.get(CONF_LLM_MODEL),
+            model=get_setting_value(CONF_LLM_MODEL, subentry.data),
             entry_type=device_registry.DeviceEntryType.SERVICE,
         )
 

@@ -17,6 +17,7 @@ from custom_components.ha_ragent.src.models.embedding.memory import Memory
 from custom_components.ha_ragent.src.models.embedding.memory_embedding import MemoryEmbedding
 from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
 
+from custom_components.ha_ragent.src.utils import get_setting_value
 from custom_components.ha_ragent.src.const import (
     CONF_VECTOR_DB_HOST,
     CONF_VECTOR_DB_PORT,
@@ -30,9 +31,9 @@ class ChromaDbBackend(ABaseDbBackend):
         super().__init__(hass, client_options)
         self._settings = Settings(
                 chroma_api_impl="chromadb.api.fastapi.FastAPI",
-                chroma_server_host=self.client_options.get(CONF_VECTOR_DB_HOST),
-                chroma_server_http_port=self.client_options.get(CONF_VECTOR_DB_PORT),
-                chroma_server_ssl_enabled=self.client_options.get(CONF_VECTOR_DB_SSL),
+                chroma_server_host=get_setting_value(CONF_VECTOR_DB_HOST, self.client_options),
+                chroma_server_http_port=get_setting_value(CONF_VECTOR_DB_PORT, self.client_options),
+                chroma_server_ssl_enabled=get_setting_value(CONF_VECTOR_DB_SSL, self.client_options),
             )
             
         self._client = None
@@ -43,9 +44,9 @@ class ChromaDbBackend(ABaseDbBackend):
 
     @staticmethod
     def _validate_connection(client_options: dict[str, Any]) -> Optional[str]:
-        host = client_options.get(CONF_VECTOR_DB_HOST)
-        port = client_options.get(CONF_VECTOR_DB_PORT)
-        ssl = client_options.get(CONF_VECTOR_DB_SSL)
+        host = get_setting_value(CONF_VECTOR_DB_HOST, client_options)
+        port = get_setting_value(CONF_VECTOR_DB_PORT, client_options)
+        ssl = get_setting_value(CONF_VECTOR_DB_SSL, client_options)
         settings = Settings(
             chroma_api_impl="chromadb.api.fastapi.FastAPI",
             chroma_server_host=host,
