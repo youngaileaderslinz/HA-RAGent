@@ -156,7 +156,7 @@ class OpenAiLlmBackend(ALlmBaseBackend):
             "temperature": config_subentry[CONF_TEMPERATURE],
             "max_tokens": config_subentry[CONF_MAX_TOKENS],
         }
-        thinking_enabled = bool(config_subentry[CONF_ENABLE_MODEL_THINKING])
+        thinking_enabled = bool(get_setting_value(CONF_ENABLE_MODEL_THINKING, config_subentry))
 
         request["extra_body"] = {
             "parse_tool_calls": True,

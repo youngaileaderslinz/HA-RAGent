@@ -171,7 +171,7 @@ class OllamaLlmBackend(ALlmBaseBackend):
         if emitted is None:
             emitted = {"value": False}
         unexpected_reasoning_logged = False
-        thinking_enabled = bool(config_subentry[CONF_ENABLE_MODEL_THINKING])
+        thinking_enabled = bool(get_setting_value(CONF_ENABLE_MODEL_THINKING, config_subentry))
 
         payload = {
             "model": config_subentry[CONF_LLM_MODEL],
