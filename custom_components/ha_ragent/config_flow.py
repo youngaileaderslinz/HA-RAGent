@@ -106,9 +106,9 @@ class RagentConfigFlow(ConfigFlow, domain=DOMAIN):
         
         if user_input:
             self.client_config.update(user_input)
-            vector_db_hostname = user_input.get(CONF_VECTOR_DB_HOST)
-            embedding_hostname = user_input.get(CONF_EMBEDDING_HOST)
-            llm_hostname = user_input.get(CONF_LLM_HOST)
+            vector_db_hostname = get_setting_value(CONF_VECTOR_DB_HOST, user_input)
+            embedding_hostname = get_setting_value(CONF_EMBEDDING_HOST, user_input)
+            llm_hostname = get_setting_value(CONF_LLM_HOST, user_input)
             
             vector_db_is_valid, embedding_is_valid, llm_is_valid = await asyncio.gather(
                 self.hass.async_add_executor_job(

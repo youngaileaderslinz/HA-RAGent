@@ -61,9 +61,9 @@ class OllamaEmbedder(ABaseEmbedder):
             await async_request_json(
                 session, "GET",
                 ABaseEmbedder.format_url(
-                    hostname=user_input.get(CONF_EMBEDDING_HOST),
-                    port=user_input.get(CONF_EMBEDDING_PORT),
-                    ssl=user_input.get(CONF_EMBEDDING_SSL),
+                    hostname=get_setting_value(CONF_EMBEDDING_HOST, user_input),
+                    port=get_setting_value(CONF_EMBEDDING_PORT, user_input),
+                    ssl=get_setting_value(CONF_EMBEDDING_SSL, user_input),
                     path="/api/tags"
                 ),
                 timeout=ABaseEmbedder._default_timeout

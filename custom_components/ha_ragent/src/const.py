@@ -249,10 +249,6 @@ DEFAULT_PROMPT = """<persona_prompt>
 
 <instruction_prompt>
 
-<search_fallback_prompt>
-
-<max_retries_prompt>
-
 <area_prompt>
 
 {% if memory_list %}

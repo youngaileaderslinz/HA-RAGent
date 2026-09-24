@@ -64,12 +64,12 @@ class OpenAiEmbedder(ABaseEmbedder):
         client = None
         try:
             base_url = ABaseEmbedder.format_url(
-                hostname=user_input.get(CONF_EMBEDDING_HOST),
-                port=user_input.get(CONF_EMBEDDING_PORT),
-                ssl=user_input.get(CONF_EMBEDDING_SSL),
+                hostname=get_setting_value(CONF_EMBEDDING_HOST, user_input),
+                port=get_setting_value(CONF_EMBEDDING_PORT, user_input),
+                ssl=get_setting_value(CONF_EMBEDDING_SSL, user_input),
                 path="/v1",
             )
-            api_key = ABaseEmbedder.normalize_api_key(user_input.get(CONF_EMBEDDING_API_KEY))
+            api_key = ABaseEmbedder.normalize_api_key(get_setting_value(CONF_EMBEDDING_API_KEY, user_input))
             client = await hass.async_add_executor_job(
                 partial(
                     AsyncOpenAI,

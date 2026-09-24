@@ -86,12 +86,12 @@ class OpenAiLlmBackend(ALlmBaseBackend):
         client = None
         try:
             base_url = ALlmBaseBackend.format_url(
-                hostname=user_input.get(CONF_LLM_HOST),
-                port=user_input.get(CONF_LLM_PORT),
-                ssl=user_input.get(CONF_LLM_SSL),
+                hostname=get_setting_value(CONF_LLM_HOST, user_input),
+                port=get_setting_value(CONF_LLM_PORT, user_input),
+                ssl=get_setting_value(CONF_LLM_SSL, user_input),
                 path="/v1",
             )
-            api_key = ALlmBaseBackend.normalize_api_key(user_input.get(CONF_LLM_API_KEY))
+            api_key = ALlmBaseBackend.normalize_api_key(get_setting_value(CONF_LLM_API_KEY, user_input))
             client = await hass.async_add_executor_job(
                 partial(
                     AsyncOpenAI,

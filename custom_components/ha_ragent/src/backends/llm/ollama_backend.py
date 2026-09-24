@@ -86,9 +86,9 @@ class OllamaLlmBackend(ALlmBaseBackend):
             await async_request_json(
                 session, "GET",
                 ALlmBaseBackend.format_url(
-                    hostname=user_input.get(CONF_LLM_HOST),
-                    port=user_input.get(CONF_LLM_PORT),
-                    ssl=user_input.get(CONF_LLM_SSL),
+                    hostname=get_setting_value(CONF_LLM_HOST, user_input),
+                    port=get_setting_value(CONF_LLM_PORT, user_input),
+                    ssl=get_setting_value(CONF_LLM_SSL, user_input),
                     path="/api/tags"
                 ),
                 timeout=ALlmBaseBackend._default_timeout

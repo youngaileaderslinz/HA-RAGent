@@ -128,11 +128,11 @@ class MongoDbBackend(ABaseDbBackend):
         connection = None
         try:
             url = MongoDbBackend._format_url(
-                username=user_input.get(CONF_VECTOR_DB_USERNAME),
-                password=user_input.get(CONF_VECTOR_DB_PASSWORD),
-                hostname=user_input.get(CONF_VECTOR_DB_HOST),
-                port=user_input.get(CONF_VECTOR_DB_PORT),
-                ssl=user_input.get(CONF_VECTOR_DB_SSL),
+                username=get_setting_value(CONF_VECTOR_DB_USERNAME, user_input),
+                password=get_setting_value(CONF_VECTOR_DB_PASSWORD, user_input),
+                hostname=get_setting_value(CONF_VECTOR_DB_HOST, user_input),
+                port=get_setting_value(CONF_VECTOR_DB_PORT, user_input),
+                ssl=get_setting_value(CONF_VECTOR_DB_SSL, user_input),
             )
             connection = AsyncMongoClient(url)
             result = await connection.admin.command("ping")

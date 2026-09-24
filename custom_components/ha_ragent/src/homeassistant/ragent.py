@@ -683,7 +683,5 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         prompt_template = prompt_template.replace("<area_prompt>", translations.prompt(TRANSLATION_PROMPT_AREAS))
         prompt_template = prompt_template.replace("<devices_prompt>", translations.prompt(TRANSLATION_PROMPT_DEVICES))
         prompt_template = prompt_template.replace("<memories_context_prompt>", translations.prompt(TRANSLATION_PROMPT_MEMORIES))
-        prompt_template = prompt_template.replace("<max_retries_prompt>", translations.prompt(TRANSLATION_PROMPT_RETRIES))
         prompt_template = prompt_template.replace("<instruction_prompt>", translations.prompt(TRANSLATION_PROMPT_INSTRUCTIONS))
-        prompt_template = prompt_template.replace("<search_fallback_prompt>", translations.prompt(TRANSLATION_PROMPT_SEARCH_FALLBACK))
         return prompt_template
