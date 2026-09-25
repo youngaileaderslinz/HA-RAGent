@@ -24,6 +24,7 @@ from custom_components.ha_ragent.src.const import (
     RETRY_BACKOFF_BASE_SECONDS,
     RETRY_BACKOFF_MULTIPLIER,
 )
+from custom_components.ha_ragent.src.utils import get_setting_value
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.model_info import ModelInfo
 from custom_components.ha_ragent.src.models.chat.chat_message import ChatMessage
@@ -85,9 +86,9 @@ class OllamaLlmBackend(ALlmBaseBackend):
             await async_request_json(
                 session, "GET",
                 ALlmBaseBackend.format_url(
-                    hostname=user_input.get(CONF_LLM_HOST),
-                    port=user_input.get(CONF_LLM_PORT),
-                    ssl=user_input.get(CONF_LLM_SSL),
+                    hostname=get_setting_value(CONF_LLM_HOST, user_input),
+                    port=get_setting_value(CONF_LLM_PORT, user_input),
+                    ssl=get_setting_value(CONF_LLM_SSL, user_input),
                     path="/api/tags"
                 ),
                 timeout=ALlmBaseBackend._default_timeout
@@ -171,16 +172,16 @@ class OllamaLlmBackend(ALlmBaseBackend):
         if emitted is None:
             emitted = {"value": False}
         unexpected_reasoning_logged = False
-        thinking_enabled = bool(config_subentry[CONF_ENABLE_MODEL_THINKING])
+        thinking_enabled = bool(get_setting_value(CONF_ENABLE_MODEL_THINKING, config_subentry))
 
         payload = {
-            "model": config_subentry[CONF_LLM_MODEL],
+            "model": get_setting_value(CONF_LLM_MODEL, config_subentry),
             "stream": "keep_alive" not in kwargs,
             "think": thinking_enabled,
             "options": {
-                "temperature": config_subentry[CONF_TEMPERATURE],
-                "num_ctx": config_subentry[CONF_CONTEXT_LENGTH],
-                "num_predict": config_subentry[CONF_MAX_TOKENS],
+                "temperature": get_setting_value(CONF_TEMPERATURE, config_subentry),
+                "num_ctx": get_setting_value(CONF_CONTEXT_LENGTH, config_subentry),
+                "num_predict": get_setting_value(CONF_MAX_TOKENS, config_subentry),
             },
         }
         

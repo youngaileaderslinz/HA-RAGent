@@ -21,6 +21,7 @@ from custom_components.ha_ragent.src.const import (
     RAGENT_CHAT_TRUNCATE_MAX_CHARS,
     RAGENT_CHAT_TRUNCATE_RETRIES
 )
+from custom_components.ha_ragent.src.utils import get_setting_value
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.model_info import ModelInfo
 from custom_components.ha_ragent.src.models.chat.chat_message import ChatMessage
@@ -85,12 +86,12 @@ class OpenAiLlmBackend(ALlmBaseBackend):
         client = None
         try:
             base_url = ALlmBaseBackend.format_url(
-                hostname=user_input.get(CONF_LLM_HOST),
-                port=user_input.get(CONF_LLM_PORT),
-                ssl=user_input.get(CONF_LLM_SSL),
+                hostname=get_setting_value(CONF_LLM_HOST, user_input),
+                port=get_setting_value(CONF_LLM_PORT, user_input),
+                ssl=get_setting_value(CONF_LLM_SSL, user_input),
                 path="/v1",
             )
-            api_key = ALlmBaseBackend.normalize_api_key(user_input.get(CONF_LLM_API_KEY))
+            api_key = ALlmBaseBackend.normalize_api_key(get_setting_value(CONF_LLM_API_KEY, user_input))
             client = await hass.async_add_executor_job(
                 partial(
                     AsyncOpenAI,
@@ -150,13 +151,13 @@ class OpenAiLlmBackend(ALlmBaseBackend):
     async def async_send_chat_request(self, config_subentry: dict, messages: List[ChatMessage], tools: List[LlmTool], **kwargs) -> AsyncGenerator[str, None]:
         prepared_messages = self.format_messages_for_backend(messages)
         request: Dict[str, Any] = {
-            "model": config_subentry[CONF_LLM_MODEL],
+            "model": get_setting_value(CONF_LLM_MODEL, config_subentry),
             "messages": prepared_messages,
             "stream": True,
-            "temperature": config_subentry[CONF_TEMPERATURE],
-            "max_tokens": config_subentry[CONF_MAX_TOKENS],
+            "temperature": get_setting_value(CONF_TEMPERATURE, config_subentry),
+            "max_tokens": get_setting_value(CONF_MAX_TOKENS, config_subentry),
         }
-        thinking_enabled = bool(config_subentry[CONF_ENABLE_MODEL_THINKING])
+        thinking_enabled = bool(get_setting_value(CONF_ENABLE_MODEL_THINKING, config_subentry))
 
         request["extra_body"] = {
             "parse_tool_calls": True,

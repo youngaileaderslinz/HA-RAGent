@@ -34,13 +34,12 @@ from custom_components.ha_ragent.src.const import (
     RAGENT_MEMORY_LOCKS,
 )
 
-from custom_components.ha_ragent.src.utils import (
+from custom_components.ha_ragent.src.backends.backends import (
     vector_db_to_class,
     embedding_backend_to_class,
     llm_backend_to_class,
-    get_entry_language,
-    get_setting_value,
 )
+from custom_components.ha_ragent.src.utils import get_entry_language, get_setting_value
 from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 _logger = BaseLogger(__name__)
@@ -201,7 +200,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry):
     if hass.is_running:
         await _async_forward_platforms_after_embeddings(hass, entry)
     else:
+        remove_start_listener = None
+
+        def _remove_start_listener() -> None:
+            nonlocal remove_start_listener
+            if remove_start_listener is None:
+                return
+            unsubscribe = remove_start_listener
+            remove_start_listener = None
+            unsubscribe()
+
         async def _async_forward_after_start(_event) -> None:
+            _remove_start_listener()
             if (
                 entry.entry_id not in hass.data.get(DOMAIN, {})
                 or entry.state != ConfigEntryState.LOADED
@@ -210,11 +220,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry):
                 return
             await _async_forward_platforms_after_embeddings(hass, entry)
 
-        remove_start_listener = hass.bus.async_listen_once(
+        remove_start_listener = hass.bus.async_listen(
             EVENT_HOMEASSISTANT_STARTED,
             _async_forward_after_start,
         )
-        entry.async_on_unload(remove_start_listener)
+        entry.async_on_unload(_remove_start_listener)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     await _register_services(hass)

@@ -134,7 +134,7 @@ def ui_schema_pick_backends(
             )),
             vol.Required(
                 CONF_SELECTED_LANGUAGE, 
-                default=get_value(selected_language, get_setting_value(CONF_SELECTED_LANGUAGE, options))
+                default=get_value(selected_language, options.get(CONF_SELECTED_LANGUAGE, "en"))
             ): SelectSelector(SelectSelectorConfig(
                 options=SELECTED_LANGUAGE_OPTIONS,
                 translation_key=CONF_SELECTED_LANGUAGE,
@@ -277,7 +277,7 @@ def ui_schema_config_options(
         get_setting_value(CONF_PROMPT, options) or DEFAULT_PROMPT,
     )
     default_llm_api = getattr(llm, "LLM_API_ASSIST", "assist")
-    selected_llm_api = options.get(CONF_LLM_HASS_API, default_llm_api)
+    selected_llm_api = get_setting_value(CONF_LLM_HASS_API, options) or default_llm_api
 
     llm_api_options = [SelectOptionDict(value="none", label="No Control")]
     try:
@@ -302,12 +302,12 @@ def ui_schema_config_options(
         )),
         vol.Optional(
             CONF_PROMPT,
-            default=options.get(CONF_PROMPT, default_prompt),
+            default=get_setting_value(CONF_PROMPT, options) or default_prompt,
         ): TemplateSelector(),
         vol.Required(
             CONF_RETRIEVAL_METHOD,
-            description={"suggested_value": options.get(CONF_RETRIEVAL_METHOD, RETRIEVAL_METHOD_OPTIONS[0])},
-            default=options.get(CONF_RETRIEVAL_METHOD, RETRIEVAL_METHOD_OPTIONS[0]),
+            description={"suggested_value": get_setting_value(CONF_RETRIEVAL_METHOD, options)},
+            default=get_setting_value(CONF_RETRIEVAL_METHOD, options),
         ): SelectSelector(SelectSelectorConfig(
             options=[
                 SelectOptionDict(value="automatic", label="Automatic"),
@@ -335,12 +335,12 @@ def ui_schema_config_options(
         ): NumberSelector(NumberSelectorConfig(min=0.0, max=2.0, step=0.05, mode=NumberSelectorMode.BOX)),
         vol.Required(
             CONF_MAX_TOKENS,
-            description={"suggested_value": options.get(CONF_MAX_TOKENS)},
+            description={"suggested_value": get_setting_value(CONF_MAX_TOKENS, options)},
             default=get_setting_value(CONF_MAX_TOKENS, options),
         ): NumberSelector(NumberSelectorConfig(min=1, max=8192, step=1)),
         vol.Required(
             CONF_CONTEXT_LENGTH,
-            description={"suggested_value": options.get(CONF_CONTEXT_LENGTH)},
+            description={"suggested_value": get_setting_value(CONF_CONTEXT_LENGTH, options)},
             default=get_setting_value(CONF_CONTEXT_LENGTH, options),
         ): NumberSelector(NumberSelectorConfig(min=512, max=1_048_576, step=512)),
         vol.Optional(
@@ -355,7 +355,7 @@ def ui_schema_config_options(
         ): NumberSelector(NumberSelectorConfig(min=0, max=1440, mode=NumberSelectorMode.BOX)),
         vol.Required(
             CONF_MAX_TOOL_CALL_ITERATIONS,
-            description={"suggested_value": options.get(CONF_MAX_TOOL_CALL_ITERATIONS)},
+            description={"suggested_value": get_setting_value(CONF_MAX_TOOL_CALL_ITERATIONS, options)},
             default=get_setting_value(CONF_MAX_TOOL_CALL_ITERATIONS, options),
         ): int,
         vol.Optional(
@@ -365,22 +365,22 @@ def ui_schema_config_options(
         ): BooleanSelector(BooleanSelectorConfig()),
         vol.Required(
             CONF_MIN_DEVICES_TO_EXTRACT,
-            description={"suggested_value": options.get(CONF_MIN_DEVICES_TO_EXTRACT)},
+            description={"suggested_value": get_setting_value(CONF_MIN_DEVICES_TO_EXTRACT, options)},
             default=get_setting_value(CONF_MIN_DEVICES_TO_EXTRACT, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=50, mode=NumberSelectorMode.BOX)),
         vol.Required(
             CONF_MAX_DEVICES_TO_EXTRACT,
-            description={"suggested_value": options.get(CONF_MAX_DEVICES_TO_EXTRACT)},
+            description={"suggested_value": get_setting_value(CONF_MAX_DEVICES_TO_EXTRACT, options)},
             default=get_setting_value(CONF_MAX_DEVICES_TO_EXTRACT, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=50, mode=NumberSelectorMode.BOX)),
         vol.Required(
             CONF_MIN_TOOLS_TO_EXTRACT,
-            description={"suggested_value": options.get(CONF_MIN_TOOLS_TO_EXTRACT)},
+            description={"suggested_value": get_setting_value(CONF_MIN_TOOLS_TO_EXTRACT, options)},
             default=get_setting_value(CONF_MIN_TOOLS_TO_EXTRACT, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=50, mode=NumberSelectorMode.BOX)),
         vol.Required(
             CONF_MAX_TOOLS_TO_EXTRACT,
-            description={"suggested_value": options.get(CONF_MAX_TOOLS_TO_EXTRACT)},
+            description={"suggested_value": get_setting_value(CONF_MAX_TOOLS_TO_EXTRACT, options)},
             default=get_setting_value(CONF_MAX_TOOLS_TO_EXTRACT, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=50, mode=NumberSelectorMode.BOX)),
         vol.Optional(
@@ -400,7 +400,7 @@ def ui_schema_config_options(
         ): NumberSelector(NumberSelectorConfig(min=1, max=10000, mode=NumberSelectorMode.BOX)),
         vol.Optional(
             CONF_EXCLUDED_TOOLS,
-            default=options.get(CONF_EXCLUDED_TOOLS, []),
+            default=(get_setting_value(CONF_EXCLUDED_TOOLS, options) or []),
         ): SelectSelector(SelectSelectorConfig(
             options=[SelectOptionDict(value=name, label=name) for name in sorted(excluded_tool_options or [])],
             custom_value=True,

@@ -21,22 +21,6 @@ If you enable device control, the model can call Home Assistant tools and use th
 ### Default System Prompt
 Changes to the default system prompt apply only to newly created RAGent entries. Existing entries retain the prompt saved in their configuration. To use the latest default prompt with an existing entry, copy it into the entry’s **System Prompt** field and save the configuration or recreate the entry.
 
-### Exposed Script Entities:
-Scripts will be passed as tools and are excluded from device embeddings. Only scripts that are exposed to conversation/assist will be visible.
-
-Custom scripts that act on entities should return the affected entity IDs so HA-RAGent can preserve target continuity and verify state. Both a direct Home Assistant-style result and a wrapper result are supported. The wrapper format is:
-
-```json
-{
-  "success": true,
-  "result": {
-    "success": ["media_player.living_room"]
-  }
-}
-```
-
-`result.success` may be one entity ID string or a list of entity IDs. The outer `success` reports whether the script completed; the nested value identifies the targets that actually succeeded.
-
 ### OpenAI-Compatible Backends
 OpenAI-compatible backends have currently been tested only with llamaccp. Compatibility with other providers is not guaranteed, so test the selected backend thoroughly before using it in production.
 
@@ -123,9 +107,9 @@ Use the `Add Integration` button in the bottom right to add a new integration ca
 - `Tools excluded from embedding`
     - Excludes selected tool names from the vector index. Names are matched exactly and are case-sensitive
 - `Minimum Number of Devices` / `Maximum Number of Devices`
-    - Defaults to `2` / `6`. Confident retrieval uses the minimum; uncertain or ambiguous retrieval expands up to the maximum.
+    - Defaults to `2` / `4`. Confident retrieval uses the minimum; uncertain or ambiguous retrieval expands up to the maximum.
 - `Minimum Number of Tools` / `Maximum Number of Tools`
-    - Defaults to `2` / `6`. Confident retrieval uses the minimum; uncertain retrieval expands up to the maximum (required HA-RAGent tools do not count toward either limit).
+    - Defaults to `2` / `4`. Confident retrieval uses the minimum; uncertain retrieval expands up to the maximum (required HA-RAGent tools do not count toward either limit).
 - `Minimum Number of Long-Term Memories` / `Maximum Number of Long-Term Memories`
     - Defaults to `0` / `4`. Vector-search confidence determines how many relevant memories are added to each prompt within this range. Set the maximum to `0` to disable recall without deleting memories.
 - `Maximum Memory Entries`
@@ -192,6 +176,18 @@ HA-RAGent registers the following Home Assistant services for each conversation 
 - `ha_ragent.unload_models` (only works with Ollama as of now)
     - Unloads the embedding model and LLM for the selected AI RAGent subentry to free resources.
 
+## Scripts
+Scripts exposed to conversation/assist are available as tools and are excluded from device embeddings.
+Scripts that act on entities can return their affected entity IDs example shown below:
+
+```yaml
+- variables:
+    response:
+      success:
+        - '{{ target_media_player }}'
+- stop: Playback command sent
+  response_variable: response
+```
 ## New Features, Help and Contribution
 **Have an idea what is missing?** <br>
 Open an issue [[open issue]](https://github.com/youngaileaderslinz/HA-RAGent/issues) or implement it yourself and create a pull request.

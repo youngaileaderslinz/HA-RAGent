@@ -23,6 +23,7 @@ from custom_components.ha_ragent.src.models.embedding.memory import Memory
 from custom_components.ha_ragent.src.models.embedding.memory_embedding import MemoryEmbedding
 from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
 
+from custom_components.ha_ragent.src.utils import get_setting_value
 from custom_components.ha_ragent.src.const import (
     CONF_VECTOR_DB_NAME
 )
@@ -42,7 +43,7 @@ class FaissDbBackend(ABaseDbBackend):
     def __init__(self, hass: HomeAssistant, client_options: dict[str, Any]):
         super().__init__(hass, client_options)
         self._storage_path = hass.config.path("ha_ragent_storage")
-        self.db_name = self.client_options.get(CONF_VECTOR_DB_NAME)
+        self.db_name = get_setting_value(CONF_VECTOR_DB_NAME, self.client_options)
 
         os.makedirs(os.path.join(self._storage_path, self.db_name), exist_ok=True)
         

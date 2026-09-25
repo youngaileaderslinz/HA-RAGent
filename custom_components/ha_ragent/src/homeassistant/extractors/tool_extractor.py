@@ -33,6 +33,7 @@ from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.schema_constraints import root_property_values
 from custom_components.ha_ragent.src.homeassistant.ragent_api import resolve_llm_api_id
 from custom_components.ha_ragent.src.homeassistant.ragent_config_entry import RAGentConfigEntry
+from custom_components.ha_ragent.src.utils import get_setting_value
 
 _logger = BaseLogger(__name__)
 
@@ -245,10 +246,10 @@ class ToolExtractor:
     async def _async_get_embeddable_tools(self, subentry: ConfigSubentry) -> List[LlmTool]:
         tool_list: list[LlmTool] = []
         seen_tool_names: set[str] = set()
-        selected_api = subentry.data.get(CONF_LLM_HASS_API, "default")
+        selected_api = get_setting_value(CONF_LLM_HASS_API, subentry.data) or "default"
         excluded_tools = {
             name
-            for name in subentry.data.get(CONF_EXCLUDED_TOOLS, [])
+            for name in (get_setting_value(CONF_EXCLUDED_TOOLS, subentry.data) or [])
             if isinstance(name, str) and name.strip()
         }
 

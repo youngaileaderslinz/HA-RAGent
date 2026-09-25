@@ -59,6 +59,7 @@ from custom_components.ha_ragent.src.const import (
     RAGENT_SCHEDULED_REQUEST_PREFIX,
     RAGENT_PREFIXED_SCHEDULED_REQUEST_PROHIBITED_TOOL_NAMES,
     RETRIEVAL_METHOD_LEXICAL,
+    TRACE,
     TRANSLATION_PROMPT_SCHEDULED_ACTION,
     TRANSLATION_PROMPT_PERSONA,
     TRANSLATION_PROMPT_AREAS,
@@ -259,6 +260,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         timing_logger = TimingLogger(__name__ + ".prompt_model")
         max_tool_call_iterations = get_setting_value(CONF_MAX_TOOL_CALL_ITERATIONS, self.runtime_options)
         tool_helper = ToolHelper(self.hass, tool_list)
+        exposed_tool_names = {tool.name for tool in tool_list}
 
         formatted_index = 0
         formatted_messages: list[ChatMessage] = []
@@ -280,7 +282,8 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             tool_calls_in_iteration = []
             executed_signatures_in_iteration: set[str] = set()
             try:
-                _logger.log_payload("conversation.llm_request",
+                _logger.log_payload(
+                    "conversation.llm_request",
                     level=logging.DEBUG,
                     iteration=idx + 1,
                     messages=formatted_messages,
@@ -288,6 +291,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 )
 
                 content_chunks = []
+                timing_logger.reset_timing()
                 async for chunk in self.entry.llm_backend.async_send_chat_request(
                     dict(self.subentry.data),
                     formatted_messages,
@@ -299,7 +303,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 timing_logger.log_timed_string(logging.DEBUG, f"LLM iteration {idx + 1} completed")
 
                 tool_calls_in_iteration = tool_helper.parse_tool_calls(assistant_content)
-                exposed_tool_names = {tool.name for tool in tool_list}
                 tool_calls_in_iteration = [
                     tool_helper.normalize_exposed_tool_call(call, exposed_tool_names) or call
                     for call in tool_calls_in_iteration
@@ -414,6 +417,8 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                             )
                             history_manager.append_message(tool_result_msg)
                             failed_signatures.add(call_signature)
+                        finally:
+                            timing_logger.log_timed_string(logging.DEBUG, f"Tool call {tool_name} completed")
 
             except Exception as err:
                 _logger.log_string(logging.ERROR, f"There was a problem talking to the backend: {err}")
@@ -473,7 +478,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 llm_api: llm.APIInstance | None = None
 
                 try:
-                    llm_api = await llm.async_get_api(self.hass, resolve_llm_api_id(self.runtime_options[CONF_LLM_HASS_API]), llm_context=llm_context,)
+                    llm_api = await llm.async_get_api(self.hass, resolve_llm_api_id(get_setting_value(CONF_LLM_HASS_API, self.runtime_options)), llm_context=llm_context,)
                     if isinstance(llm_api, RAGentAugmentedAPIInstance):
                         llm_api.set_conversation_agent_id(user_input.agent_id)
                         llm_api.set_search_scope(self.entry_id,self.subentry_id)
@@ -637,27 +642,30 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     relevant_turn_keys=continuity.selected_turn_keys,
                 )
 
-                _logger.log_payload(
-                    event="conversation.size_breakdown",
-                    data={
-                        "system_prompt": len(system_prompt_content),
-                        "devices": len(json.dumps(
-                            [device.to_dict() for device in device_list],
-                            ensure_ascii=False,
-                            default=str,
-                        )),
-                        "memories": len(json.dumps(
-                            [memory.to_dict() for memory in retrieved_memories],
-                            ensure_ascii=False,
-                            default=str,
-                        )),
-                        "continuity_turns": len(continuity.selected_turn_keys),
-                        "history": sum(
-                            len(str(getattr(message, "content", "") or ""))
-                            for message in history_manager.message_history[1:-1]
-                        ),
-                    },
-                )
+                if _logger.is_enabled_for(TRACE):
+                    _logger.log_payload(
+                        event="conversation.size_breakdown",
+                        data={
+                            "system_prompt": len(system_prompt_content),
+                            "devices": len(json.dumps(
+                                [device.to_dict() for device in device_list],
+                                ensure_ascii=False,
+                                default=str,
+                            )),
+                            "memories": len(json.dumps(
+                                [memory.to_dict() for memory in retrieved_memories],
+                                ensure_ascii=False,
+                                default=str,
+                            )),
+                            "continuity_turns": len(continuity.selected_turn_keys),
+                            "history": sum(
+                                len(str(getattr(message, "content", "") or ""))
+                                for message in history_manager.message_history[1:-1]
+                            ),
+                        },
+                    )
+
+                timing_logger.log_timed_string(level=logging.DEBUG, message="Prompt history prepared")
 
                 result = await self._async_prompt_model(
                     llm_api,
@@ -683,7 +691,5 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         prompt_template = prompt_template.replace("<area_prompt>", translations.prompt(TRANSLATION_PROMPT_AREAS))
         prompt_template = prompt_template.replace("<devices_prompt>", translations.prompt(TRANSLATION_PROMPT_DEVICES))
         prompt_template = prompt_template.replace("<memories_context_prompt>", translations.prompt(TRANSLATION_PROMPT_MEMORIES))
-        prompt_template = prompt_template.replace("<max_retries_prompt>", translations.prompt(TRANSLATION_PROMPT_RETRIES))
         prompt_template = prompt_template.replace("<instruction_prompt>", translations.prompt(TRANSLATION_PROMPT_INSTRUCTIONS))
-        prompt_template = prompt_template.replace("<search_fallback_prompt>", translations.prompt(TRANSLATION_PROMPT_SEARCH_FALLBACK))
         return prompt_template

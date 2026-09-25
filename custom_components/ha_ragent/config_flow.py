@@ -12,9 +12,9 @@ from homeassistant.config_entries import (
     ConfigSubentryFlow
 )
 
-from .src.homeassistant.ragent_config_entry import RAGentConfigEntry
+from custom_components.ha_ragent.src.homeassistant.ragent_config_entry import RAGentConfigEntry
 
-from .src.const import (
+from custom_components.ha_ragent.src.const import (
     BACKEND_VECTOR_DB_TYPE_FAISS,
     CONF_VECTOR_DB_BACKEND_TYPE,
     CONF_EMBEDDING_BACKEND_TYPE,
@@ -35,20 +35,20 @@ from .src.const import (
     CONFIG_FLOW_VERSION,
 )
 
-from .src.homeassistant.option_flow import RagentOptionsFlow
-from .src.homeassistant.subentry_flow import RagentSubentryFlowHandler
+from custom_components.ha_ragent.src.homeassistant.option_flow import RagentOptionsFlow
+from custom_components.ha_ragent.src.homeassistant.subentry_flow import RagentSubentryFlowHandler
 
-from .src.homeassistant.ui_schemas import (
+from custom_components.ha_ragent.src.homeassistant.ui_schemas import (
     ui_schema_backend_connections,
     ui_schema_pick_backends
 )
 
-from .src.utils import (
-    is_valid_host,
+from custom_components.ha_ragent.src.backends.backends import (
     vector_db_to_class,
     embedding_backend_to_class,
-    llm_backend_to_class
+    llm_backend_to_class,
 )
+from custom_components.ha_ragent.src.utils import get_setting_value, is_valid_host
 
 _logger = logging.getLogger(__name__)
 
@@ -86,17 +86,17 @@ class RagentConfigFlow(ConfigFlow, domain=DOMAIN):
             return self.async_show_form(
                 step_id="user", 
                 data_schema=ui_schema_backend_connections(
-                    vector_db_backend_type=self.client_config[CONF_VECTOR_DB_BACKEND_TYPE],
-                    embedding_backend_type=self.client_config[CONF_EMBEDDING_BACKEND_TYPE],
-                    llm_backend_type=self.client_config[CONF_LLM_BACKEND_TYPE]),
+                    vector_db_backend_type=get_setting_value(CONF_VECTOR_DB_BACKEND_TYPE, self.client_config),
+                    embedding_backend_type=get_setting_value(CONF_EMBEDDING_BACKEND_TYPE, self.client_config),
+                    llm_backend_type=get_setting_value(CONF_LLM_BACKEND_TYPE, self.client_config)),
                 last_step=True
             )
         return self.async_show_form(
             step_id="user", 
             data_schema=ui_schema_pick_backends(
-                ventor_db_backend_type=self.client_config.get(CONF_VECTOR_DB_BACKEND_TYPE),
-                embedding_backend_type=self.client_config.get(CONF_EMBEDDING_BACKEND_TYPE),
-                llm_backend_type=self.client_config.get(CONF_LLM_BACKEND_TYPE),
+                ventor_db_backend_type=get_setting_value(CONF_VECTOR_DB_BACKEND_TYPE, self.client_config),
+                embedding_backend_type=get_setting_value(CONF_EMBEDDING_BACKEND_TYPE, self.client_config),
+                llm_backend_type=get_setting_value(CONF_LLM_BACKEND_TYPE, self.client_config),
                 selected_language=self.client_config.get(CONF_SELECTED_LANGUAGE)), 
             last_step=False)
         
@@ -106,14 +106,14 @@ class RagentConfigFlow(ConfigFlow, domain=DOMAIN):
         
         if user_input:
             self.client_config.update(user_input)
-            vector_db_hostname = user_input.get(CONF_VECTOR_DB_HOST)
-            embedding_hostname = user_input.get(CONF_EMBEDDING_HOST)
-            llm_hostname = user_input.get(CONF_LLM_HOST)
+            vector_db_hostname = get_setting_value(CONF_VECTOR_DB_HOST, user_input)
+            embedding_hostname = get_setting_value(CONF_EMBEDDING_HOST, user_input)
+            llm_hostname = get_setting_value(CONF_LLM_HOST, user_input)
             
             vector_db_is_valid, embedding_is_valid, llm_is_valid = await asyncio.gather(
                 self.hass.async_add_executor_job(
                     is_valid_host, vector_db_hostname,
-                ) if self.client_config.get(CONF_VECTOR_DB_BACKEND_TYPE) != BACKEND_VECTOR_DB_TYPE_FAISS else asyncio.sleep(0, result=True),
+                ) if get_setting_value(CONF_VECTOR_DB_BACKEND_TYPE, self.client_config) != BACKEND_VECTOR_DB_TYPE_FAISS else asyncio.sleep(0, result=True),
                 self.hass.async_add_executor_job(is_valid_host, embedding_hostname),
                 self.hass.async_add_executor_job(is_valid_host, llm_hostname),
             )
@@ -122,13 +122,13 @@ class RagentConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "invalid_hostname"
                 description_placeholders["exception"] = "The provided hostname could not be resolved to an IP address."
             else:
-                connect_err = await vector_db_to_class(self.client_config.get(CONF_VECTOR_DB_BACKEND_TYPE)).async_validate_connection(self.hass, self.client_config)
+                connect_err = await vector_db_to_class(get_setting_value(CONF_VECTOR_DB_BACKEND_TYPE, self.client_config)).async_validate_connection(self.hass, self.client_config)
 
                 if not connect_err:
-                    connect_err = await embedding_backend_to_class(self.client_config.get(CONF_EMBEDDING_BACKEND_TYPE)).async_validate_connection(self.hass, self.client_config)
+                    connect_err = await embedding_backend_to_class(get_setting_value(CONF_EMBEDDING_BACKEND_TYPE, self.client_config)).async_validate_connection(self.hass, self.client_config)
                 
                 if not connect_err:
-                    connect_err = await llm_backend_to_class(self.client_config.get(CONF_LLM_BACKEND_TYPE)).async_validate_connection(self.hass, self.client_config)
+                    connect_err = await llm_backend_to_class(get_setting_value(CONF_LLM_BACKEND_TYPE, self.client_config)).async_validate_connection(self.hass, self.client_config)
 
                 if connect_err:
                     errors["base"] = "failed_to_connect"
@@ -139,19 +139,19 @@ class RagentConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user", 
             data_schema=ui_schema_backend_connections(
-                vector_db_backend_type=self.client_config[CONF_VECTOR_DB_BACKEND_TYPE],
-                embedding_backend_type=self.client_config[CONF_EMBEDDING_BACKEND_TYPE],
-                llm_backend_type=self.client_config[CONF_LLM_BACKEND_TYPE],
-                vector_db_host=self.client_config.get(CONF_VECTOR_DB_HOST),
-                vector_db_port=self.client_config.get(CONF_VECTOR_DB_PORT),
-                vector_db_ssl=self.client_config.get(CONF_VECTOR_DB_SSL),
-                vector_db_name=self.client_config.get(CONF_VECTOR_DB_NAME),
-                embedding_host=self.client_config.get(CONF_EMBEDDING_HOST),
-                embedding_port=self.client_config.get(CONF_EMBEDDING_PORT),
-                embedding_ssl=self.client_config.get(CONF_EMBEDDING_SSL),
-                llm_host=self.client_config.get(CONF_LLM_HOST),
-                llm_port=self.client_config.get(CONF_LLM_PORT),
-                llm_ssl=self.client_config.get(CONF_LLM_SSL)), 
+                vector_db_backend_type=get_setting_value(CONF_VECTOR_DB_BACKEND_TYPE, self.client_config),
+                embedding_backend_type=get_setting_value(CONF_EMBEDDING_BACKEND_TYPE, self.client_config),
+                llm_backend_type=get_setting_value(CONF_LLM_BACKEND_TYPE, self.client_config),
+                vector_db_host=get_setting_value(CONF_VECTOR_DB_HOST, self.client_config),
+                vector_db_port=get_setting_value(CONF_VECTOR_DB_PORT, self.client_config),
+                vector_db_ssl=get_setting_value(CONF_VECTOR_DB_SSL, self.client_config),
+                vector_db_name=get_setting_value(CONF_VECTOR_DB_NAME, self.client_config),
+                embedding_host=get_setting_value(CONF_EMBEDDING_HOST, self.client_config),
+                embedding_port=get_setting_value(CONF_EMBEDDING_PORT, self.client_config),
+                embedding_ssl=get_setting_value(CONF_EMBEDDING_SSL, self.client_config),
+                llm_host=get_setting_value(CONF_LLM_HOST, self.client_config),
+                llm_port=get_setting_value(CONF_LLM_PORT, self.client_config),
+                llm_ssl=get_setting_value(CONF_LLM_SSL, self.client_config)),
             errors=errors,
             description_placeholders=description_placeholders,
             last_step=True
@@ -159,9 +159,9 @@ class RagentConfigFlow(ConfigFlow, domain=DOMAIN):
         
     async def _step_finish_async(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         language = self.client_config[CONF_SELECTED_LANGUAGE]
-        vector_db_backend = self.client_config[CONF_VECTOR_DB_BACKEND_TYPE]
-        embedding_backend = self.client_config[CONF_EMBEDDING_BACKEND_TYPE]
-        llm_backend = self.client_config[CONF_LLM_BACKEND_TYPE]
+        vector_db_backend = get_setting_value(CONF_VECTOR_DB_BACKEND_TYPE, self.client_config)
+        embedding_backend = get_setting_value(CONF_EMBEDDING_BACKEND_TYPE, self.client_config)
+        llm_backend = get_setting_value(CONF_LLM_BACKEND_TYPE, self.client_config)
 
         title = vector_db_to_class(vector_db_backend).get_name()
         title += " | " + embedding_backend_to_class(embedding_backend).get_name()

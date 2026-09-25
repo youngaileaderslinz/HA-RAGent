@@ -5,6 +5,7 @@ from typing import Any, Dict, List, AsyncGenerator
 
 from homeassistant.core import HomeAssistant
 
+from custom_components.ha_ragent.src.utils import get_setting_value
 from custom_components.ha_ragent.src.const import (
     CONF_LLM_API_KEY,
     CONF_LLM_HOST,
@@ -26,11 +27,11 @@ class ALlmBaseBackend(ABC):
     def __init__(self, hass: HomeAssistant, client_options: dict[str, Any]):
         self._hass = hass
         self._client_options = client_options
-        self._api_key = ALlmBaseBackend.normalize_api_key(client_options.get(CONF_LLM_API_KEY))
+        self._api_key = ALlmBaseBackend.normalize_api_key(get_setting_value(CONF_LLM_API_KEY, client_options))
         self._url_base = {
-            "hostname": client_options.get(CONF_LLM_HOST),
-            "port": client_options.get(CONF_LLM_PORT),
-            "ssl": client_options.get(CONF_LLM_SSL),
+            "hostname": get_setting_value(CONF_LLM_HOST, client_options),
+            "port": get_setting_value(CONF_LLM_PORT, client_options),
+            "ssl": get_setting_value(CONF_LLM_SSL, client_options),
         }
 
     @staticmethod

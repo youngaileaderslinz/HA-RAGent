@@ -17,6 +17,7 @@ from custom_components.ha_ragent.src.models.embedding.memory import Memory
 from custom_components.ha_ragent.src.models.embedding.memory_embedding import MemoryEmbedding
 from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
 
+from custom_components.ha_ragent.src.utils import get_setting_value
 from custom_components.ha_ragent.src.const import (
     CONF_VECTOR_DB_NAME,
     CONF_VECTOR_DB_HOST,
@@ -31,13 +32,13 @@ _logger = BaseLogger(__name__)
 class MongoDbBackend(ABaseDbBackend):
     def __init__(self, hass: HomeAssistant, client_options: dict[str, Any]):
         super().__init__(hass, client_options)
-        self.db_name = self.client_options.get(CONF_VECTOR_DB_NAME)
+        self.db_name = get_setting_value(CONF_VECTOR_DB_NAME, self.client_options)
         self.url = MongoDbBackend._format_url(
-            username=self.client_options.get(CONF_VECTOR_DB_USERNAME),
-            password=self.client_options.get(CONF_VECTOR_DB_PASSWORD),
-            hostname=self.client_options.get(CONF_VECTOR_DB_HOST),
-            port=self.client_options.get(CONF_VECTOR_DB_PORT),
-            ssl=self.client_options.get(CONF_VECTOR_DB_SSL),
+            username=get_setting_value(CONF_VECTOR_DB_USERNAME, self.client_options),
+            password=get_setting_value(CONF_VECTOR_DB_PASSWORD, self.client_options),
+            hostname=get_setting_value(CONF_VECTOR_DB_HOST, self.client_options),
+            port=get_setting_value(CONF_VECTOR_DB_PORT, self.client_options),
+            ssl=get_setting_value(CONF_VECTOR_DB_SSL, self.client_options),
         )
     
     @staticmethod
@@ -127,11 +128,11 @@ class MongoDbBackend(ABaseDbBackend):
         connection = None
         try:
             url = MongoDbBackend._format_url(
-                username=user_input.get(CONF_VECTOR_DB_USERNAME),
-                password=user_input.get(CONF_VECTOR_DB_PASSWORD),
-                hostname=user_input.get(CONF_VECTOR_DB_HOST),
-                port=user_input.get(CONF_VECTOR_DB_PORT),
-                ssl=user_input.get(CONF_VECTOR_DB_SSL),
+                username=get_setting_value(CONF_VECTOR_DB_USERNAME, user_input),
+                password=get_setting_value(CONF_VECTOR_DB_PASSWORD, user_input),
+                hostname=get_setting_value(CONF_VECTOR_DB_HOST, user_input),
+                port=get_setting_value(CONF_VECTOR_DB_PORT, user_input),
+                ssl=get_setting_value(CONF_VECTOR_DB_SSL, user_input),
             )
             connection = AsyncMongoClient(url)
             result = await connection.admin.command("ping")

@@ -277,7 +277,7 @@ class RAGentSemanticSearchTool(llm.Tool):
         if not entry or not hasattr(entry, "subentries") or not hasattr(entry, "embedder_backend"):
             return
         subentry = entry.subentries.get(self.subentry_id)
-        if not subentry or subentry.data.get(CONF_LLM_HASS_API) == "none":
+        if not subentry or get_setting_value(CONF_LLM_HASS_API, subentry.data) == "none":
             return
         limits = self._get_effective_ranges(entry, subentry)
         yield entry, self.subentry_id, subentry, *limits
