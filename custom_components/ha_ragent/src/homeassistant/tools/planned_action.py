@@ -16,7 +16,7 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.ha_ragent.src.const import (
     DOMAIN,
-    RAGENT_PLANNED_ACTION_TOOL_NAME,
+    RAGENT_SCHEDULE_ACTION_TOOL_NAME,
     RAGENT_SCHEDULED_ACTIONS,
     RAGENT_SCHEDULED_ACTION_CANCELLERS,
     RAGENT_SCHEDULED_REQUEST_PREFIX,
@@ -32,7 +32,7 @@ from custom_components.ha_ragent.src.translation import RAGentTranslations
 _logger = BaseLogger(__name__)
 
 class RAGentPlannedActionTool(llm.Tool):
-    name = RAGENT_PLANNED_ACTION_TOOL_NAME
+    name = RAGENT_SCHEDULE_ACTION_TOOL_NAME
     parameters = probatio.Schema(
         {
             probatio.Required("description"): str,
@@ -60,7 +60,7 @@ class RAGentPlannedActionTool(llm.Tool):
         self.language = language
         self.translations = RAGentTranslations(language or "en")
         self.device_id = device_id
-        self.description = self.translations.tool(RAGENT_PLANNED_ACTION_TOOL_NAME)
+        self.description = self.translations.tool(RAGENT_SCHEDULE_ACTION_TOOL_NAME)
         self._scheduling_context = ScheduledContext(subentry_id, agent_id)
 
     def set_scheduling_context(self, **context) -> None:

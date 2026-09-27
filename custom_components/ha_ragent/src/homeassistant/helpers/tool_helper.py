@@ -12,7 +12,8 @@ from homeassistant.helpers.entity_registry import RegistryEntry as EntityEntry
 from custom_components.ha_ragent.src.const import (
     RAGENT_SEMANTIC_SEARCH_TOOL_NAME,
     TOOL_REGEX_PATTERN,
-    RAGENT_PLANNED_ACTION_TOOL_NAME,
+    RAGENT_SCHEDULE_ACTION_TOOL_NAME,
+    RAGENT_TOOL_NAME_ALIASES,
 )
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
@@ -243,7 +244,11 @@ class ToolHelper:
     @staticmethod
     def is_scheduled_action_tool(tool_name: str) -> bool:
         """Return whether a name identifies the scheduled-action tool."""
-        return str(tool_name or "").rsplit("__", 1)[-1] == RAGENT_PLANNED_ACTION_TOOL_NAME
+        base_name = str(tool_name or "").rsplit("__", 1)[-1]
+        return base_name in (
+            RAGENT_SCHEDULE_ACTION_TOOL_NAME,
+            *RAGENT_TOOL_NAME_ALIASES.get(RAGENT_SCHEDULE_ACTION_TOOL_NAME, ()),
+        )
 
     @staticmethod
     def is_semantic_search_tool(tool_name: str) -> bool:
