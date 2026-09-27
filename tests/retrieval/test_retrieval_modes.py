@@ -126,3 +126,28 @@ def test_lexical_continuity_keeps_recent_context_without_embeddings():
     assert context.key in continuity.selected_turn_keys
     assert "fan.previous" in continuity.entities
     embed.assert_not_awaited()
+
+
+def test_zero_optional_tool_limit_keeps_required_tool_without_source_queries(monkeypatch):
+    required = LlmTool("ha_ragent__semantic_search", "Search")
+    monkeypatch.setattr(
+        ConversationRetriever, "_required_tools", staticmethod(lambda llm_api: [required]),
+    )
+    database = SimpleNamespace(
+        async_get_lexical_objects=AsyncMock(side_effect=AssertionError("Lexical source queried")),
+        async_retrieve_scored_objects=AsyncMock(side_effect=AssertionError("Vector source queried")),
+    )
+    retriever = ConversationRetriever(
+        None,
+        SimpleNamespace(options={}, vector_db_backend=database),
+        "entry", "agent", SimpleNamespace(data={}),
+    )
+
+    result = asyncio.run(retriever.async_retrieve_tools(
+        None, "fan", minimum=0, maximum=0,
+        retrieval_method=RETRIEVAL_METHOD_VECTOR, llm_api=object(),
+    ))
+
+    assert result == [required]
+    database.async_get_lexical_objects.assert_not_awaited()
+    database.async_retrieve_scored_objects.assert_not_awaited()

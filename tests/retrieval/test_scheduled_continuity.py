@@ -3,6 +3,8 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+import pytest
+
 from custom_components.ha_ragent.src.const import (
     CONF_MAX_DEVICES_TO_EXTRACT,
     CONF_MAX_MEMORIES_TO_EXTRACT,
@@ -16,15 +18,18 @@ from custom_components.ha_ragent.src.const import (
     RAGENT_SCHEDULED_EXECUTION_CONTEXTS,
     RAGENT_SCHEDULED_REQUEST_PREFIX,
     RETRIEVAL_METHOD_LEXICAL,
+    RETRIEVAL_METHOD_VECTOR,
 )
 from custom_components.ha_ragent.src.homeassistant import ragent as ragent_module
 from custom_components.ha_ragent.src.homeassistant.ragent import RAGent
+from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.retrieval.continuity_context import ContinuityContext
 from custom_components.ha_ragent.src.models.retrieval.scheduled_context import ScheduledContext
 from custom_components.ha_ragent.src.models.retrieval.target_group import TargetGroup
 
 
-def test_scheduled_request_passes_snapshot_continuity_through_retrieval_and_history(monkeypatch):
+@pytest.mark.parametrize("mode", [RETRIEVAL_METHOD_LEXICAL, RETRIEVAL_METHOD_VECTOR])
+def test_scheduled_request_passes_snapshot_continuity_through_retrieval_and_history(monkeypatch, mode):
     original_continuity = ContinuityContext(
         selected_turn_keys={"original-turn"},
         entities={"fan.office": 0.9},
@@ -43,14 +48,18 @@ def test_scheduled_request_passes_snapshot_continuity_through_retrieval_and_hist
     monkeypatch.setattr(ragent_module.conversation, "async_get_chat_log", lambda *args: nullcontext(chat_log))
     monkeypatch.setattr(ragent_module.llm, "async_get_api", AsyncMock(return_value=object()))
     monkeypatch.setattr(ragent_module, "HistoryManager", lambda **kwargs: history_manager)
-    retriever = SimpleNamespace(async_retrieve_devices=AsyncMock(return_value=[]))
+    required_tool = LlmTool("ha_ragent__semantic_search", "Search")
+    retriever = SimpleNamespace(
+        async_retrieve_devices=AsyncMock(return_value=[]),
+        async_retrieve_tools=AsyncMock(return_value=[required_tool]),
+    )
     monkeypatch.setattr(ragent_module, "ConversationRetriever", lambda *args: retriever)
 
     result = object()
     agent = SimpleNamespace(
         hass=hass, entry=SimpleNamespace(), entry_id="entry", subentry_id="subentry",
         subentry=SimpleNamespace(), runtime_options={
-            CONF_RETRIEVAL_METHOD: RETRIEVAL_METHOD_LEXICAL,
+            CONF_RETRIEVAL_METHOD: mode,
             CONF_MIN_MEMORIES_TO_EXTRACT: 0, CONF_MAX_MEMORIES_TO_EXTRACT: 0,
             CONF_MIN_DEVICES_TO_EXTRACT: 1, CONF_MAX_DEVICES_TO_EXTRACT: 1,
             CONF_MIN_TOOLS_TO_EXTRACT: 0, CONF_MAX_TOOLS_TO_EXTRACT: 0,
@@ -80,6 +89,11 @@ def test_scheduled_request_passes_snapshot_continuity_through_retrieval_and_hist
     assert history_manager.build_prompt_history.call_args.kwargs["relevant_turn_keys"] == set()
     assert retriever.async_retrieve_devices.call_args.args[1].startswith("turn it on\nScheduled target context:")
     agent._async_build_continuity_context.assert_not_awaited()
+    retriever.async_retrieve_tools.assert_awaited_once()
+    assert retriever.async_retrieve_tools.call_args.kwargs["maximum"] == 0
+    assert retriever.async_retrieve_devices.call_args.kwargs["retrieval_method"] == mode
+    assert retriever.async_retrieve_tools.call_args.kwargs["retrieval_method"] == mode
+    assert agent._async_prompt_model.await_args.args[2] == [required_tool]
 
 
 def test_scheduled_action_freezes_continuity_when_timer_is_created(monkeypatch):

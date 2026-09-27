@@ -574,7 +574,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                             retrieval_method=retrieval_method,
                             llm_api=llm_api,
                         )
-                    ) if llm_api and max_tools > 0 else None
+                    ) if llm_api else None
                 
                 retrieved_memories = memory_task.result() if memory_task else []
                 retrieved_devices = device_task.result() if device_task else []
