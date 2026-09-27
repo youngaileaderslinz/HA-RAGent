@@ -1,7 +1,7 @@
 import logging
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any
-import voluptuous as vol
+import probatio
 from uuid import uuid4
 
 from homeassistant.core import HomeAssistant
@@ -100,12 +100,12 @@ def ui_schema_pick_backends(
         llm_backend_type=None,
         selected_language=None,
         options: dict[str, Any] | None = None,
-) -> vol.Schema:
+) -> probatio.Schema:
     """Build backend selection schema using supplied values or integration defaults."""
     options = options or {}
-    return vol.Schema(
+    return probatio.Schema(
         {
-            vol.Required(
+            probatio.Required(
                 CONF_VECTOR_DB_BACKEND_TYPE,
                 default=get_value(ventor_db_backend_type, get_setting_value(CONF_VECTOR_DB_BACKEND_TYPE, options))
             ): SelectSelector(SelectSelectorConfig(
@@ -114,7 +114,7 @@ def ui_schema_pick_backends(
                 multiple=False,
                 mode=SelectSelectorMode.DROPDOWN,
             )),
-            vol.Required(
+            probatio.Required(
                 CONF_EMBEDDING_BACKEND_TYPE,
                 default=get_value(embedding_backend_type, get_setting_value(CONF_EMBEDDING_BACKEND_TYPE, options))
             ): SelectSelector(SelectSelectorConfig(
@@ -123,7 +123,7 @@ def ui_schema_pick_backends(
                 multiple=False,
                 mode=SelectSelectorMode.DROPDOWN,
             )),
-            vol.Required(
+            probatio.Required(
                 CONF_LLM_BACKEND_TYPE,
                 default=get_value(llm_backend_type, get_setting_value(CONF_LLM_BACKEND_TYPE, options))
             ): SelectSelector(SelectSelectorConfig(
@@ -132,7 +132,7 @@ def ui_schema_pick_backends(
                 multiple=False,
                 mode=SelectSelectorMode.DROPDOWN,
             )),
-            vol.Required(
+            probatio.Required(
                 CONF_SELECTED_LANGUAGE, 
                 default=get_value(selected_language, options.get(CONF_SELECTED_LANGUAGE, "en"))
             ): SelectSelector(SelectSelectorConfig(
@@ -161,7 +161,7 @@ def ui_schema_backend_connections(
         llm_host=None,
         llm_port=None,
         llm_ssl=None,
-        llm_api_key=None) -> vol.Schema:
+        llm_api_key=None) -> probatio.Schema:
     if vector_db_backend_type not in BACKEND_VECTOR_DB_TYPE_OPTIONS:
         raise AbortFlow(reason="unknown_vector_db_backend_type")
     
@@ -185,15 +185,15 @@ def ui_schema_backend_connections(
     
     if vector_db_backend_type == BACKEND_VECTOR_DB_TYPE_MONGODB:
         schema.update({
-            vol.Optional(CONF_VECTOR_DB_USERNAME, default=vector_db_username if vector_db_username else ""): str,
-            vol.Optional(CONF_VECTOR_DB_PASSWORD, default=vector_db_password if vector_db_password else ""): str,
+            probatio.Optional(CONF_VECTOR_DB_USERNAME, default=vector_db_username if vector_db_username else ""): str,
+            probatio.Optional(CONF_VECTOR_DB_PASSWORD, default=vector_db_password if vector_db_password else ""): str,
         })
         
     if not vector_db_backend_type == BACKEND_VECTOR_DB_TYPE_FAISS:
         schema.update({
-            vol.Required(CONF_VECTOR_DB_HOST, default=vector_db_host if vector_db_host else ""): str,
-            vol.Optional(CONF_VECTOR_DB_PORT, default=vector_db_port if vector_db_port else vector_default_port): int,
-            vol.Required(CONF_VECTOR_DB_SSL, default=vector_db_ssl if vector_db_ssl else False): bool,
+            probatio.Required(CONF_VECTOR_DB_HOST, default=vector_db_host if vector_db_host else ""): str,
+            probatio.Optional(CONF_VECTOR_DB_PORT, default=vector_db_port if vector_db_port else vector_default_port): int,
+            probatio.Required(CONF_VECTOR_DB_SSL, default=vector_db_ssl if vector_db_ssl else False): bool,
         })
 
     embedding_default_port, embedding_default_ssl = _backend_connection_defaults(
@@ -208,50 +208,50 @@ def ui_schema_backend_connections(
     )
     
     schema.update({
-        vol.Required(CONF_VECTOR_DB_NAME, default=vector_db_name if vector_db_name else f"ha_ragent_db_{uuid4()}"): str,
+        probatio.Required(CONF_VECTOR_DB_NAME, default=vector_db_name if vector_db_name else f"ha_ragent_db_{uuid4()}"): str,
     })
 
     schema.update({
-        vol.Required(CONF_EMBEDDING_HOST, default=embedding_host if embedding_host else ""): str,
-        vol.Optional(CONF_EMBEDDING_PORT, default=embedding_port if embedding_port else embedding_default_port): int,
+        probatio.Required(CONF_EMBEDDING_HOST, default=embedding_host if embedding_host else ""): str,
+        probatio.Optional(CONF_EMBEDDING_PORT, default=embedding_port if embedding_port else embedding_default_port): int,
     })
 
     if embedding_backend_type in EMBEDDING_BACKENDS_WITH_API_KEY:
-        schema[vol.Optional(CONF_EMBEDDING_API_KEY, default=embedding_api_key if embedding_api_key else "")] = str
-    schema[vol.Required(CONF_EMBEDDING_SSL, default=embedding_ssl if embedding_ssl is not None else embedding_default_ssl)] = bool
+        schema[probatio.Optional(CONF_EMBEDDING_API_KEY, default=embedding_api_key if embedding_api_key else "")] = str
+    schema[probatio.Required(CONF_EMBEDDING_SSL, default=embedding_ssl if embedding_ssl is not None else embedding_default_ssl)] = bool
 
     schema.update({
-        vol.Required(CONF_LLM_HOST, default=llm_host if llm_host else ""): str,
-        vol.Optional(CONF_LLM_PORT, default=llm_port if llm_port else llm_default_port): int,
+        probatio.Required(CONF_LLM_HOST, default=llm_host if llm_host else ""): str,
+        probatio.Optional(CONF_LLM_PORT, default=llm_port if llm_port else llm_default_port): int,
     })
 
     if llm_backend_type in LLM_BACKENDS_WITH_API_KEY:
-        schema[vol.Optional(CONF_LLM_API_KEY, default=llm_api_key if llm_api_key else "")] = str
-    schema[vol.Required(CONF_LLM_SSL, default=llm_ssl if llm_ssl is not None else llm_default_ssl)] = bool
+        schema[probatio.Optional(CONF_LLM_API_KEY, default=llm_api_key if llm_api_key else "")] = str
+    schema[probatio.Required(CONF_LLM_SSL, default=llm_ssl if llm_ssl is not None else llm_default_ssl)] = bool
 
-    return vol.Schema(schema)
+    return probatio.Schema(schema)
 
 def ui_schema_pick_models(
     embedding_models: list[str],
     llm_models: list[str],
     embedding_model: str | None = None,
     llm_model: str | None = None,
-) -> vol.Schema:
+) -> probatio.Schema:
     if len(embedding_models) == 0:
         embedding_models = [ "" ]
     if len(llm_models) == 0:
         llm_models = [ "" ]
     
-    return vol.Schema(
+    return probatio.Schema(
         {
-            vol.Required(CONF_EMBEDDING_MODEL, default=embedding_model if embedding_model else embedding_models[0]): SelectSelector(SelectSelectorConfig(
+            probatio.Required(CONF_EMBEDDING_MODEL, default=embedding_model if embedding_model else embedding_models[0]): SelectSelector(SelectSelectorConfig(
                 options=embedding_models,
                 custom_value=False,
                 multiple=False,
                 mode=SelectSelectorMode.DROPDOWN,
             )),
 
-            vol.Required(CONF_LLM_MODEL, default=llm_model if llm_model else llm_models[0]): SelectSelector(SelectSelectorConfig(
+            probatio.Required(CONF_LLM_MODEL, default=llm_model if llm_model else llm_models[0]): SelectSelector(SelectSelectorConfig(
                 options=llm_models,
                 custom_value=False,
                 multiple=False,
@@ -290,7 +290,7 @@ def ui_schema_config_options(
         _logger.log_string(logging.WARNING, f"Failed to load LLM APIs: {err}")
 
     result: dict = {
-        vol.Optional(
+        probatio.Optional(
             CONF_LLM_HASS_API,
             description={"suggested_value": selected_llm_api},
             default=selected_llm_api,
@@ -300,11 +300,11 @@ def ui_schema_config_options(
             multiple=False,
             mode=SelectSelectorMode.DROPDOWN,
         )),
-        vol.Optional(
+        probatio.Optional(
             CONF_PROMPT,
             default=get_setting_value(CONF_PROMPT, options) or default_prompt,
         ): TemplateSelector(),
-        vol.Required(
+        probatio.Required(
             CONF_RETRIEVAL_METHOD,
             description={"suggested_value": get_setting_value(CONF_RETRIEVAL_METHOD, options)},
             default=get_setting_value(CONF_RETRIEVAL_METHOD, options),
@@ -318,87 +318,87 @@ def ui_schema_config_options(
             multiple=False,
             mode=SelectSelectorMode.DROPDOWN,
         )),
-        vol.Optional(
+        probatio.Optional(
             CONF_ALLOW_AUTO_EMBEDDING,
             description={"suggested_value": get_setting_value(CONF_ALLOW_AUTO_EMBEDDING, options)},
             default=get_setting_value(CONF_ALLOW_AUTO_EMBEDDING, options),
         ): BooleanSelector(BooleanSelectorConfig()),
-        vol.Optional(
+        probatio.Optional(
             CONF_ALLOW_QUESTIONS,
             description={"suggested_value": get_setting_value(CONF_ALLOW_QUESTIONS, options)},
             default=get_setting_value(CONF_ALLOW_QUESTIONS, options),
         ): BooleanSelector(BooleanSelectorConfig()),
-        vol.Optional(
+        probatio.Optional(
             CONF_TEMPERATURE,
             description={"suggested_value": get_setting_value(CONF_TEMPERATURE, options)},
             default=get_setting_value(CONF_TEMPERATURE, options),
         ): NumberSelector(NumberSelectorConfig(min=0.0, max=2.0, step=0.05, mode=NumberSelectorMode.BOX)),
-        vol.Required(
+        probatio.Required(
             CONF_MAX_TOKENS,
             description={"suggested_value": get_setting_value(CONF_MAX_TOKENS, options)},
             default=get_setting_value(CONF_MAX_TOKENS, options),
         ): NumberSelector(NumberSelectorConfig(min=1, max=8192, step=1)),
-        vol.Required(
+        probatio.Required(
             CONF_CONTEXT_LENGTH,
             description={"suggested_value": get_setting_value(CONF_CONTEXT_LENGTH, options)},
             default=get_setting_value(CONF_CONTEXT_LENGTH, options),
         ): NumberSelector(NumberSelectorConfig(min=512, max=1_048_576, step=512)),
-        vol.Optional(
+        probatio.Optional(
             CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
             description={"suggested_value": get_setting_value(CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS, options)},
             default=get_setting_value(CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=100, mode=NumberSelectorMode.BOX)),
-        vol.Optional(
+        probatio.Optional(
             CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
             description={"suggested_value": get_setting_value(CONF_REMEMBER_CONVERSATION_TIME_MINUTES, options)},
             default=get_setting_value(CONF_REMEMBER_CONVERSATION_TIME_MINUTES, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=1440, mode=NumberSelectorMode.BOX)),
-        vol.Required(
+        probatio.Required(
             CONF_MAX_TOOL_CALL_ITERATIONS,
             description={"suggested_value": get_setting_value(CONF_MAX_TOOL_CALL_ITERATIONS, options)},
             default=get_setting_value(CONF_MAX_TOOL_CALL_ITERATIONS, options),
         ): int,
-        vol.Optional(
+        probatio.Optional(
             CONF_ENABLE_MODEL_THINKING,
             description={"suggested_value": get_setting_value(CONF_ENABLE_MODEL_THINKING, options)},
             default=get_setting_value(CONF_ENABLE_MODEL_THINKING, options),
         ): BooleanSelector(BooleanSelectorConfig()),
-        vol.Required(
+        probatio.Required(
             CONF_MIN_DEVICES_TO_EXTRACT,
             description={"suggested_value": get_setting_value(CONF_MIN_DEVICES_TO_EXTRACT, options)},
             default=get_setting_value(CONF_MIN_DEVICES_TO_EXTRACT, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=50, mode=NumberSelectorMode.BOX)),
-        vol.Required(
+        probatio.Required(
             CONF_MAX_DEVICES_TO_EXTRACT,
             description={"suggested_value": get_setting_value(CONF_MAX_DEVICES_TO_EXTRACT, options)},
             default=get_setting_value(CONF_MAX_DEVICES_TO_EXTRACT, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=50, mode=NumberSelectorMode.BOX)),
-        vol.Required(
+        probatio.Required(
             CONF_MIN_TOOLS_TO_EXTRACT,
             description={"suggested_value": get_setting_value(CONF_MIN_TOOLS_TO_EXTRACT, options)},
             default=get_setting_value(CONF_MIN_TOOLS_TO_EXTRACT, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=50, mode=NumberSelectorMode.BOX)),
-        vol.Required(
+        probatio.Required(
             CONF_MAX_TOOLS_TO_EXTRACT,
             description={"suggested_value": get_setting_value(CONF_MAX_TOOLS_TO_EXTRACT, options)},
             default=get_setting_value(CONF_MAX_TOOLS_TO_EXTRACT, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=50, mode=NumberSelectorMode.BOX)),
-        vol.Optional(
+        probatio.Optional(
             CONF_MIN_MEMORIES_TO_EXTRACT,
             description={"suggested_value": get_setting_value(CONF_MIN_MEMORIES_TO_EXTRACT, options)},
             default=get_setting_value(CONF_MIN_MEMORIES_TO_EXTRACT, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=20, mode=NumberSelectorMode.BOX)),
-        vol.Optional(
+        probatio.Optional(
             CONF_MAX_MEMORIES_TO_EXTRACT,
             description={"suggested_value": get_setting_value(CONF_MAX_MEMORIES_TO_EXTRACT, options)},
             default=get_setting_value(CONF_MAX_MEMORIES_TO_EXTRACT, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=20, mode=NumberSelectorMode.BOX)),
-        vol.Optional(
+        probatio.Optional(
             CONF_MAX_MEMORY_ENTRIES,
             description={"suggested_value": get_setting_value(CONF_MAX_MEMORY_ENTRIES, options)},
             default=get_setting_value(CONF_MAX_MEMORY_ENTRIES, options),
         ): NumberSelector(NumberSelectorConfig(min=1, max=10000, mode=NumberSelectorMode.BOX)),
-        vol.Optional(
+        probatio.Optional(
             CONF_EXCLUDED_TOOLS,
             default=(get_setting_value(CONF_EXCLUDED_TOOLS, options) or []),
         ): SelectSelector(SelectSelectorConfig(
@@ -440,4 +440,4 @@ def ui_schema_config_options(
 
     result = { k: v for k, v in sorted(result.items(), key=lambda item: global_order.index(item[0]) if item[0] in global_order else 9999) }
 
-    return vol.Schema(result)
+    return probatio.Schema(result)

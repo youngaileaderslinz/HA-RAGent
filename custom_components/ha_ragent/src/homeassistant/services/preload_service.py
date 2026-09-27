@@ -2,7 +2,7 @@ import logging
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from functools import partial
 
-import voluptuous as vol
+import probatio
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation, entity_registry, target
 
@@ -39,5 +39,5 @@ def register_preload_models_service(hass: HomeAssistant) -> None:
         DOMAIN,
         "preload_models",
         partial(_handle_preload_models, hass),
-        schema=vol.Schema({}).extend(config_validation.TARGET_SERVICE_FIELDS),
+        schema=probatio.Schema({}).extend(config_validation.TARGET_SERVICE_FIELDS),
     )

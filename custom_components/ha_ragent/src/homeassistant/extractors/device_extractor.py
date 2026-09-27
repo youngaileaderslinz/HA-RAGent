@@ -126,6 +126,8 @@ class DeviceExtractor:
                     or getattr(entity_entry, "device_class", None)
                 ),
             ))
+
+        _logger.log_payload("devices", logging.WARNING, devices=devices[:5])
         
         return devices
     

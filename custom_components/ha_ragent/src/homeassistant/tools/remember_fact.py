@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import voluptuous as vol
+import probatio
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import llm
 from custom_components.ha_ragent.src.const import RAGENT_REMEMBER_TOOL_NAME, TRANSLATION_ERROR_MEMORY_EMPTY, TRANSLATION_ERROR_MEMORY_TOO_LONG, TRANSLATION_ERROR_MEMORY_STORE
@@ -10,7 +10,7 @@ from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 class RAGentRememberTool(llm.Tool):
     name = RAGENT_REMEMBER_TOOL_NAME
-    parameters = vol.Schema({vol.Required("memory"): vol.All(str, vol.Length(min=1, max=1000))})
+    parameters = probatio.Schema({probatio.Required("memory"): probatio.All(str, probatio.Length(min=1, max=1000))})
 
     def __init__(self, hass: HomeAssistant, entry_id: str, subentry_id: str, language: str | None = None) -> None:
         self.hass, self.entry_id, self.subentry_id = hass, entry_id, subentry_id

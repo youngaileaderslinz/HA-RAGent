@@ -6,7 +6,7 @@ from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from collections.abc import Callable
 from uuid import uuid4
 
-import voluptuous as vol
+import probatio
 
 from homeassistant.components import conversation
 from homeassistant.core import Context, HomeAssistant
@@ -33,12 +33,12 @@ _logger = BaseLogger(__name__)
 
 class RAGentPlannedActionTool(llm.Tool):
     name = RAGENT_PLANNED_ACTION_TOOL_NAME
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Required("description"): str,
-            vol.Required("minutes"): vol.All(
-                vol.Coerce(int),
-                vol.Range(min=1, max=1440),
+            probatio.Required("description"): str,
+            probatio.Required("minutes"): probatio.All(
+                probatio.Coerce(int),
+                probatio.Range(min=1, max=1440),
             ),
         }
     )

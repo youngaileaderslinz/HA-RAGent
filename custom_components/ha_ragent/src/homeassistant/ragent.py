@@ -596,14 +596,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                         continue
 
                     device.state = st.state
-                    attributes = Device.clean_attributes(st.attributes)
-                    if "light" in (device.domain or []):
-                        brightness = attributes.pop("brightness", None)
-                        if isinstance(brightness, (int, float)) and not isinstance(brightness, bool):
-                            attributes["brightness_percent"] = round(
-                                max(0.0, min(255.0, float(brightness))) / 255.0 * 100,
-                            )
-                    device.attributes = attributes
+                    device.attributes = Device.clean_attributes(device.domain, st.attributes)
                     device_list.append(device)
 
                 candidate_context = self._candidate_context_from_devices(device_list)

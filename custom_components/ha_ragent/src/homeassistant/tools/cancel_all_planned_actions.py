@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import voluptuous as vol
+import probatio
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import llm
@@ -16,7 +16,7 @@ from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 class RAGentCancelAllPlannedActionsTool(llm.Tool):
     name = RAGENT_CANCEL_ALL_PLANNED_ACTIONS_TOOL_NAME
-    parameters = vol.Schema({})
+    parameters = probatio.Schema({})
 
     def __init__(self, hass: HomeAssistant, subentry_id: str, language: str | None = None) -> None:
         self.hass = hass

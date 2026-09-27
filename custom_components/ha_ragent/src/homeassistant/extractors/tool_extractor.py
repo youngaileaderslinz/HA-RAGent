@@ -200,10 +200,6 @@ class ToolExtractor:
         metadata.expected_states = tuple(sorted(str(value).casefold() for value in (expected_states or ())))
         return metadata
 
-    def _extract_tool_metadata(self, tool: Any, parameters: Any) -> ToolMetadata:
-        """Compatibility wrapper for existing callers."""
-        return self.extract_tool_metadata(tool, parameters)
-
     def _register_fake_timer_device(self) -> None:
         @callback
         def handle_timer_event(event_type: TimerEventType, timer: TimerInfo) -> None:
@@ -303,7 +299,7 @@ class ToolExtractor:
                     parameters = {}
 
                 try:
-                    metadata = self._extract_tool_metadata(tool, parameters)
+                    metadata = self.extract_tool_metadata(tool, parameters)
                 except Exception as metadata_err:
                     # One malformed tool must not erase every other tool from
                     # the startup index. Preserve the live schema for ranking
@@ -330,6 +326,7 @@ class ToolExtractor:
         finally:
             self._remove_fake_timer_device()
 
+        _logger.log_payload("tools", logging.WARNING, tools=tool_list)
         return tool_list
 
     async def async_get_embeddable_tool_names(self, subentry: ConfigSubentry) -> list[str]:
