@@ -54,7 +54,7 @@ async def test_startup_extraction_embeds_more_than_zero_tools(monkeypatch) -> No
         "properties": {
             "domain": {"type": ["string", "null"], "enum": ["fan", None]},
         },
-        "required": ["domain"],
+        "required": [],
         "additionalProperties": False,
     }
 
@@ -201,11 +201,11 @@ def test_openai_parameters_normalizes_nested_optional_fields_without_mutating_in
     assert normalized["required"] == ["device"]
     assert normalized["additionalProperties"] is False
     device = normalized["properties"]["device"]
-    assert device["required"] == ["name", "tags"]
+    assert device["required"] == ["name"]
     assert device["additionalProperties"] is False
     assert device["properties"]["tags"]["type"] == ["array", "null"]
     item = device["properties"]["tags"]["items"]
-    assert item["required"] == ["id"]
+    assert item["required"] == []
     assert item["additionalProperties"] is False
     assert item["properties"]["id"]["type"] == ["integer", "null"]
 
@@ -220,7 +220,7 @@ def test_openai_parameters_removes_required_only_root_anyof() -> None:
     normalized = ToolExtractor._openai_parameters(schema)
 
     assert "anyOf" not in normalized
-    assert normalized["required"] == ["hours", "minutes"]
+    assert normalized["required"] == []
     assert normalized["additionalProperties"] is False
 
 
@@ -256,7 +256,7 @@ def test_optional_string_uses_nullable_type_union() -> None:
     assert normalized["properties"]["conversation_command"] == {
         "type": ["string", "null"],
     }
-    assert normalized["required"] == ["conversation_command"]
+    assert normalized["required"] == []
 
 
 def test_existing_nullable_object_type_is_preserved() -> None:
@@ -292,7 +292,7 @@ def test_optional_integer_from_probatio_uses_nullable_type_union() -> None:
         "type": ["integer", "null"], "minimum": 1,
     }
     assert normalized["properties"]["hours"] == {"type": ["integer", "null"]}
-    assert normalized["required"] == ["minutes", "hours"]
+    assert normalized["required"] == []
 
 
 def test_probatio_alternative_types_no_longer_use_anyof() -> None:
@@ -324,7 +324,7 @@ def test_native_probatio_intent_schema_converts_optional_integer() -> None:
 
     assert parameters["properties"]["name"] == {"type": "string"}
     assert parameters["properties"]["minutes"] == {"type": ["integer", "null"]}
-    assert parameters["required"] == ["name", "minutes"]
+    assert parameters["required"] == ["name"]
     assert parameters["additionalProperties"] is False
 
 

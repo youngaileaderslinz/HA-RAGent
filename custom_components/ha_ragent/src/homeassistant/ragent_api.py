@@ -13,6 +13,7 @@ from custom_components.ha_ragent.src.const import (
     RAGENT_TOOL_NAMES_BY_PREFIXED_NAME,
     RAGENT_TOOL_NAME_ALIASES,
 )
+from custom_components.ha_ragent.src.models.retrieval.continuity_context import ContinuityContext
 from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 from custom_components.ha_ragent.src.homeassistant.tools.planned_action import RAGentPlannedActionTool
@@ -172,13 +173,14 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
                 )
 
 
-    def set_scheduling_context(self, request: str, messages: list[dict], candidates: list[dict]) -> None:
+    def set_scheduling_context(self, request: str, messages: list[dict], candidates: list[dict], continuity: ContinuityContext) -> None:
         """Supply runtime context directly; the model only specifies the action."""
         for tool in self.tools:
             if isinstance(tool, RAGentPlannedActionTool):
                 tool.set_scheduling_context(
                     request=request, messages=messages, candidates=candidates,
                     area=self._scheduling_area, floor=self._scheduling_floor,
+                    continuity=continuity,
                 )
 
     def refresh_search_candidates(self, candidates: list[dict[str, object]]) -> None:

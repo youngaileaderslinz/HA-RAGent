@@ -33,7 +33,7 @@
     "llm_api_error": "Fehler beim Vorbereiten der LLM-API.",
     "template_rendering_failed": "Das Rendern der Vorlage ist fehlgeschlagen.",
     "unexpected": "Entschuldigung, ein unerwarteter Fehler ist aufgetreten.",
-    "description_empty": "description darf nicht leer sein",
+    "action_request_empty": "action_request darf nicht leer sein",
     "minutes_not_number": "minutes muss eine Zahl sein",
     "minutes_out_of_range": "minutes muss zwischen 1 und 1440 liegen",
     "memory_empty": "memory darf nicht leer sein",
@@ -53,7 +53,7 @@
     "HassRememberFact": "Nur verwenden, wenn ausdrücklich darum gebeten wird, eine stabile, nicht sensible Tatsache zu speichern. Keine Anweisungen, Befehle, Geheimnisse oder temporären Zustände speichern.",
     "HassForgetFact": "Eine gespeicherte Tatsache nur auf ausdrückliche Anfrage und mit der exakten memory_id löschen.",
     "HassSemanticSearch": "Finde fehlende Geräte oder Tools. Gib search_queries an; optionale capabilities müssen positionsgleich sein. Ergebnisse sind Kandidaten, keine Aktionen.",
-    "HassScheduleAction": "Plane eine ausdrücklich gewünschte Aktion 1-1440 Minuten im Voraus. Löse Referenzen jetzt auf. Die Beschreibung muss Aktion, Ziel/Standort, Einstellungen, Ausschlüsse und erforderliche Parameter vollständig enthalten. Frage nur nach, wenn wesentliche Angaben fehlen. Die Verzögerung muss in Minuten angegeben werden. Nur planen, nicht jetzt ausführen.",
+    "HassScheduleAction": "Plane eine ausdrücklich gewünschte Aktion 1-1440 Minuten im Voraus. Löse Referenzen jetzt auf. action_request muss Aktion, Ziel/Standort, Einstellungen, Ausschlüsse und erforderliche Parameter vollständig enthalten. Frage nur nach, wenn wesentliche Angaben fehlen. Die Verzögerung muss in Minuten angegeben werden. Nur planen, nicht jetzt ausführen.",
     "HassCancelScheduledActions": "Brich alle ausstehenden einmaligen Aktionen nur dann ab, wenn ausdrücklich verlangt wird, alle abzubrechen.",
     "HassListScheduledActions": "Liste ausstehende einmalige geplante Aktionen auf, ohne sie zu verändern."
   }

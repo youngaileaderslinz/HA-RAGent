@@ -3,9 +3,11 @@ from dataclasses import dataclass, field
 import json
 
 from custom_components.ha_ragent.src.const import (
-    DOMAIN, RAGENT_SCHEDULED_CONTEXT_PREFIX, 
-    RAGENT_SCHEDULED_EXECUTION_CONTEXTS
+    DOMAIN, RAGENT_SCHEDULED_CONTEXT_PREFIX,
+    RAGENT_SCHEDULED_EXECUTION_CONTEXTS,
 )
+from custom_components.ha_ragent.src.models.retrieval.continuity_context import ContinuityContext
+
 
 @dataclass
 class ScheduledContext:
@@ -16,6 +18,7 @@ class ScheduledContext:
     floor: str = ""
     candidates: list[dict] = field(default_factory=list)
     messages: list[dict] = field(default_factory=list)
+    continuity: ContinuityContext = field(default_factory=ContinuityContext)
 
     @staticmethod
     def restore(hass, subentry_id: str, agent_id: str | None, request: str):
@@ -30,7 +33,7 @@ class ScheduledContext:
         return description, context
 
     @classmethod
-    def capture(cls, *, subentry_id, agent_id, request="", area="", floor="", candidates=(), messages=()):
+    def capture(cls, *, subentry_id, agent_id, request="", area="", floor="", candidates=(), messages=(), continuity=None):
         """Capture a snapshot of the scheduling context for later retrieval."""
         identity_keys = ("name", "friendly_name", "aliases", "area", "floor", "domain", "device_class")
         return cls(
@@ -44,7 +47,14 @@ class ScheduledContext:
                 for candidate in candidates
             ]),
             messages=deepcopy([message for message in messages if message.get("role") != "system"]),
+            continuity=deepcopy(continuity) if continuity is not None else ContinuityContext(),
         )
+
+    def retrieval_continuity(self) -> ContinuityContext:
+        """Restore retrieval evidence without conversation-local history keys."""
+        continuity = deepcopy(self.continuity)
+        continuity.selected_turn_keys.clear()
+        return continuity
 
     def retrieval_query(self, description: str) -> str:
         """Add target hints without turning past actions into new search intent."""

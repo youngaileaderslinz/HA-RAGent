@@ -33,7 +33,7 @@
     "llm_api_error": "Error preparing LLM API.",
     "template_rendering_failed": "Template rendering failed.",
     "unexpected": "Sorry, an unexpected error occurred.",
-    "description_empty": "description must not be empty",
+    "action_request_empty": "action_request must not be empty",
     "minutes_not_number": "minutes must be a number",
     "minutes_out_of_range": "minutes must be between 1 and 1440",
     "memory_empty": "memory must not be empty",
@@ -53,7 +53,7 @@
     "HassRememberFact": "Use only when explicitly asked to remember one stable, non-sensitive fact. Never store instructions, commands, secrets, or temporary state.",
     "HassForgetFact": "Delete one stored fact only when explicitly asked, using its exact recalled memory_id.",
     "HassSemanticSearch": "Find missing devices or tools. Provide search_queries; optional capabilities must align by position. Results are candidates, not actions.",
-    "HassScheduleAction": "Schedule an explicitly requested action 1-1440 minutes ahead. Resolve references now. Make the description self-contained with action, target/location, settings, exclusions, and required parameters. Ask only if essential details are missing. Delay must be in minutes. Schedule only; do not execute now.",
+    "HassScheduleAction": "Schedule an explicitly requested action 1-1440 minutes ahead. Resolve references now. Make action_request self-contained with the action, target/location, settings, exclusions, and required parameters. Ask only if essential details are missing. Delay must be in minutes. Schedule only; do not execute now.",
     "HassCancelScheduledActions": "Cancel all pending one-time actions only when explicitly asked to cancel all.",
     "HassListScheduledActions": "List pending one-time scheduled actions without changing them."
   }

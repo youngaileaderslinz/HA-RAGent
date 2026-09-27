@@ -22,7 +22,7 @@ from custom_components.ha_ragent.src.const import (
     RAGENT_SCHEDULED_REQUEST_PREFIX,
     RAGENT_SCHEDULED_CONTEXT_PREFIX,
     RAGENT_SCHEDULED_EXECUTION_CONTEXTS,
-    TRANSLATION_ERROR_DESCRIPTION_EMPTY,
+    TRANSLATION_ERROR_ACTION_REQUEST_EMPTY,
     TRANSLATION_ERROR_MINUTES_NOT_NUMBER,
     TRANSLATION_ERROR_MINUTES_RANGE,
 )
@@ -35,7 +35,7 @@ class RAGentPlannedActionTool(llm.Tool):
     name = RAGENT_SCHEDULE_ACTION_TOOL_NAME
     parameters = probatio.Schema(
         {
-            probatio.Required("description"): str,
+            probatio.Required("action_request"): str,
             probatio.Required("minutes"): probatio.All(
                 probatio.Coerce(int),
                 probatio.Range(min=1, max=1440),
@@ -95,9 +95,9 @@ class RAGentPlannedActionTool(llm.Tool):
 
     async def async_call(self, tool_input: llm.ToolInput, *args, **kwargs) -> dict[str, object]:
         """Schedule the requested action without blocking the conversation."""
-        description = str(tool_input.tool_args.get("description", "")).strip()
-        if not description:
-            return {"error": self.translations.error(TRANSLATION_ERROR_DESCRIPTION_EMPTY)}
+        action_request = str(tool_input.tool_args.get("action_request", "")).strip()
+        if not action_request:
+            return {"error": self.translations.error(TRANSLATION_ERROR_ACTION_REQUEST_EMPTY)}
 
         try:
             minutes = int(tool_input.tool_args.get("minutes", 0))
@@ -116,6 +116,7 @@ class RAGentPlannedActionTool(llm.Tool):
             floor=self._scheduling_context.floor,
             candidates=self._scheduling_context.candidates,
             messages=self._scheduling_context.messages,
+            continuity=self._scheduling_context.continuity,
         )
         execute_at = dt_util.utcnow() + timedelta(minutes=minutes)
         local_execute_at = dt_util.as_local(execute_at)
@@ -131,18 +132,18 @@ class RAGentPlannedActionTool(llm.Tool):
             if remove_canceller is not None:
                 cancellers.discard(remove_canceller)
                 actions.pop(remove_canceller, None)
-            await self._async_execute(now, description, snapshot)
+            await self._async_execute(now, action_request, snapshot)
 
         remove_canceller = async_call_later(self.hass, minutes * 60, execute_and_remove)
         cancellers.add(remove_canceller)
         actions[remove_canceller] = {
-            "description": description,
+            "action_request": action_request,
             "minutes": minutes,
             "execute_at": human_execute_at,
         }
         return {
             "success": True,
-            "description": description,
+            "action_request": action_request,
             "minutes": minutes,
             "execute_at": human_execute_at,
         }

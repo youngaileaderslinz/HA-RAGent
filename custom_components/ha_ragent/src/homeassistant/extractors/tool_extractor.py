@@ -180,8 +180,8 @@ class ToolExtractor:
                 if not _universal:
                     schema_domains.update(raw_domains)
         metadata.supported_domains = tuple(sorted({
-            *(str(value).casefold() for value in (domains or ())),
-            *schema_domains,
+            *(str(value).casefold() for value in (domains or ()) if value is not None and str(value).casefold() != "none"),
+            *(str(value).casefold() for value in schema_domains if value is not None and str(value).casefold() != "none"),
         }))
 
         expected_states = cls._metadata_value(source, "expected_states", "expected_state", default=())
@@ -267,7 +267,8 @@ class ToolExtractor:
         for keyword in ("not", "if", "then", "else"):
             if keyword in node:
                 raise ValueError(f"Unsupported {keyword} in tool schema")
-        optional = optional or node.pop("nullable", False) is True
+        nullable = node.pop("nullable", False) is True
+        optional = optional or nullable
         node.pop("default", None)
         node.pop("format", None)
         for keyword in ("dependentRequired", "dependentSchemas", "propertyNames", "patternProperties"):
