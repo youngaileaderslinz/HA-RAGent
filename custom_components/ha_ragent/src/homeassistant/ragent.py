@@ -408,10 +408,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                 )
                             )
                         except Exception as tool_err:
-                            _logger.log_string(
-                                logging.ERROR,
-                                f"Error executing tool {tool_name}: {MessageHelper.exception_error_text(tool_err)}",
-                            )
+                            _logger.log_string(logging.ERROR, f"Error executing tool {tool_name}: {MessageHelper.exception_error_text(tool_err)}")
                             tool_result_msg = MessageHelper.create_tool_failure_message(
                                 agent_id=user_input.agent_id,
                                 tool_call_id=tool_call.id,

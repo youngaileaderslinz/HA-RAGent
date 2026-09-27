@@ -35,6 +35,19 @@ class ToolHelper:
 
 
     @staticmethod
+    def _remove_null_values(value: Any) -> Any:
+        """Remove null values from tool arguments before Home Assistant validation."""
+        if isinstance(value, dict):
+            return {
+                key: ToolHelper._remove_null_values(item)
+                for key, item in value.items()
+                if item is not None
+            }
+        if isinstance(value, list):
+            return [ToolHelper._remove_null_values(item) for item in value if item is not None]
+        return value
+
+    @staticmethod
     def _copy_tool_input(tool_call: ToolInput, tool_name: str, arguments: dict[str, Any]) -> ToolInput:
         """Copy a tool input across Home Assistant and lightweight test models."""
         if hasattr(tool_call, "id"):
@@ -395,7 +408,7 @@ class ToolHelper:
         """Build execution arguments using the internally indexed tool name."""
         tool = self._tools_by_name.get(tool_call.tool_name)
         metadata = self._tool_metadata_index.get(tool_call.tool_name)
-        args = dict(tool_call.tool_args)
+        args = self._remove_null_values(dict(tool_call.tool_args))
         requested = str(args.get("name", args.get("entity_id", "")) or "").casefold()
         match = next((candidate for candidate in candidates if requested in {
             str(candidate.get("name", "")).casefold(),
