@@ -201,120 +201,127 @@ class ToolExtractor:
         return metadata
 
     @staticmethod
-    def _openai_parameters(schema: dict[str, Any]) -> dict[str, Any]:
+    def _schema_type_name(value: Any) -> str:
+        if isinstance(value, bool):
+            return "boolean"
+        if isinstance(value, int):
+            return "integer"
+        if isinstance(value, float):
+            return "number"
+        if isinstance(value, str):
+            return "string"
+        raise ValueError("Unsupported enum value in tool schema")
+
+    @classmethod
+    def _schema_branch_type(cls, branch: dict[str, Any]) -> str | None:
+        if isinstance(branch.get("type"), str):
+            return branch["type"]
+        values = branch.get("enum", [branch["const"]] if "const" in branch else [])
+        return (
+            "null" if values[0] is None else cls._schema_type_name(values[0])
+        ) if values else None
+
+    @classmethod
+    def _normalize_openai_schema(
+        cls, node: dict[str, Any], *, optional: bool = False
+    ) -> dict[str, Any]:
+        node = dict(node)
+        for keyword in ("anyOf", "oneOf"):
+            if keyword not in node:
+                continue
+            branches = node.pop(keyword)
+            if not isinstance(branches, list) or not all(isinstance(part, dict) for part in branches):
+                raise ValueError(f"Unsupported {keyword} in tool schema")
+            # Intent slot groups use alternatives of required-only objects.
+            if "properties" in node and all(set(part) == {"required"} for part in branches):
+                continue
+            null_branches = [part for part in branches if part.get("type") == "null"]
+            other_branches = [part for part in branches if part.get("type") != "null"]
+            if len(null_branches) == 1 and len(other_branches) == 1:
+                node = {**other_branches[0], **node}
+                optional = True
+            elif other_branches and not null_branches and all(
+                cls._schema_branch_type(part) is not None for part in other_branches
+            ):
+                types = list(dict.fromkeys(cls._schema_branch_type(part) for part in other_branches))
+                node["type"] = types[0] if len(types) == 1 else types
+                if all("enum" in part or "const" in part for part in other_branches):
+                    values = []
+                    for part in other_branches:
+                        values.extend(part.get("enum", [part["const"]] if "const" in part else []))
+                    node["enum"] = list(dict.fromkeys(values))
+                array_branches = [part for part in other_branches if cls._schema_branch_type(part) == "array"]
+                if len(array_branches) == 1 and "items" in array_branches[0]:
+                    node["items"] = array_branches[0]["items"]
+            else:
+                raise ValueError(f"Unsupported {keyword} in tool schema")
+        if "allOf" in node:
+            branches = node.pop("allOf")
+            if not isinstance(branches, list) or not all(isinstance(part, dict) for part in branches):
+                raise ValueError("Unsupported allOf in tool schema")
+            for part in branches:
+                for key, value in part.items():
+                    if key in node and node[key] != value:
+                        raise ValueError(f"Conflicting allOf {key} in tool schema")
+                    node[key] = value
+        for keyword in ("not", "if", "then", "else"):
+            if keyword in node:
+                raise ValueError(f"Unsupported {keyword} in tool schema")
+        optional = optional or node.pop("nullable", False) is True
+        node.pop("default", None)
+        node.pop("format", None)
+        for keyword in ("dependentRequired", "dependentSchemas", "propertyNames", "patternProperties"):
+            if keyword in node:
+                raise ValueError(f"Unsupported {keyword} in tool schema")
+        if "const" in node:
+            node["enum"] = [node.pop("const")]
+        if "enum" in node and "type" not in node and node["enum"]:
+            types = list(dict.fromkeys(
+                "null" if value is None else cls._schema_type_name(value)
+                for value in node["enum"]
+            ))
+            node["type"] = types[0] if len(types) == 1 else types
+        if "properties" in node or node.get("type") == "object":
+            properties = node.get("properties", {})
+            if not isinstance(properties, dict):
+                raise ValueError("Object properties must be a mapping")
+            required = set(node.get("required", []))
+            node["type"] = "object"
+            node["properties"] = {
+                name: cls._normalize_openai_schema(value, optional=name not in required)
+                for name, value in properties.items()
+            }
+            node["required"] = list(properties)
+            node["additionalProperties"] = False
+        if "items" in node:
+            node["items"] = cls._normalize_openai_schema(node["items"])
+        if "$defs" in node:
+            node["$defs"] = {
+                name: cls._normalize_openai_schema(value) for name, value in node["$defs"].items()
+            }
+        if optional:
+            types = node.get("type")
+            if isinstance(types, str):
+                node["type"] = [types, "null"] if types != "null" else ["null"]
+            elif isinstance(types, list):
+                node["type"] = list(dict.fromkeys([*types, "null"]))
+            else:
+                raise ValueError("Optional property has no JSON Schema type")
+            if "enum" in node and None not in node["enum"]:
+                node["enum"] = [*node["enum"], None]
+        return node
+
+    @classmethod
+    def _openai_parameters(cls, schema: dict[str, Any]) -> dict[str, Any]:
         """Translate a Probatio OpenAPI schema into OpenAI tool parameters."""
         if not isinstance(schema, dict):
             raise ValueError("Tool parameters must be an object schema")
-
-        def type_name(value: Any) -> str:
-            if isinstance(value, bool):
-                return "boolean"
-            if isinstance(value, int):
-                return "integer"
-            if isinstance(value, float):
-                return "number"
-            if isinstance(value, str):
-                return "string"
-            raise ValueError("Unsupported enum value in tool schema")
-
-        def branch_type(branch: dict[str, Any]) -> str | None:
-            if isinstance(branch.get("type"), str):
-                return branch["type"]
-            values = branch.get("enum", [branch["const"]] if "const" in branch else [])
-            return ("null" if values[0] is None else type_name(values[0])) if values else None
-
-        def normalize(node: dict[str, Any], *, optional: bool = False) -> dict[str, Any]:
-            node = dict(node)
-            for keyword in ("anyOf", "oneOf"):
-                if keyword not in node:
-                    continue
-                branches = node.pop(keyword)
-                if not isinstance(branches, list) or not all(isinstance(part, dict) for part in branches):
-                    raise ValueError(f"Unsupported {keyword} in tool schema")
-                # Intent slot groups use alternatives of required-only objects.
-                if "properties" in node and all(set(part) == {"required"} for part in branches):
-                    continue
-                null_branches = [part for part in branches if part.get("type") == "null"]
-                other_branches = [part for part in branches if part.get("type") != "null"]
-                if len(null_branches) == 1 and len(other_branches) == 1:
-                    node = {**other_branches[0], **node}
-                    optional = True
-                elif other_branches and not null_branches and all(
-                    branch_type(part) is not None for part in other_branches
-                ):
-                    types = list(dict.fromkeys(branch_type(part) for part in other_branches))
-                    node["type"] = types[0] if len(types) == 1 else types
-                    if all("enum" in part or "const" in part for part in other_branches):
-                        values = []
-                        for part in other_branches:
-                            values.extend(part.get("enum", [part["const"]] if "const" in part else []))
-                        node["enum"] = list(dict.fromkeys(values))
-                    array_branches = [part for part in other_branches if branch_type(part) == "array"]
-                    if len(array_branches) == 1 and "items" in array_branches[0]:
-                        node["items"] = array_branches[0]["items"]
-                else:
-                    raise ValueError(f"Unsupported {keyword} in tool schema")
-            if "allOf" in node:
-                branches = node.pop("allOf")
-                if not isinstance(branches, list) or not all(isinstance(part, dict) for part in branches):
-                    raise ValueError("Unsupported allOf in tool schema")
-                for part in branches:
-                    for key, value in part.items():
-                        if key in node and node[key] != value:
-                            raise ValueError(f"Conflicting allOf {key} in tool schema")
-                        node[key] = value
-            for keyword in ("not", "if", "then", "else"):
-                if keyword in node:
-                    raise ValueError(f"Unsupported {keyword} in tool schema")
-            optional = optional or node.pop("nullable", False) is True
-            node.pop("default", None)
-            node.pop("format", None)
-            for keyword in ("dependentRequired", "dependentSchemas", "propertyNames", "patternProperties"):
-                if keyword in node:
-                    raise ValueError(f"Unsupported {keyword} in tool schema")
-            if "const" in node:
-                node["enum"] = [node.pop("const")]
-            if "enum" in node and "type" not in node and node["enum"]:
-                types = list(dict.fromkeys(
-                    "null" if value is None else type_name(value)
-                    for value in node["enum"]
-                ))
-                node["type"] = types[0] if len(types) == 1 else types
-            if "properties" in node or node.get("type") == "object":
-                properties = node.get("properties", {})
-                if not isinstance(properties, dict):
-                    raise ValueError("Object properties must be a mapping")
-                required = set(node.get("required", []))
-                node["type"] = "object"
-                node["properties"] = {
-                    name: normalize(value, optional=name not in required)
-                    for name, value in properties.items()
-                }
-                node["required"] = list(properties)
-                node["additionalProperties"] = False
-            if "items" in node:
-                node["items"] = normalize(node["items"])
-            if "$defs" in node:
-                node["$defs"] = {
-                    name: normalize(value) for name, value in node["$defs"].items()
-                }
-            if optional:
-                types = node.get("type")
-                if isinstance(types, str):
-                    node["type"] = [types, "null"] if types != "null" else ["null"]
-                elif isinstance(types, list):
-                    node["type"] = list(dict.fromkeys([*types, "null"]))
-                else:
-                    raise ValueError("Optional property has no JSON Schema type")
-                if "enum" in node and None not in node["enum"]:
-                    node["enum"] = [*node["enum"], None]
-            return node
 
         if schema.get("type") == "function" and isinstance(schema.get("function"), dict):
             schema = schema["function"].get("parameters", {})
         if schema and schema.get("type", "object") != "object":
             raise ValueError("Tool parameters must be an object schema")
-        return normalize(schema or {"type": "object", "properties": {}})
+        return cls._normalize_openai_schema(schema or {"type": "object", "properties": {}})
 
     @classmethod
     def _tool_parameters(cls, tool: Any, custom_serializer: Any) -> dict[str, Any]:
@@ -327,17 +334,15 @@ class ToolExtractor:
         ):
             parameters = source
         else:
-            parameters = to_openapi(
-                source or probatio.Schema({}),
-                custom_serializer=custom_serializer,
-            )
+            parameters = to_openapi(source or probatio.Schema({}), custom_serializer=custom_serializer)
         return cls._openai_parameters(parameters)
 
-    def _register_fake_timer_device(self) -> None:
-        @callback
-        def handle_timer_event(event_type: TimerEventType, timer: TimerInfo) -> None:
-            pass
+    @staticmethod
+    @callback
+    def _handle_timer_event(event_type: TimerEventType, timer: TimerInfo) -> None:
+        pass
 
+    def _register_fake_timer_device(self) -> None:
         try:
             shared = self._timer_handlers.get(self._timer_handler_key)
             if shared is not None:
@@ -345,7 +350,8 @@ class ToolExtractor:
                 self._timer_handlers[self._timer_handler_key] = (remove, count + 1)
                 self._fake_timer_remove = True
                 return
-            remove = async_register_timer_handler(self._hass, RAGENT_TIMER_DEVICE_ID, handle_timer_event)
+            
+            remove = async_register_timer_handler(self._hass, RAGENT_TIMER_DEVICE_ID, self._handle_timer_event)
             self._timer_handlers[self._timer_handler_key] = (remove, 1)
             self._fake_timer_remove = True
             _logger.log_string(logging.DEBUG, "Registered timer support for HA-RAGent")
