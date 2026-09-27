@@ -18,6 +18,9 @@ def constrained_values(schema: object) -> set[str] | None:
     """
     if not isinstance(schema, dict) or "$ref" in schema:
         return None
+    # A nullable branch adds no string target values to a constrained enum.
+    if schema.get("type") == "null":
+        return set()
     direct: set[str] | None = None
     if "const" in schema and isinstance(schema["const"], (str, int, float)):
         direct = {str(schema["const"]).casefold()}

@@ -52,6 +52,7 @@ class ALlmBaseBackend(ABC):
 
     @staticmethod
     def convert_tools_to_model_format(tools: List[LlmTool]) -> List[Dict[str, Any]]:
+        """Build complete OpenAI function tool definitions from the tool models."""
         return [tool.to_tool_dict() for tool in tools]
 
     @staticmethod

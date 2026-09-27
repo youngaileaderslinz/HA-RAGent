@@ -3,7 +3,7 @@ import asyncio
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from functools import partial
 
-import voluptuous as vol
+import probatio
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation, entity_registry, target
 
@@ -53,5 +53,5 @@ def register_embed_subentry_service(hass: HomeAssistant) -> None:
         DOMAIN,
         "embed_subentry",
         partial(_handle_embed_subentry, hass),
-        schema=vol.Schema({}).extend(config_validation.TARGET_SERVICE_FIELDS),
+        schema=probatio.Schema({}).extend(config_validation.TARGET_SERVICE_FIELDS),
     )

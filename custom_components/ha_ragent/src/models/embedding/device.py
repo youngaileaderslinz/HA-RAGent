@@ -84,7 +84,7 @@ class Device(SerializableModel, EmbeddableModel):
         return " ".join(parts)
 
     @staticmethod
-    def clean_attributes(attributes: dict[str, Any]) -> dict[str, Any]:
+    def clean_attributes(domain: List[str] | None, attributes: dict[str, Any]) -> dict[str, Any]:
         """Cleans the device attributes by removing excluded keys and those with large JSON representations."""
         cleaned_attributes = attributes.copy()
         for key, value in attributes.items():
@@ -98,5 +98,10 @@ class Device(SerializableModel, EmbeddableModel):
                     cleaned_attributes.pop(key, None)
             except (TypeError, OverflowError):
                 cleaned_attributes.pop(key, None)
+
+        if "light" in (domain or []):
+            brightness = cleaned_attributes.pop("brightness", None)
+            if isinstance(brightness, (int, float)) and not isinstance(brightness, bool):
+                cleaned_attributes["brightness_percent"] = round(max(0.0, min(255.0, float(brightness))) / 255.0 * 100)
 
         return cleaned_attributes

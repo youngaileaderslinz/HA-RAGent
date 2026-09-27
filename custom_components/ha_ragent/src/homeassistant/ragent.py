@@ -254,7 +254,8 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         chat_log: conversation.ChatLog,
         history_manager: HistoryManager,
         candidate_context: list[dict[str, object]],
-        request_query: str
+        request_query: str,
+        continuity: ContinuityContext,
     ) -> ConversationResult:
         """Process a prompt through the RAGent."""
         timing_logger = TimingLogger(__name__ + ".prompt_model")
@@ -382,7 +383,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                             sanitized_tool_call = tool_helper.sanitize_tool_call(tool_call, active_candidate_context)
                             
                             if is_custom_api and is_custom_search_tool:
-                                llm_api.set_scheduling_context(request_query, formatted_messages, active_candidate_context)
+                                llm_api.set_scheduling_context(request_query, formatted_messages, active_candidate_context, continuity)
 
                             tool_result = await llm_api.async_call_tool(sanitized_tool_call)
                             parsed_tool_result = tool_helper.parse_tool_results(tool_result)
@@ -408,7 +409,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                 )
                             )
                         except Exception as tool_err:
-                            _logger.log_string(logging.ERROR, f"Error executing tool {tool_name}: {tool_err}")
+                            _logger.log_string(logging.ERROR, f"Error executing tool {tool_name}: {MessageHelper.exception_error_text(tool_err)}")
                             tool_result_msg = MessageHelper.create_tool_failure_message(
                                 agent_id=user_input.agent_id,
                                 tool_call_id=tool_call.id,
@@ -517,7 +518,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                         )
                     )
 
-                continuity: ContinuityContext | None = None
+                continuity = scheduled_context.retrieval_continuity() if scheduled_context else ContinuityContext()
                 if not is_scheduled_request:
                     continuity = await self._async_build_continuity_context(history_manager, chat_log, query_embedding)
 
@@ -596,14 +597,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                         continue
 
                     device.state = st.state
-                    attributes = Device.clean_attributes(st.attributes)
-                    if "light" in (device.domain or []):
-                        brightness = attributes.pop("brightness", None)
-                        if isinstance(brightness, (int, float)) and not isinstance(brightness, bool):
-                            attributes["brightness_percent"] = round(
-                                max(0.0, min(255.0, float(brightness))) / 255.0 * 100,
-                            )
-                    device.attributes = attributes
+                    device.attributes = Device.clean_attributes(device.domain, st.attributes)
                     device_list.append(device)
 
                 candidate_context = self._candidate_context_from_devices(device_list)
@@ -674,7 +668,8 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     chat_log,
                     history_manager,
                     candidate_context,
-                    retrieval_query
+                    retrieval_query,
+                    continuity,
                 )
                 timing_logger.log_timed_string(level=logging.DEBUG, message="Model and tool processing")
                 return result

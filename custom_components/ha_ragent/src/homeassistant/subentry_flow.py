@@ -1,7 +1,7 @@
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any
 import logging
-import voluptuous as vol
+import probatio
 from types import SimpleNamespace
 
 from homeassistant.config_entries import (
@@ -72,7 +72,7 @@ class RagentSubentryFlowHandler(ConfigSubentryFlow):
     async def async_step_pick_model(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        schema = vol.Schema({})
+        schema = probatio.Schema({})
         errors = {}
         description_placeholders = {}
 

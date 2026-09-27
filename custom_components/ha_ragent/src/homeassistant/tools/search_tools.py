@@ -7,7 +7,7 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
-import voluptuous as vol
+import probatio
 
 from homeassistant.const import CONF_LLM_HASS_API
 from homeassistant.core import HomeAssistant
@@ -39,41 +39,41 @@ _logger = BaseLogger(__name__)
 
 class RAGentSemanticSearchTool(llm.Tool):
     name = RAGENT_SEMANTIC_SEARCH_TOOL_NAME
-    parameters = vol.Schema(
+    parameters = probatio.Schema(
         {
-            vol.Required(
+            probatio.Required(
                 "search_queries",
                 description=(
                     "One self-contained query per independent target group. The array "
                     "position must match the corresponding capabilities item."
                 ),
-            ): vol.All(
-                [str], vol.Length(min=1, max=RAGENT_MAX_SEARCH_QUERIES)
+            ): probatio.All(
+                [str], probatio.Length(min=1, max=RAGENT_MAX_SEARCH_QUERIES)
             ),
-            vol.Optional(
+            probatio.Optional(
                 "capabilities",
                 description=(
                     "Optional structured capability parallel to search_queries, for example "
                     "[{action: turn_on, domain: light}] or "
                     "[{action: fan_set_speed, domain: fan}]."
                 ),
-            ): vol.All(
+            ): probatio.All(
                 [{
-                    vol.Optional(
+                    probatio.Optional(
                         "action",
                         description=(
                             "Stable canonical action ID such as turn_on, turn_off, "
                             "or fan_set_speed; do not put natural-language prose here."
                         ),
                     ): str,
-                    vol.Optional(
+                    probatio.Optional(
                         "domain",
                         description="Optional Home Assistant domain or domains.",
-                    ): vol.Any(str, [str]),
+                    ): probatio.Any(str, [str]),
                 }],
-                vol.Length(min=1, max=RAGENT_MAX_SEARCH_QUERIES),
+                probatio.Length(min=1, max=RAGENT_MAX_SEARCH_QUERIES),
             ),
-            vol.Optional("scope", default="devices_and_tools"): vol.In(["devices", "tools", "devices_and_tools"]),
+            probatio.Optional("scope", default="devices_and_tools"): probatio.In(["devices", "tools", "devices_and_tools"]),
         }
     )
 

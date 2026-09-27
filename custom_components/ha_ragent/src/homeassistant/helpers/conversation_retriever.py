@@ -4,8 +4,6 @@ import asyncio
 import logging
 from typing import Any
 
-from probatio import to_openapi
-
 from custom_components.ha_ragent.src.const import (
     CONF_RETRIEVAL_METHOD,
     RETRIEVAL_METHOD_AUTOMATIC,
@@ -198,13 +196,12 @@ class ConversationRetriever:
             if tool is None:
                 continue
             try:
-                parameters = to_openapi(
-                    getattr(tool, "parameters", {}) or {},
-                    custom_serializer=getattr(llm_api, "custom_serializer", None),
+                parameters = ToolExtractor._tool_parameters(
+                    tool, getattr(llm_api, "custom_serializer", None)
                 )
-            except Exception:
-                parameters = {}
-            parameters = parameters if isinstance(parameters, dict) else {}
+            except Exception as err:
+                _logger.log_string(logging.WARNING, f"Could not convert parameters for tool {name}: {err}")
+                continue
             result.append(LlmTool(
                 name=tool.name,
                 description=getattr(tool, "description", ""),

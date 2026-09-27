@@ -12,7 +12,8 @@ from homeassistant.helpers.entity_registry import RegistryEntry as EntityEntry
 from custom_components.ha_ragent.src.const import (
     RAGENT_SEMANTIC_SEARCH_TOOL_NAME,
     TOOL_REGEX_PATTERN,
-    RAGENT_PLANNED_ACTION_TOOL_NAME,
+    RAGENT_SCHEDULE_ACTION_TOOL_NAME,
+    RAGENT_TOOL_NAME_ALIASES,
 )
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
@@ -32,6 +33,19 @@ class ToolHelper:
             if isinstance(tool.metadata, ToolMetadata)
         }
 
+
+    @staticmethod
+    def _remove_null_values(value: Any) -> Any:
+        """Remove null values from tool arguments before Home Assistant validation."""
+        if isinstance(value, dict):
+            return {
+                key: ToolHelper._remove_null_values(item)
+                for key, item in value.items()
+                if item is not None
+            }
+        if isinstance(value, list):
+            return [ToolHelper._remove_null_values(item) for item in value if item is not None]
+        return value
 
     @staticmethod
     def _copy_tool_input(tool_call: ToolInput, tool_name: str, arguments: dict[str, Any]) -> ToolInput:
@@ -243,7 +257,11 @@ class ToolHelper:
     @staticmethod
     def is_scheduled_action_tool(tool_name: str) -> bool:
         """Return whether a name identifies the scheduled-action tool."""
-        return str(tool_name or "").rsplit("__", 1)[-1] == RAGENT_PLANNED_ACTION_TOOL_NAME
+        base_name = str(tool_name or "").rsplit("__", 1)[-1]
+        return base_name in (
+            RAGENT_SCHEDULE_ACTION_TOOL_NAME,
+            *RAGENT_TOOL_NAME_ALIASES.get(RAGENT_SCHEDULE_ACTION_TOOL_NAME, ()),
+        )
 
     @staticmethod
     def is_semantic_search_tool(tool_name: str) -> bool:
@@ -349,6 +367,11 @@ class ToolHelper:
         if parsed_result:
             return parsed_result
 
+        if tool_result.get("response_type") == "action_done":
+            normalized_result = dict(tool_result)
+            normalized_result.setdefault("success", True)
+            return normalized_result
+
         return tool_result
 
     def to_home_assistant_tool_call(self, tool_call: ToolInput) -> ToolInput:
@@ -385,7 +408,7 @@ class ToolHelper:
         """Build execution arguments using the internally indexed tool name."""
         tool = self._tools_by_name.get(tool_call.tool_name)
         metadata = self._tool_metadata_index.get(tool_call.tool_name)
-        args = dict(tool_call.tool_args)
+        args = self._remove_null_values(dict(tool_call.tool_args))
         requested = str(args.get("name", args.get("entity_id", "")) or "").casefold()
         match = next((candidate for candidate in candidates if requested in {
             str(candidate.get("name", "")).casefold(),

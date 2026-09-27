@@ -11,7 +11,9 @@ from custom_components.ha_ragent.src.const import (
     RAGENT_LLM_API_NAME,
     RAGENT_PREFIXED_TOOL_NAMES_BY_NAME,
     RAGENT_TOOL_NAMES_BY_PREFIXED_NAME,
+    RAGENT_TOOL_NAME_ALIASES,
 )
+from custom_components.ha_ragent.src.models.retrieval.continuity_context import ContinuityContext
 from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 from custom_components.ha_ragent.src.homeassistant.tools.planned_action import RAGentPlannedActionTool
@@ -65,11 +67,11 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
             tool_name = getattr(tool, "name", None)
             if tool_name == RAGentSemanticSearchTool.name:
                 self.tools.append(scoped_search_tool)
-            elif tool_name == RAGentPlannedActionTool.name:
+            elif self._is_tool_name(tool_name, RAGentPlannedActionTool.name):
                 self.tools.append(planned_action_tool)
-            elif tool_name == RAGentCancelAllPlannedActionsTool.name:
+            elif self._is_tool_name(tool_name, RAGentCancelAllPlannedActionsTool.name):
                 self.tools.append(cancel_all_planned_actions_tool)
-            elif tool_name == RAGentListPlannedActionsTool.name:
+            elif self._is_tool_name(tool_name, RAGentListPlannedActionsTool.name):
                 self.tools.append(list_planned_actions_tool)
             elif tool_name == RAGentRememberTool.name:
                 self.tools.append(remember_tool)
@@ -113,8 +115,19 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
         return getattr(self._wrapped_api, name)
 
     @staticmethod
+    def _is_tool_name(actual_name: str | None, canonical_name: str) -> bool:
+        actual_base_name = str(actual_name or "").rsplit("__", 1)[-1]
+        return actual_base_name in (
+            canonical_name,
+            *RAGENT_TOOL_NAME_ALIASES.get(canonical_name, ()),
+        )
+
+    @staticmethod
     def _check_if_tool_exists(tool_name: str, tool_list: List) -> bool:
-        return not any(getattr(tool, "name", None) == tool_name for tool in tool_list)
+        return not any(
+            RAGentAugmentedAPIInstance._is_tool_name(getattr(tool, "name", None), tool_name)
+            for tool in tool_list
+        )
 
     def set_conversation_agent_id(self, agent_id: str) -> None:
         """Bind delayed actions to the conversation entity handling this turn."""
@@ -160,13 +173,14 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
                 )
 
 
-    def set_scheduling_context(self, request: str, messages: list[dict], candidates: list[dict]) -> None:
+    def set_scheduling_context(self, request: str, messages: list[dict], candidates: list[dict], continuity: ContinuityContext) -> None:
         """Supply runtime context directly; the model only specifies the action."""
         for tool in self.tools:
             if isinstance(tool, RAGentPlannedActionTool):
                 tool.set_scheduling_context(
                     request=request, messages=messages, candidates=candidates,
                     area=self._scheduling_area, floor=self._scheduling_floor,
+                    continuity=continuity,
                 )
 
     def refresh_search_candidates(self, candidates: list[dict[str, object]]) -> None:

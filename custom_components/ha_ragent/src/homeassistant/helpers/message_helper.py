@@ -208,6 +208,23 @@ class MessageHelper:
         )
 
     @staticmethod
+    def exception_error_text(error: Exception) -> str:
+        """Include chained validation details hidden by Home Assistant wrappers."""
+        message = str(error)
+        causes: list[str] = []
+        cause = error.__cause__
+        visited: set[int] = {id(error)}
+        while cause is not None and id(cause) not in visited:
+            visited.add(id(cause))
+            detail = str(cause).strip()
+            if detail and detail not in causes:
+                causes.append(detail)
+            cause = cause.__cause__
+        if causes:
+            return f"{message} (underlying validation details: {'; '.join(causes)})"
+        return message
+
+    @staticmethod
     def create_tool_failure_message(
         agent_id: str | None,
         tool_call_id: str | None,
@@ -215,11 +232,12 @@ class MessageHelper:
         error: Exception,
     ) -> conversation.ToolResultContent:
         """Create a tool-result message for a failed tool call."""
-        error_value = (
-            "Unknown error ensure you follow the tool call format."
-            if isinstance(error, KeyError) and error.args
-            else str(error)
-        )
+        if isinstance(error, KeyError) and error.args:
+            error_value = "Unknown error ensure you follow the tool call format."
+            if error.__cause__ is not None:
+                error_value += f" {MessageHelper.exception_error_text(error)}"
+        else:
+            error_value = MessageHelper.exception_error_text(error)
         failure = ChatToolFailure(
             success=False,
             tool=tool_name,

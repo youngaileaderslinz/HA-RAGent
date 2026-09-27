@@ -5,7 +5,7 @@ from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from collections.abc import Iterable
 from typing import Any, List, Tuple
 
-import voluptuous as vol
+import probatio
 from probatio import to_openapi
 
 from homeassistant.const import CONF_LLM_HASS_API
@@ -55,10 +55,10 @@ class ToolExtractor:
         values: set[str] = set()
         universal = False
 
-        if isinstance(validator, vol.In):
+        if isinstance(validator, probatio.In):
             return cls._normalize_strings(validator.container), False
 
-        if isinstance(validator, vol.All):
+        if isinstance(validator, probatio.All):
             constrained: list[set[str]] = []
             for nested in validator.validators:
                 nested_values, nested_universal = cls._extract_values_from_validator(nested)
@@ -69,7 +69,7 @@ class ToolExtractor:
             # narrow their intersection rather than broadening a domain list.
             return (set.intersection(*constrained) if constrained else set()), universal
 
-        if isinstance(validator, vol.Any):
+        if isinstance(validator, probatio.Any):
             for nested in validator.validators:
                 nested_values, nested_universal = cls._extract_values_from_validator(nested)
                 values.update(nested_values)
@@ -161,7 +161,7 @@ class ToolExtractor:
         # interpreter.  Literal values in an unrestricted alternative remain
         # searchable schema content, but are not a supported-domain claim.
         schema_domains = root_property_values(parameters, "domain")
-        # Keep the original voluptuous schema as a fallback. Some HA/API
+        # Keep the original Probatio schema as a fallback. Some HA/API
         # adapters flatten constrained fields while converting to OpenAPI and
         # silently drop the enum, even though the source schema still has it.
         raw_parameters = getattr(tool, "parameters", None)
@@ -175,13 +175,13 @@ class ToolExtractor:
                 raw_schema, "domain",
             )
             if has_domain:
-                # Voluptuous can express a union with a free-form string.  In
+                # Probatio can express a union with a free-form string.  In
                 # that case the source schema is likewise neutral.
                 if not _universal:
                     schema_domains.update(raw_domains)
         metadata.supported_domains = tuple(sorted({
-            *(str(value).casefold() for value in (domains or ())),
-            *schema_domains,
+            *(str(value).casefold() for value in (domains or ()) if value is not None and str(value).casefold() != "none"),
+            *(str(value).casefold() for value in schema_domains if value is not None and str(value).casefold() != "none"),
         }))
 
         expected_states = cls._metadata_value(source, "expected_states", "expected_state", default=())
@@ -200,15 +200,150 @@ class ToolExtractor:
         metadata.expected_states = tuple(sorted(str(value).casefold() for value in (expected_states or ())))
         return metadata
 
-    def _extract_tool_metadata(self, tool: Any, parameters: Any) -> ToolMetadata:
-        """Compatibility wrapper for existing callers."""
-        return self.extract_tool_metadata(tool, parameters)
+    @staticmethod
+    def _schema_type_name(value: Any) -> str:
+        if isinstance(value, bool):
+            return "boolean"
+        if isinstance(value, int):
+            return "integer"
+        if isinstance(value, float):
+            return "number"
+        if isinstance(value, str):
+            return "string"
+        raise ValueError("Unsupported enum value in tool schema")
+
+    @classmethod
+    def _schema_branch_type(cls, branch: dict[str, Any]) -> str | None:
+        if isinstance(branch.get("type"), str):
+            return branch["type"]
+        values = branch.get("enum", [branch["const"]] if "const" in branch else [])
+        return (
+            "null" if values[0] is None else cls._schema_type_name(values[0])
+        ) if values else None
+
+    @classmethod
+    def _normalize_openai_schema(
+        cls, node: dict[str, Any], *, optional: bool = False
+    ) -> dict[str, Any]:
+        node = dict(node)
+        for keyword in ("anyOf", "oneOf"):
+            if keyword not in node:
+                continue
+            branches = node.pop(keyword)
+            if not isinstance(branches, list) or not all(isinstance(part, dict) for part in branches):
+                raise ValueError(f"Unsupported {keyword} in tool schema")
+            # Intent slot groups use alternatives of required-only objects.
+            if "properties" in node and all(set(part) == {"required"} for part in branches):
+                continue
+            null_branches = [part for part in branches if part.get("type") == "null"]
+            other_branches = [part for part in branches if part.get("type") != "null"]
+            if len(null_branches) == 1 and len(other_branches) == 1:
+                node = {**other_branches[0], **node}
+                optional = True
+            elif other_branches and not null_branches and all(
+                cls._schema_branch_type(part) is not None for part in other_branches
+            ):
+                types = list(dict.fromkeys(cls._schema_branch_type(part) for part in other_branches))
+                node["type"] = types[0] if len(types) == 1 else types
+                if all("enum" in part or "const" in part for part in other_branches):
+                    values = []
+                    for part in other_branches:
+                        values.extend(part.get("enum", [part["const"]] if "const" in part else []))
+                    node["enum"] = list(dict.fromkeys(values))
+                array_branches = [part for part in other_branches if cls._schema_branch_type(part) == "array"]
+                if len(array_branches) == 1 and "items" in array_branches[0]:
+                    node["items"] = array_branches[0]["items"]
+            else:
+                raise ValueError(f"Unsupported {keyword} in tool schema")
+        if "allOf" in node:
+            branches = node.pop("allOf")
+            if not isinstance(branches, list) or not all(isinstance(part, dict) for part in branches):
+                raise ValueError("Unsupported allOf in tool schema")
+            for part in branches:
+                for key, value in part.items():
+                    if key in node and node[key] != value:
+                        raise ValueError(f"Conflicting allOf {key} in tool schema")
+                    node[key] = value
+        for keyword in ("not", "if", "then", "else"):
+            if keyword in node:
+                raise ValueError(f"Unsupported {keyword} in tool schema")
+        nullable = node.pop("nullable", False) is True
+        optional = optional or nullable
+        node.pop("default", None)
+        node.pop("format", None)
+        for keyword in ("dependentRequired", "dependentSchemas", "propertyNames", "patternProperties"):
+            if keyword in node:
+                raise ValueError(f"Unsupported {keyword} in tool schema")
+        if "const" in node:
+            node["enum"] = [node.pop("const")]
+        if "enum" in node and "type" not in node and node["enum"]:
+            types = list(dict.fromkeys(
+                "null" if value is None else cls._schema_type_name(value)
+                for value in node["enum"]
+            ))
+            node["type"] = types[0] if len(types) == 1 else types
+        if "properties" in node or node.get("type") == "object":
+            properties = node.get("properties", {})
+            if not isinstance(properties, dict):
+                raise ValueError("Object properties must be a mapping")
+            required = set(node.get("required", []))
+            node["type"] = "object"
+            node["properties"] = {
+                name: cls._normalize_openai_schema(value, optional=name not in required)
+                for name, value in properties.items()
+            }
+            node["required"] = [name for name in properties if name in required]
+            node["additionalProperties"] = False
+        if "items" in node:
+            node["items"] = cls._normalize_openai_schema(node["items"])
+        if "$defs" in node:
+            node["$defs"] = {
+                name: cls._normalize_openai_schema(value) for name, value in node["$defs"].items()
+            }
+        if optional:
+            types = node.get("type")
+            if isinstance(types, str):
+                node["type"] = [types, "null"] if types != "null" else ["null"]
+            elif isinstance(types, list):
+                node["type"] = list(dict.fromkeys([*types, "null"]))
+            else:
+                raise ValueError("Optional property has no JSON Schema type")
+            if "enum" in node and None not in node["enum"]:
+                node["enum"] = [*node["enum"], None]
+        return node
+
+    @classmethod
+    def _openai_parameters(cls, schema: dict[str, Any]) -> dict[str, Any]:
+        """Translate a Probatio OpenAPI schema into OpenAI tool parameters."""
+        if not isinstance(schema, dict):
+            raise ValueError("Tool parameters must be an object schema")
+
+        if schema.get("type") == "function" and isinstance(schema.get("function"), dict):
+            schema = schema["function"].get("parameters", {})
+        if schema and schema.get("type", "object") != "object":
+            raise ValueError("Tool parameters must be an object schema")
+        return cls._normalize_openai_schema(schema or {"type": "object", "properties": {}})
+
+    @classmethod
+    def _tool_parameters(cls, tool: Any, custom_serializer: Any) -> dict[str, Any]:
+        """Convert a Home Assistant tool's native schema once."""
+        source = getattr(tool, "parameters", None)
+        if isinstance(source, dict) and (
+            source.get("type") == "object"
+            or source.get("type") == "function"
+            or "properties" in source
+        ):
+            parameters = source
+        else:
+            parameters = to_openapi(source or probatio.Schema({}), custom_serializer=custom_serializer)
+        return cls._openai_parameters(parameters)
+
+    @staticmethod
+    @callback
+    def _handle_timer_event(event_type: TimerEventType, timer: TimerInfo) -> None:
+        pass
 
     def _register_fake_timer_device(self) -> None:
-        @callback
-        def handle_timer_event(event_type: TimerEventType, timer: TimerInfo) -> None:
-            pass
-
         try:
             shared = self._timer_handlers.get(self._timer_handler_key)
             if shared is not None:
@@ -216,7 +351,8 @@ class ToolExtractor:
                 self._timer_handlers[self._timer_handler_key] = (remove, count + 1)
                 self._fake_timer_remove = True
                 return
-            remove = async_register_timer_handler(self._hass, RAGENT_TIMER_DEVICE_ID, handle_timer_event)
+            
+            remove = async_register_timer_handler(self._hass, RAGENT_TIMER_DEVICE_ID, self._handle_timer_event)
             self._timer_handlers[self._timer_handler_key] = (remove, 1)
             self._fake_timer_remove = True
             _logger.log_string(logging.DEBUG, "Registered timer support for HA-RAGent")
@@ -290,20 +426,14 @@ class ToolExtractor:
                 ):
                     continue
 
-                if hasattr(tool, "parameters") and tool.parameters:
-                    try:
-                        parameters = to_openapi(tool.parameters, custom_serializer=llm_api.custom_serializer)
-                        if not isinstance(parameters, dict):
-                            _logger.log_string(logging.WARNING, f"Could not convert parameters for tool {tool_name}: converter returned {type(parameters).__name__}")
-                            parameters = {}
-                    except Exception as param_err:
-                        _logger.log_string(logging.WARNING, f"Could not convert parameters for tool {tool_name}: {param_err}")
-                        parameters = {}
-                else:
-                    parameters = {}
+                try:
+                    parameters = self._tool_parameters(tool, llm_api.custom_serializer)
+                except Exception as param_err:
+                    _logger.log_string(logging.WARNING, f"Could not convert parameters for tool {tool_name}: {param_err}")
+                    continue
 
                 try:
-                    metadata = self._extract_tool_metadata(tool, parameters)
+                    metadata = self.extract_tool_metadata(tool, parameters)
                 except Exception as metadata_err:
                     # One malformed tool must not erase every other tool from
                     # the startup index. Preserve the live schema for ranking

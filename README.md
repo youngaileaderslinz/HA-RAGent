@@ -151,13 +151,13 @@ When **Assist** is selected, HA-RAGent resolves it to its custom LLM API, which 
 **HassSemanticSearch**
 - Searches for devices and Home Assistant tools without changing device state.
 
-**HassPlannedAction**
+**HassScheduleAction**
 - Schedules a one-time Home Assistant action for execution after a specified delay.
 
-**HassListPlannedActions**
+**HassListScheduledActions**
 - Lists all currently scheduled one-time Home Assistant actions.
 
-**HassCancelAllPlannedActions**
+**HassCancelScheduledActions**
 - Cancels all currently scheduled one-time Home Assistant actions.
 
 **HassRememberFact**

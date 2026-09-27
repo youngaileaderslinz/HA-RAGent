@@ -283,10 +283,13 @@ class LlmTool(SerializableModel, EmbeddableModel):
             "function": {
                 "name": self.name,
                 "description": self.description or "",
+                "parameters": self.parameters or {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": False,
+                }
             }
         }
-
-        if self.parameters:
-            tool_def["function"]["parameters"] = self.parameters
 
         return tool_def
