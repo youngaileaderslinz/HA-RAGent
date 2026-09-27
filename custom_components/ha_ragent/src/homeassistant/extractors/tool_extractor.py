@@ -459,7 +459,6 @@ class ToolExtractor:
         finally:
             self._remove_fake_timer_device()
 
-        _logger.log_payload("tools", logging.WARNING, tools=tool_list)
         return tool_list
 
     async def async_get_embeddable_tool_names(self, subentry: ConfigSubentry) -> list[str]:
