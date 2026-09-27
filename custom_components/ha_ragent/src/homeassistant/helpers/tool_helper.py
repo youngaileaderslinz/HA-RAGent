@@ -349,6 +349,11 @@ class ToolHelper:
         if parsed_result:
             return parsed_result
 
+        if tool_result.get("response_type") == "action_done":
+            normalized_result = dict(tool_result)
+            normalized_result.setdefault("success", True)
+            return normalized_result
+
         return tool_result
 
     def to_home_assistant_tool_call(self, tool_call: ToolInput) -> ToolInput:
