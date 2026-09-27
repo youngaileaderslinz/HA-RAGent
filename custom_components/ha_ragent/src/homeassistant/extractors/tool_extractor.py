@@ -291,7 +291,7 @@ class ToolExtractor:
                 name: cls._normalize_openai_schema(value, optional=name not in required)
                 for name, value in properties.items()
             }
-            node["required"] = list(properties)
+            node["required"] = [name for name in properties if name in required]
             node["additionalProperties"] = False
         if "items" in node:
             node["items"] = cls._normalize_openai_schema(node["items"])
