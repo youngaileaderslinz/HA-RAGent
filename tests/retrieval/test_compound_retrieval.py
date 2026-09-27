@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-import voluptuous as vol
+import probatio
 
 from custom_components.ha_ragent.src.homeassistant.helpers.tool_ranker import ToolRanker
 from custom_components.ha_ragent.src.const import RAGENT_MAX_SEARCH_QUERIES
@@ -59,7 +59,7 @@ def test_query_limit_is_enforced_before_any_retrieval():
     result = asyncio.run(tool.async_call(SimpleNamespace(tool_args={"search_queries": queries})))
     assert str(RAGENT_MAX_SEARCH_QUERIES) in result["error"]
     tool._iter_searchable_entries.assert_not_called()
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         tool.parameters({"search_queries": queries})
     valid_queries = queries[:RAGENT_MAX_SEARCH_QUERIES]
     assert tool.parameters({

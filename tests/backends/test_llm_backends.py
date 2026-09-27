@@ -319,6 +319,24 @@ def test_url_format(backend_case: BackendCase, hass: HomeAssistant) -> None:
     assert url == expected_url
 
 
+def test_convert_tools_to_model_format_uses_full_openai_tool_shape() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"mode": {"type": "string"}},
+        "required": ["mode"],
+    }
+    tool = LlmTool(name="SetMode", description="Set the mode", parameters=schema)
+
+    assert ALlmBaseBackend.convert_tools_to_model_format([tool]) == [{
+        "type": "function",
+        "function": {
+            "name": "SetMode",
+            "description": "Set the mode",
+            "parameters": schema,
+        },
+    }]
+
+
 def test_tool_names_are_split_for_request_logging() -> None:
     """Required tools are listed separately from RAG-selected tools."""
     tools = [

@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-import voluptuous as vol
+import probatio
 
 from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
 from custom_components.ha_ragent.src.const import RAGENT_PREFIXED_REQUIRED_TOOL_NAMES
@@ -20,7 +20,7 @@ def test_tool_metadata_uses_explicit_capability_and_schema_domains() -> None:
         },
     }
 
-    metadata = extractor._extract_tool_metadata(tool, parameters)
+    metadata = extractor.extract_tool_metadata(tool, parameters)
 
     assert metadata.canonical_action == "stop"
     assert metadata.supported_domains == ("media_player",)
@@ -37,8 +37,8 @@ def test_tool_metadata_uses_a_single_schema_action_without_reading_tool_name() -
         },
     }
 
-    first = extractor._extract_tool_metadata(SimpleNamespace(name="StopEverything"), parameters)
-    second = extractor._extract_tool_metadata(SimpleNamespace(name="BeliebigerName"), parameters)
+    first = extractor.extract_tool_metadata(SimpleNamespace(name="StopEverything"), parameters)
+    second = extractor.extract_tool_metadata(SimpleNamespace(name="BeliebigerName"), parameters)
 
     assert first.canonical_action == second.canonical_action == "pause"
     assert first.supported_domains == second.supported_domains == ("media_player",)
@@ -57,7 +57,7 @@ def test_runtime_converted_tool_keeps_canonical_metadata(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
-        "custom_components.ha_ragent.src.homeassistant.helpers.conversation_retriever.to_openapi",
+        "custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor.to_openapi",
         lambda *_args, **_kwargs: {"properties": {}},
     )
     converted, = ConversationRetriever._required_tools(
@@ -99,7 +99,7 @@ def test_extract_tool_metadata_extracts_domain_enums_directly() -> None:
 def test_extract_tool_metadata_keeps_universal_domain_schema_unrestricted() -> None:
     tool = SimpleNamespace(
         metadata=None,
-        parameters=vol.Schema({vol.Required("domain"): str}),
+        parameters=probatio.Schema({probatio.Required("domain"): str}),
     )
 
     values, universal, has_field = ToolExtractor._extract_field_constraints(
