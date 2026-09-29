@@ -44,7 +44,8 @@ from custom_components.ha_ragent.src.const import (
     RAGENT_LLM_API_ID,
     CONF_MAX_TOKENS,
     CONF_MAX_TOOL_CALL_ITERATIONS,
-    CONF_PROMPT,
+    CONF_RULE_PROMPT,
+    CONF_STATE_PROMPT,
     RETRIEVAL_METHOD_OPTIONS,
     CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
     CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
@@ -55,7 +56,6 @@ from custom_components.ha_ragent.src.const import (
     CONF_TEMPERATURE,
     CONF_MIN_DEVICES_TO_EXTRACT,
     CONF_MAX_DEVICES_TO_EXTRACT,
-    DEFAULT_PROMPT,
     
     CONF_VECTOR_DB_PORT,
     CONF_VECTOR_DB_SSL,
@@ -272,9 +272,11 @@ def ui_schema_config_options(
     translations: Any,
     excluded_tool_options: list[str] | None = None,
 ) -> dict:
-    default_prompt = RAGent.build_base_prompt_template(
-        translations,
-        get_setting_value(CONF_PROMPT, options) or DEFAULT_PROMPT,
+    default_rule_prompt = RAGent.build_base_prompt_template(
+        translations, get_setting_value(CONF_RULE_PROMPT, options)
+    )
+    default_state_prompt = RAGent.build_base_prompt_template(
+        translations, get_setting_value(CONF_STATE_PROMPT, options)
     )
     default_llm_api = getattr(llm, "LLM_API_ASSIST", "assist")
     selected_llm_api = get_setting_value(CONF_LLM_HASS_API, options) or default_llm_api
@@ -301,8 +303,12 @@ def ui_schema_config_options(
             mode=SelectSelectorMode.DROPDOWN,
         )),
         probatio.Optional(
-            CONF_PROMPT,
-            default=get_setting_value(CONF_PROMPT, options) or default_prompt,
+            CONF_RULE_PROMPT,
+            default=default_rule_prompt,
+        ): TemplateSelector(),
+        probatio.Optional(
+            CONF_STATE_PROMPT,
+            default=default_state_prompt,
         ): TemplateSelector(),
         probatio.Required(
             CONF_RETRIEVAL_METHOD,
@@ -415,7 +421,8 @@ def ui_schema_config_options(
     global_order = [
         # general
         CONF_LLM_HASS_API,
-        CONF_PROMPT,
+        CONF_RULE_PROMPT,
+        CONF_STATE_PROMPT,
         CONF_ALLOW_AUTO_EMBEDDING,
         CONF_ALLOW_QUESTIONS,
         CONF_ENABLE_MODEL_THINKING,

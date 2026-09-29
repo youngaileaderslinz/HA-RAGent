@@ -23,7 +23,8 @@ from custom_components.ha_ragent.src.const import (
     CONF_CONTEXT_LENGTH,
     CONF_MAX_TOKENS,
     CONF_MAX_TOOL_CALL_ITERATIONS,
-    CONF_PROMPT,
+    CONF_RULE_PROMPT,
+    CONF_STATE_PROMPT,
     CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
     CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
     DEFAULT_SETTINGS,
@@ -106,13 +107,17 @@ class RagentSubentryFlowHandler(ConfigSubentryFlow):
         description_placeholders = {}
         entry = self._get_entry()
 
-        if CONF_PROMPT not in self.model_config:
-            selected_default_options = {**DEFAULT_SETTINGS}
-            selected_default_options[CONF_PROMPT] = RAGent.build_base_prompt_template(
-                entry.translations,
-                get_setting_value(CONF_PROMPT, selected_default_options),
-            )
-            self.model_config = {**selected_default_options, **self.model_config}
+        if self._is_new and (CONF_RULE_PROMPT not in self.model_config or CONF_STATE_PROMPT not in self.model_config):
+            self.model_config = {
+                **DEFAULT_SETTINGS,
+                **self.model_config,
+                CONF_RULE_PROMPT: RAGent.build_base_prompt_template(
+                    entry.translations, get_setting_value(CONF_RULE_PROMPT, self.model_config)
+                ),
+                CONF_STATE_PROMPT: RAGent.build_base_prompt_template(
+                    entry.translations, get_setting_value(CONF_STATE_PROMPT, self.model_config)
+                ),
+            }
 
         excluded_tool_names = { name for name in (get_setting_value(CONF_EXCLUDED_TOOLS, self.model_config) or []) if isinstance(name, str) }
         try:

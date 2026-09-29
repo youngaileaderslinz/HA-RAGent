@@ -92,7 +92,8 @@
                     "description": "Konfigurieren Sie die Modellparameter und das Verhalten des KI-RAGent.",
                     "data": {
                         "llm_hass_api": "LLM-Home-Assistant-API",
-                        "rag_prompt": "System-Prompt",
+                        "rag_rule_prompt": "Regel-Prompt",
+                        "rag_state_prompt": "Zustands-Prompt",
                         "rag_retrieval_method": "Abrufmethode",
                         "rag_allow_auto_embedding": "Automatisches Embedding erlauben",
                         "rag_allow_questions": "Rückfragen erlauben",
@@ -113,7 +114,8 @@
                         "rag_remember_conversation_time_minutes": "Gesprächsspeicherdauer (Minuten)"
                     },
                     "data_description": {
-                        "rag_prompt": "Der System-Prompt, der das Verhalten und die Persönlichkeit des Assistenten definiert",
+                        "rag_rule_prompt": "Stabile Regeln und Anweisungen vor dem Gesprächsverlauf.",
+                        "rag_state_prompt": "Aktueller Home-Assistant-Kontext nach dem Verlauf und vor der Benutzeranfrage.",
                         "rag_retrieval_method": "Legt fest, wie Geräte und Tools gefunden werden.",
                         "rag_allow_auto_embedding": "Bindet exponierte Geräte und Tools für diesen KI-RAGent automatisch beim Start und nach Konfigurationsänderungen ein.",
                         "rag_allow_questions": "Erlaubt dem Assistenten, Rückfragen zu stellen und das Gespräch fortzusetzen.",

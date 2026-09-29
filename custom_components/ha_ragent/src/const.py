@@ -234,7 +234,8 @@ CONF_CONTEXT_LENGTH = "rag_context_length"
 CONF_MAX_TOKENS = "rag_max_tokens"
 CONF_MAX_TOOL_CALL_ITERATIONS = "rag_max_tool_call_iterations"
 
-CONF_PROMPT = "rag_prompt"
+CONF_RULE_PROMPT = "rag_rule_prompt"
+CONF_STATE_PROMPT = "rag_state_prompt"
 
 CONF_ENABLE_MODEL_THINKING = "rag_enable_model_thinking"
 CONF_ALLOW_AUTO_EMBEDDING = "rag_allow_auto_embedding"
@@ -250,11 +251,12 @@ TOOL_REGEX_PATTERN = re.compile(r"```homeassistant\s*(.*?)\s*```", re.DOTALL)
 DEVICE_ATTRIBUTES_TO_EXCLUDE = ["friendly_name", "persistent", "supported_features"]
 DEVICE_ATTRIBUTES_MAX_JSON_LENGTH = 100
 
-DEFAULT_PROMPT = """<persona_prompt>
+DEFAULT_RULE_PROMPT = """<persona_prompt>
 
 <instruction_prompt>
+"""
 
-<area_prompt>
+DEFAULT_STATE_PROMPT = """<area_prompt>
 
 {% if memory_list %}
 <memories_context_prompt>
@@ -289,8 +291,9 @@ DEFAULT_SETTINGS = {
     CONF_MAX_MEMORIES_TO_EXTRACT: 4,
     CONF_MIN_TOOLS_TO_EXTRACT: 2,
     CONF_MAX_TOOLS_TO_EXTRACT: 4,
-    CONF_PROMPT: DEFAULT_PROMPT,
-    CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS: 8,
+    CONF_RULE_PROMPT: DEFAULT_RULE_PROMPT,
+    CONF_STATE_PROMPT: DEFAULT_STATE_PROMPT,
+    CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS: 6,
     CONF_REMEMBER_CONVERSATION_TIME_MINUTES: 30,
     CONF_RETRIEVAL_METHOD: RETRIEVAL_METHOD_AUTOMATIC,
     CONF_SELECTED_LANGUAGE: "en",

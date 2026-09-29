@@ -428,6 +428,21 @@ def test_openai_truncation_keeps_complete_turns() -> None:
     assert [message["role"] for message in truncated] == ["system", "user"]
     assert truncated[-1]["content"] == "What is its state now?"
 
+
+def test_truncation_preserves_state_after_history() -> None:
+    messages = [
+        ChatMessage(role="system", content="rules"),
+        ChatMessage(role="user", content="old request"),
+        ChatMessage(role="assistant", content="old answer"),
+        ChatMessage(role="system", content="current state"),
+        ChatMessage(role="user", content="new request"),
+    ]
+    limit = sum(len(json.dumps(message)) for message in (messages[0], messages[3], messages[4]))
+
+    assert ALlmBaseBackend.truncate_messages(messages, limit) == [
+        messages[0], messages[3], messages[4]
+    ]
+
 def test_send_chat_request(backend_case: BackendCase, hass: HomeAssistant) -> None:
     """Test chat requests for every backend."""
     backend_valid = backend_case.backend_class(hass, backend_case.user_input)

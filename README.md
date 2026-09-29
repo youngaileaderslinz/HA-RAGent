@@ -53,7 +53,7 @@ Use the `Add Integration` button in the bottom right to add a new integration ca
     - **Ollama** requires an external Ollama instance and an installed chat model with tool support [[find tool-capable models]](https://ollama.com/search?c=tools)
     - **OpenAI Compatible** works with APIs that expose an OpenAI-style chat completions endpoint
 - `Language`
-    - **English** or **German** determines the language of the default system prompt for new AI RAGent entries
+    - **English** or **German** determines the language of the default prompts for new AI RAGent entries
 
 **Setup Connections:**
 
@@ -92,8 +92,10 @@ Use the `Add Integration` button in the bottom right to add a new integration ca
 - `LLM Home Assistant API`
     - **No Control** means the model is not allowed to control devices
     - **Assist** allows the model to control devices and exposes Home Assistant tools
-- `System Prompt`
-    - The Jinja template rendered and sent to the model as its system prompt
+- `Rule Prompt`
+    - Stable instructions sent before conversation history
+- `State Prompt`
+    - Current Home Assistant context sent after conversation history and before the current user message
 - `Allow Auto Embedding`
     - Automatically rebuilds embeddings for exposed entities and tools during startup and after configuration changes
 - `Allow Follow-up Questions`
@@ -130,7 +132,7 @@ Use the `Add Integration` button in the bottom right to add a new integration ca
 Both history limits apply when they are greater than `0`. For example, with `10` interactions and `60` minutes, only interactions from the last hour and within the last 10 turns are kept.
 
 ### Available Prompt Variables
-The **System Prompt** is rendered as a Home Assistant Jinja template for every request. The following variables are passed to it:
+Both prompts are rendered as Home Assistant Jinja templates for every request. Keep current state in the **State Prompt** so the model receives stable rules, tool definitions, conversation history, current state, and the current user message in that order. The following variables are available:
 
 - `device_list`
     - The retrieved device candidates whose entities currently exist in Home Assistant. Each device provides `id`, `friendly_name`, `area_name`, `floor_name`, `domain`, `device_class`, `device_labels`, `services`, `aliases`, `state`, `attributes` and `unit_of_measurement`.

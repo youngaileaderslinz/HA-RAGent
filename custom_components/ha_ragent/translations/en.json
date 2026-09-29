@@ -92,7 +92,8 @@
                     "description": "Configure the model parameters and behavior for the AI RAGent.",
                     "data": {
                         "llm_hass_api": "LLM Home Assistant API",
-                        "rag_prompt": "System Prompt",
+                        "rag_rule_prompt": "Rule Prompt",
+                        "rag_state_prompt": "State Prompt",
                         "rag_retrieval_method": "Retrieval Method",
                         "rag_allow_auto_embedding": "Allow Auto Embedding",
                         "rag_allow_questions": "Allow Follow-up Questions",
@@ -114,7 +115,8 @@
                         
                     },
                     "data_description": {
-                        "rag_prompt": "The system prompt that defines the behavior and personality of the assistant",
+                        "rag_rule_prompt": "Stable behavior and instructions sent before conversation history.",
+                        "rag_state_prompt": "Current Home Assistant context sent after history and before the user message.",
                         "rag_retrieval_method": "Choose how devices and tools are retrieved.",
                         "rag_allow_auto_embedding": "Automatically embed exposed devices and tools for this AI RAGent during startup and after configuration changes.",
                         "rag_allow_questions": "Allow the assistant to ask clarification questions and continue the conversation.",

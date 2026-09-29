@@ -68,7 +68,7 @@ def test_scheduled_request_passes_snapshot_continuity_through_retrieval_and_hist
         _async_build_continuity_context=AsyncMock(side_effect=AssertionError("Scheduled request read live history")),
         _exclude_prohibited_scheduled_request_tools=lambda tools, scheduled: tools,
         _candidate_context_from_devices=lambda *_: [],
-        _async_render_system_prompt=AsyncMock(return_value="scheduled prompt"),
+        _async_render_prompts=AsyncMock(return_value=("rules", "scheduled state")),
         _async_prompt_model=AsyncMock(return_value=result),
     )
     user_input = SimpleNamespace(

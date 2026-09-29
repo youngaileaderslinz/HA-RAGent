@@ -72,13 +72,23 @@ class ALlmBaseBackend(ABC):
 
     @staticmethod
     def truncate_messages(messages: List[ChatMessage], max_chars: int) -> List[ChatMessage]:
-        """Keep system messages and the newest complete turns within the limit."""
-        system = [message for message in messages if message.get("role") == "system"]
-        other = [message for message in messages if message.get("role") != "system"]
-        result = [dict(message) for message in system]
-        remaining = max_chars - sum(len(json.dumps(message, default=str)) for message in result)
+        """Drop oldest turns while retaining rules, current state and latest user."""
+        if not messages:
+            return []
+        prefix = 1 if messages[0].get("role") == "system" else 0
+        state_index = next(
+            (index for index in range(len(messages) - 2, prefix - 1, -1)
+             if messages[index].get("role") == "system"),
+            None,
+        )
+        suffix_start = state_index if state_index is not None else len(messages) - 1
+        result = [dict(message) for message in messages[:prefix]]
+        suffix = [dict(message) for message in messages[suffix_start:]]
+        remaining = max_chars - sum(
+            len(json.dumps(message, default=str)) for message in result + suffix
+        )
         turns: List[List[ChatMessage]] = []
-        for message in other:
+        for message in messages[prefix:suffix_start]:
             if message.get("role") == "user":
                 turns.append([message])
             elif turns:
@@ -92,6 +102,7 @@ class ALlmBaseBackend(ABC):
             remaining -= size
         for turn in selected:
             result.extend(turn)
+        result.extend(suffix)
         return result
 
     @abstractmethod
