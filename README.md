@@ -132,7 +132,7 @@ Use the `Add Integration` button in the bottom right to add a new integration ca
 Both history limits apply when they are greater than `0`. For example, with `10` interactions and `60` minutes, only interactions from the last hour and within the last 10 turns are kept.
 
 ### Available Prompt Variables
-Both prompts are rendered as Home Assistant Jinja templates for every request. Keep current state in the **State Prompt** so the model receives stable rules, tool definitions, conversation history, current state, and the current user message in that order. The following variables are available:
+Both prompts are rendered as Home Assistant Jinja templates for every request. Keep current state in the **State Prompt** so the model receives stable rules, tool definitions, conversation history, current state the current user message in that order. The following variables are available:
 
 - `device_list`
     - The retrieved device candidates whose entities currently exist in Home Assistant. Each device provides `id`, `friendly_name`, `area_name`, `floor_name`, `domain`, `device_class`, `device_labels`, `services`, `aliases`, `state`, `attributes` and `unit_of_measurement`.
