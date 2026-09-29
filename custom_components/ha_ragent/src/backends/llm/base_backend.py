@@ -84,6 +84,34 @@ class ALlmBaseBackend(ABC):
         suffix_start = state_index if state_index is not None else len(messages) - 1
         result = [dict(message) for message in messages[:prefix]]
         suffix = [dict(message) for message in messages[suffix_start:]]
+        latest_user_index = next(
+            (index for index in range(len(suffix) - 1, -1, -1)
+             if suffix[index].get("role") == "user"),
+            None,
+        )
+        if latest_user_index is not None:
+            latest = suffix[latest_user_index]
+            original_content = str(latest.get("content") or "")
+            fixed_size = sum(
+                len(json.dumps(message, default=str))
+                for message in result + suffix[:latest_user_index] + suffix[latest_user_index + 1:]
+            )
+            available = max_chars - fixed_size
+            if len(json.dumps(latest, default=str)) > available:
+                marker = "[Earlier user message content omitted]\n"
+                marker_size = len(json.dumps({**latest, "content": marker}, default=str))
+                if available < marker_size:
+                    latest["content"] = ""
+                else:
+                    low, high = 0, len(original_content)
+                    while low < high:
+                        middle = (low + high + 1) // 2
+                        candidate = marker + original_content[-middle:]
+                        if len(json.dumps({**latest, "content": candidate}, default=str)) <= available:
+                            low = middle
+                        else:
+                            high = middle - 1
+                    latest["content"] = marker + original_content[-low:] if low else marker
         remaining = max_chars - sum(
             len(json.dumps(message, default=str)) for message in result + suffix
         )
