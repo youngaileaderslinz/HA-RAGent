@@ -386,9 +386,10 @@ class HistoryManager:
         chat_log: conversation.ChatLog,
         user_input: ConversationInput,
         system_prompt_content: str,
+        state_prompt_content: str,
         relevant_turn_keys: set[str] | None = None,
     ) -> list[conversation.Content]:
-        """Build model history with system prompt first and current user last."""
+        """Put stable rules before history and current state before the user."""
         self._stored_chat_history = list(chat_log.content)
         self._message_history = [
             conversation.SystemContent(content=system_prompt_content)
@@ -396,6 +397,7 @@ class HistoryManager:
         self._message_history.extend(
             self.filter_prompt_history(chat_log, relevant_turn_keys)
         )
+        self._message_history.append(conversation.SystemContent(content=state_prompt_content))
         self._message_history.append(conversation.UserContent(content=user_input.text))
         return self._message_history
 

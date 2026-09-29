@@ -72,13 +72,51 @@ class ALlmBaseBackend(ABC):
 
     @staticmethod
     def truncate_messages(messages: List[ChatMessage], max_chars: int) -> List[ChatMessage]:
-        """Keep system messages and the newest complete turns within the limit."""
-        system = [message for message in messages if message.get("role") == "system"]
-        other = [message for message in messages if message.get("role") != "system"]
-        result = [dict(message) for message in system]
-        remaining = max_chars - sum(len(json.dumps(message, default=str)) for message in result)
+        """Drop oldest turns while retaining rules, current state and latest user."""
+        if not messages:
+            return []
+        prefix = 1 if messages[0].get("role") == "system" else 0
+        state_index = next(
+            (index for index in range(len(messages) - 2, prefix - 1, -1)
+             if messages[index].get("role") == "system"),
+            None,
+        )
+        suffix_start = state_index if state_index is not None else len(messages) - 1
+        result = [dict(message) for message in messages[:prefix]]
+        suffix = [dict(message) for message in messages[suffix_start:]]
+        latest_user_index = next(
+            (index for index in range(len(suffix) - 1, -1, -1)
+             if suffix[index].get("role") == "user"),
+            None,
+        )
+        if latest_user_index is not None:
+            latest = suffix[latest_user_index]
+            original_content = str(latest.get("content") or "")
+            fixed_size = sum(
+                len(json.dumps(message, default=str))
+                for message in result + suffix[:latest_user_index] + suffix[latest_user_index + 1:]
+            )
+            available = max_chars - fixed_size
+            if len(json.dumps(latest, default=str)) > available:
+                marker = "[Earlier user message content omitted]\n"
+                marker_size = len(json.dumps({**latest, "content": marker}, default=str))
+                if available < marker_size:
+                    latest["content"] = ""
+                else:
+                    low, high = 0, len(original_content)
+                    while low < high:
+                        middle = (low + high + 1) // 2
+                        candidate = marker + original_content[-middle:]
+                        if len(json.dumps({**latest, "content": candidate}, default=str)) <= available:
+                            low = middle
+                        else:
+                            high = middle - 1
+                    latest["content"] = marker + original_content[-low:] if low else marker
+        remaining = max_chars - sum(
+            len(json.dumps(message, default=str)) for message in result + suffix
+        )
         turns: List[List[ChatMessage]] = []
-        for message in other:
+        for message in messages[prefix:suffix_start]:
             if message.get("role") == "user":
                 turns.append([message])
             elif turns:
@@ -92,6 +130,7 @@ class ALlmBaseBackend(ABC):
             remaining -= size
         for turn in selected:
             result.extend(turn)
+        result.extend(suffix)
         return result
 
     @abstractmethod

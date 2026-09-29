@@ -428,6 +428,83 @@ def test_openai_truncation_keeps_complete_turns() -> None:
     assert [message["role"] for message in truncated] == ["system", "user"]
     assert truncated[-1]["content"] == "What is its state now?"
 
+
+def test_truncation_preserves_state_after_history() -> None:
+    messages = [
+        ChatMessage(role="system", content="rules"),
+        ChatMessage(role="user", content="old request"),
+        ChatMessage(role="assistant", content="old answer"),
+        ChatMessage(role="system", content="current state"),
+        ChatMessage(role="user", content="new request"),
+    ]
+    limit = sum(len(json.dumps(message)) for message in (messages[0], messages[3], messages[4]))
+
+    assert ALlmBaseBackend.truncate_messages(messages, limit) == [
+        messages[0], messages[3], messages[4]
+    ]
+
+
+def test_truncation_bounds_oversized_current_user_message() -> None:
+    messages = [
+        ChatMessage(role="system", content="rules"),
+        ChatMessage(role="system", content="current state"),
+        ChatMessage(role="user", content="request " + "long context " * 10000 + "final detail"),
+    ]
+
+    truncated = ALlmBaseBackend.truncate_messages(messages, 6000)
+
+    assert [message["role"] for message in truncated] == ["system", "system", "user"]
+    assert truncated[-1]["content"].endswith("final detail")
+    assert truncated[-1]["content"].startswith("[Earlier user message content omitted]")
+    assert sum(len(json.dumps(message, default=str)) for message in truncated) <= 6000
+    assert messages[-1]["content"].startswith("request ")
+
+
+def test_split_prompt_trimming_keeps_newest_complete_history_turn() -> None:
+    messages = [
+        ChatMessage(role="system", content="stable rules"),
+        ChatMessage(role="user", content="older request"),
+        ChatMessage(role="assistant", content="older answer"),
+        ChatMessage(role="user", content="recent request"),
+        ChatMessage(role="assistant", content="recent answer"),
+        ChatMessage(role="system", content="current Home Assistant state"),
+        ChatMessage(role="user", content="current request"),
+    ]
+    retained = [messages[0], *messages[3:]]
+    limit = sum(len(json.dumps(message, default=str)) for message in retained)
+
+    assert ALlmBaseBackend.truncate_messages(messages, limit) == retained
+
+
+def test_split_prompt_trimming_preserves_tool_followup() -> None:
+    messages = [
+        ChatMessage(role="system", content="stable rules"),
+        ChatMessage(role="user", content="old request"),
+        ChatMessage(role="assistant", content="old answer"),
+        ChatMessage(role="system", content="current state"),
+        ChatMessage(role="user", content="long request " * 10000 + "final target"),
+        ChatMessage(
+            role="assistant", content="",
+            tool_calls=[ChatToolCall(
+                id="call_1", type="function",
+                function=ChatFunction(name="HassTurnOn", arguments={"name": "light.office"}),
+            )],
+        ),
+        ChatMessage(
+            role="tool", content='{"success": ["light.office"]}',
+            tool_call_id="call_1", tool_name="HassTurnOn",
+        ),
+    ]
+
+    truncated = ALlmBaseBackend.truncate_messages(messages, 1000)
+
+    assert [message["role"] for message in truncated] == [
+        "system", "system", "user", "assistant", "tool"
+    ]
+    assert truncated[2]["content"].endswith("final target")
+    assert truncated[3]["tool_calls"][0]["id"] == truncated[4]["tool_call_id"]
+    assert sum(len(json.dumps(message, default=str)) for message in truncated) <= 1000
+
 def test_send_chat_request(backend_case: BackendCase, hass: HomeAssistant) -> None:
     """Test chat requests for every backend."""
     backend_valid = backend_case.backend_class(hass, backend_case.user_input)

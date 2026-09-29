@@ -51,7 +51,8 @@ from custom_components.ha_ragent.src.const import (
     CONF_MAX_MEMORIES_TO_EXTRACT,
     CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
     CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
-    CONF_PROMPT,
+    CONF_RULE_PROMPT,
+    CONF_STATE_PROMPT,
     CONF_RETRIEVAL_METHOD,
     CONF_MAX_TOOL_CALL_ITERATIONS,
     DOMAIN,
@@ -65,9 +66,7 @@ from custom_components.ha_ragent.src.const import (
     TRANSLATION_PROMPT_AREAS,
     TRANSLATION_PROMPT_DEVICES,
     TRANSLATION_PROMPT_MEMORIES,
-    TRANSLATION_PROMPT_RETRIES,
     TRANSLATION_PROMPT_INSTRUCTIONS,
-    TRANSLATION_PROMPT_SEARCH_FALLBACK,
     TRANSLATION_ERROR_BACKEND,
     TRANSLATION_ERROR_MAX_RETRIES,
     TRANSLATION_ERROR_LLM_API,
@@ -156,7 +155,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         )
         return HistoryRetriever.build_continuity_context(selected)
 
-    async def _async_render_system_prompt(
+    async def _async_render_prompts(
         self,
         devices: List[Device],
         memories: List[Memory],
@@ -164,28 +163,33 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         floor_name: str | None,
         is_scheduled_request: bool = False,
         scheduled_context: ScheduledContext | None = None,
-    ) -> str | None:
-        """Render the system prompt with retrieved device context."""
-        raw_prompt = get_setting_value(CONF_PROMPT, self.runtime_options)
-
+    ) -> tuple[str, str] | None:
+        """Render stable rules and the current Home Assistant state separately."""
         try:
-            prompt_template = Template(self.build_base_prompt_template(self.entry.translations, raw_prompt), self.hass)
-            rendered_prompt = prompt_template.async_render({
+            rule_template = get_setting_value(CONF_RULE_PROMPT, self.runtime_options)
+            state_template = get_setting_value(CONF_STATE_PROMPT, self.runtime_options)
+            context = {
                 "device_list": devices,
                 "memory_list": memories,
                 "area_list": sorted({device.area_name for device in devices if device.area_name}),
                 "area_name": area_name,
                 "floor_name": floor_name,
                 "max_retries": get_setting_value(CONF_MAX_TOOL_CALL_ITERATIONS, self.runtime_options),
-            })
+            }
+            rule_prompt = Template(
+                self.build_base_prompt_template(self.entry.translations, rule_template), self.hass
+            ).async_render(context)
+            state_prompt = Template(
+                self.build_base_prompt_template(self.entry.translations, state_template), self.hass
+            ).async_render(context)
 
             if is_scheduled_request:
-                rendered_prompt += "\n\n" + self.entry.translations.prompt(TRANSLATION_PROMPT_SCHEDULED_ACTION)
+                state_prompt += "\n\n" + self.entry.translations.prompt(TRANSLATION_PROMPT_SCHEDULED_ACTION)
 
             if scheduled_context:
-                rendered_prompt += scheduled_context.prompt_context()
+                state_prompt += scheduled_context.prompt_context()
 
-            return rendered_prompt
+            return rule_prompt, state_prompt
         except Exception as err:
             _logger.log_string(logging.ERROR, f"Error rendering prompt: {err}")
             return None
@@ -574,7 +578,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                             retrieval_method=retrieval_method,
                             llm_api=llm_api,
                         )
-                    ) if llm_api and max_tools > 0 else None
+                    ) if llm_api else None
                 
                 retrieved_memories = memory_task.result() if memory_task else []
                 retrieved_devices = device_task.result() if device_task else []
@@ -614,7 +618,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                         candidates=candidate_context,
                     )
 
-                system_prompt_content = await self._async_render_system_prompt(
+                rendered_prompts = await self._async_render_prompts(
                     device_list,
                     retrieved_memories,
                     area_name=current_area_name,
@@ -622,17 +626,19 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     is_scheduled_request=is_scheduled_request,
                     scheduled_context=scheduled_context,
                 )
-                timing_logger.log_timed_string(level=logging.DEBUG, message="System prompt rendering")
+                timing_logger.log_timed_string(level=logging.DEBUG, message="Rule and state prompt rendering")
 
-                if not system_prompt_content:
+                if rendered_prompts is None:
                     intent_response = intent.IntentResponse(language=user_input.language)
                     intent_response.async_set_error(intent.IntentResponseErrorCode.UNKNOWN, self.entry.translations.error(TRANSLATION_ERROR_TEMPLATE))
                     return ConversationResult(response=intent_response, conversation_id=user_input.conversation_id)
 
+                rule_prompt_content, state_prompt_content = rendered_prompts
                 history_manager.build_prompt_history(
                     chat_log,
                     user_input,
-                    system_prompt_content,
+                    rule_prompt_content,
+                    state_prompt_content,
                     relevant_turn_keys=continuity.selected_turn_keys,
                 )
 
@@ -640,7 +646,8 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     _logger.log_payload(
                         event="conversation.size_breakdown",
                         data={
-                            "system_prompt": len(system_prompt_content),
+                            "rule_prompt": len(rule_prompt_content),
+                            "state_prompt": len(state_prompt_content),
                             "devices": len(json.dumps(
                                 [device.to_dict() for device in device_list],
                                 ensure_ascii=False,
@@ -654,7 +661,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                             "continuity_turns": len(continuity.selected_turn_keys),
                             "history": sum(
                                 len(str(getattr(message, "content", "") or ""))
-                                for message in history_manager.message_history[1:-1]
+                                for message in history_manager.message_history[1:-2]
                             ),
                         },
                     )

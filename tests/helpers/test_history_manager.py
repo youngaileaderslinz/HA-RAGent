@@ -378,6 +378,7 @@ def test_persist_keeps_successful_tool_protocol_in_prompt_and_chat_log() -> None
         chat_log,
         SimpleNamespace(text="turn it off"),
         "system prompt",
+        "current state",
     )
     manager.append_message(conversation.AssistantContent(agent_id="agent", content="Done"))
     manager.persist_chat_history(chat_log)
@@ -390,3 +391,26 @@ def test_persist_keeps_successful_tool_protocol_in_prompt_and_chat_log() -> None
     )
     assert tool_call in chat_log.content
     assert tool_result in chat_log.content
+
+
+def test_prompt_history_places_current_state_after_history() -> None:
+    manager = HistoryManager({
+        CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS: 2,
+    })
+    chat_log = SimpleNamespace(content=[
+        conversation.UserContent(content="earlier request"),
+        conversation.AssistantContent(agent_id="agent", content="earlier answer"),
+        conversation.UserContent(content="current request"),
+    ])
+
+    prompt = manager.build_prompt_history(
+        chat_log, SimpleNamespace(text="current request"), "stable rules", "current state"
+    )
+
+    assert [message.content for message in prompt] == [
+        "stable rules", "earlier request", "earlier answer", "current state", "current request"
+    ]
+    assert isinstance(prompt[0], conversation.SystemContent)
+    assert isinstance(prompt[-2], conversation.SystemContent)
+    manager.persist_chat_history(chat_log)
+    assert all(not isinstance(message, conversation.SystemContent) for message in chat_log.content)

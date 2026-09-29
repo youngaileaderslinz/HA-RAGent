@@ -177,14 +177,12 @@ class ConversationRetriever:
             if compatible:
                 tools = compatible
         return tools, scored_tools, ranking_evidence
+    
     @staticmethod
     def _required_tools(llm_api: Any) -> list[LlmTool]:
         """Build required tools from the live API; they are not embedded."""
-        # Import lazily: ToolExtractor loads the LLM API, which imports the semantic search tool.
-        from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import (
-            ToolExtractor,
-        )
-
+        # ToolExtractor imports the LLM API and search tool, so import it after module load.
+        from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
         api_tools = {
             tool.name: tool
             for tool in getattr(llm_api, "tools", ()) or ()
@@ -209,6 +207,7 @@ class ConversationRetriever:
                 metadata=ToolExtractor.extract_tool_metadata(tool, parameters),
             ))
         return result
+    
     async def async_retrieve_tools(
         self,
         embedding: list[float] | QueryEmbedding,
@@ -294,6 +293,7 @@ class ConversationRetriever:
             selected_tools=[tool.name for tool in selected],
         )
         return [*required_tools, *selected]
+    
     async def async_retrieve_memories(
         self,
         embedding: list[float] | QueryEmbedding,
