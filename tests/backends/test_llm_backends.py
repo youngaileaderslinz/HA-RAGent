@@ -441,6 +441,34 @@ def test_openai_preserves_split_prompt_order_with_late_context_as_user(hass: Hom
     ]
 
 
+def test_ollama_preserves_split_prompt_order_with_late_context_as_user(hass: HomeAssistant) -> None:
+    backend = OllamaLlmBackend(hass, MOCK_OLLAMA_CONNECTION_USER_INPUT)
+    messages = [
+        ChatMessage(role="system", content="stable rules"),
+        ChatMessage(role="user", content="earlier request"),
+        ChatMessage(role="assistant", content="earlier answer"),
+        ChatMessage(role="system", content="current state"),
+        ChatMessage(role="user", content="current request"),
+    ]
+
+    prepared = backend.format_messages_for_backend(messages)
+
+    assert [message["role"] for message in prepared] == [
+        "system", "user", "assistant", "user", "user"
+    ]
+    assert [message["content"] for message in prepared] == [
+        "stable rules", "earlier request", "earlier answer", "current state", "current request"
+    ]
+    assert messages[3] == ChatMessage(role="system", content="current state")
+
+    limit = sum(len(json.dumps(message)) for message in (messages[0], messages[3], messages[4]))
+    retried = backend.format_messages_for_backend(backend.truncate_messages(messages, limit))
+    assert [message["role"] for message in retried] == ["system", "user", "user"]
+    assert [message["content"] for message in retried] == [
+        "stable rules", "current state", "current request"
+    ]
+
+
 def test_openai_truncation_keeps_complete_turns() -> None:
     """Test that OpenAI truncation does not leave orphaned tool results."""
     messages = [
