@@ -414,3 +414,24 @@ def test_prompt_history_places_current_state_after_history() -> None:
     assert isinstance(prompt[-2], conversation.SystemContent)
     manager.persist_chat_history(chat_log)
     assert all(not isinstance(message, conversation.SystemContent) for message in chat_log.content)
+
+
+def test_prompt_history_combines_rules_and_state_before_history() -> None:
+    manager = HistoryManager({CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS: 2})
+    chat_log = SimpleNamespace(content=[
+        conversation.UserContent(content="earlier request"),
+        conversation.AssistantContent(agent_id="agent", content="earlier answer"),
+        conversation.UserContent(content="current request"),
+    ])
+
+    prompt = manager.build_prompt_history(
+        chat_log, SimpleNamespace(text="current request"), "stable rules", "current state",
+        combined_prompt=True,
+    )
+
+    assert [message.content for message in prompt] == [
+        "stable rules\n\ncurrent state", "earlier request", "earlier answer", "current request"
+    ]
+    assert sum(isinstance(message, conversation.SystemContent) for message in prompt) == 1
+    manager.persist_chat_history(chat_log)
+    assert all(not isinstance(message, conversation.SystemContent) for message in chat_log.content)
