@@ -1,7 +1,7 @@
 import re
 
 PLATFORMS = ("conversation",)
-CONFIG_FLOW_VERSION = 1
+CONFIG_FLOW_VERSION = 2
 
 #-----------------------------------------------
 # General constants

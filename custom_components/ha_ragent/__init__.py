@@ -21,6 +21,7 @@ from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor imp
 
 from custom_components.ha_ragent.src.const import (
     CONF_ALLOW_AUTO_EMBEDDING,
+    CONF_SELECTED_LANGUAGE,
     DOMAIN,
     PLATFORMS,
     
@@ -39,7 +40,8 @@ from custom_components.ha_ragent.src.backends.backends import (
     embedding_backend_to_class,
     llm_backend_to_class,
 )
-from custom_components.ha_ragent.src.utils import get_entry_language, get_setting_value
+from custom_components.ha_ragent.src.utils import get_setting_value
+from custom_components.ha_ragent.migration import async_migrate_entry
 from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 _logger = BaseLogger(__name__)
@@ -192,7 +194,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: RAGentConfigEntry):
         for subentry_id, subentry in entry.subentries.items()
     }
 
-    entry.translations = await RAGentTranslations.async_create(hass, get_entry_language(entry))
+    entry.translations = await RAGentTranslations.async_create(hass, get_setting_value(CONF_SELECTED_LANGUAGE, entry.data))
     entry.vector_db_backend = _create_vector_db_client(hass, get_setting_value(CONF_VECTOR_DB_BACKEND_TYPE, entry.data), entry)
     entry.embedder_backend = _create_embedding_client(hass, get_setting_value(CONF_EMBEDDING_BACKEND_TYPE, entry.data), entry)    
     entry.llm_backend = _create_llm_client(hass, get_setting_value(CONF_LLM_BACKEND_TYPE, entry.data), entry)
