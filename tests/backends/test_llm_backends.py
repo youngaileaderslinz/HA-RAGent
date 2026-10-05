@@ -409,7 +409,7 @@ def test_prepares_linked_tool_history(backend_case: BackendCase, hass: HomeAssis
 
     assert arguments == {"name": "Desk light"}
     assert (
-        tool_result.get("tool_call_id") == tool_call.get("id")
+        (tool_call.get("id") is not None and tool_result.get("tool_call_id") == tool_call["id"])
         or tool_result.get("tool_name") == tool_call["function"]["name"]
     )
 
@@ -589,7 +589,13 @@ def test_combined_prompt_trimming_preserves_tool_followup(
     assert [message["role"] for message in prepared] == ["system", "user", "assistant", "tool"]
     assert prepared[0]["content"] == "rules\n\ncurrent state"
     assert prepared[1]["content"].endswith("final target")
-    assert prepared[2]["tool_calls"][0]["id"] == prepared[3]["tool_call_id"]
+    assert truncated[2]["tool_calls"][0]["id"] == truncated[3]["tool_call_id"]
+    tool_call = prepared[2]["tool_calls"][0]
+    tool_result = prepared[3]
+    assert (
+        (tool_call.get("id") is not None and tool_result.get("tool_call_id") == tool_call["id"])
+        or tool_result.get("tool_name") == tool_call["function"]["name"]
+    )
     assert sum(len(json.dumps(message, default=str)) for message in truncated) <= 1000
 
 def test_send_chat_request(backend_case: BackendCase, hass: HomeAssistant) -> None:
