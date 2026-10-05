@@ -47,8 +47,7 @@ from custom_components.ha_ragent.src.const import (
     CONF_RULE_PROMPT,
     CONF_STATE_PROMPT,
     CONF_PROMPT_LAYOUT,
-    PROMPT_LAYOUT_SPLIT,
-    PROMPT_LAYOUT_COMBINED,
+    PROMPT_LAYOUT_OPTIONS,
     RETRIEVAL_METHOD_OPTIONS,
     CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
     CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
@@ -305,10 +304,8 @@ def ui_schema_config_options(
             CONF_PROMPT_LAYOUT,
             default=get_setting_value(CONF_PROMPT_LAYOUT, options),
         ): SelectSelector(SelectSelectorConfig(
-            options=[
-                SelectOptionDict(value=PROMPT_LAYOUT_SPLIT, label="Split prompt"),
-                SelectOptionDict(value=PROMPT_LAYOUT_COMBINED, label="Combined prompt"),
-            ],
+            options=PROMPT_LAYOUT_OPTIONS,
+            translation_key=CONF_PROMPT_LAYOUT,
             custom_value=False,
             multiple=False,
             mode=SelectSelectorMode.DROPDOWN,
@@ -326,11 +323,8 @@ def ui_schema_config_options(
             description={"suggested_value": get_setting_value(CONF_RETRIEVAL_METHOD, options)},
             default=get_setting_value(CONF_RETRIEVAL_METHOD, options),
         ): SelectSelector(SelectSelectorConfig(
-            options=[
-                SelectOptionDict(value="automatic", label="Automatic"),
-                SelectOptionDict(value="vector", label="Vector search"),
-                SelectOptionDict(value="lexical", label="Lexical search"),
-            ],
+            options=list(RETRIEVAL_METHOD_OPTIONS),
+            translation_key=CONF_RETRIEVAL_METHOD,
             custom_value=False,
             multiple=False,
             mode=SelectSelectorMode.DROPDOWN,

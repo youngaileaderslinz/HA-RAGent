@@ -237,6 +237,7 @@ CONF_STATE_PROMPT = "rag_state_prompt"
 CONF_PROMPT_LAYOUT = "rag_prompt_layout"
 PROMPT_LAYOUT_SPLIT = "split"
 PROMPT_LAYOUT_COMBINED = "combined"
+PROMPT_LAYOUT_OPTIONS = [PROMPT_LAYOUT_SPLIT, PROMPT_LAYOUT_COMBINED]
 
 CONF_ENABLE_MODEL_THINKING = "rag_enable_model_thinking"
 CONF_ALLOW_AUTO_EMBEDDING = "rag_allow_auto_embedding"
