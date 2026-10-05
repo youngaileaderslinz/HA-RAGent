@@ -393,7 +393,7 @@ class HistoryManager:
         """Put stable rules before history and current state before the user."""
         self._stored_chat_history = list(chat_log.content)
         self._message_history = [conversation.SystemContent(
-            content=(system_prompt_content + "\n\n" + state_prompt_content)
+            content="\n\n".join(part for part in (system_prompt_content, state_prompt_content) if part)
             if combined_prompt else system_prompt_content
         )]
         self._message_history.extend(

@@ -435,3 +435,17 @@ def test_prompt_history_combines_rules_and_state_before_history() -> None:
     assert sum(isinstance(message, conversation.SystemContent) for message in prompt) == 1
     manager.persist_chat_history(chat_log)
     assert all(not isinstance(message, conversation.SystemContent) for message in chat_log.content)
+
+
+def test_combined_prompt_with_empty_state_uses_only_legacy_prompt() -> None:
+    manager = HistoryManager({})
+    chat_log = SimpleNamespace(content=[])
+
+    prompt = manager.build_prompt_history(
+        chat_log, SimpleNamespace(text="current request"),
+        "custom legacy prompt", "", combined_prompt=True,
+    )
+
+    assert [message.content for message in prompt] == [
+        "custom legacy prompt", "current request"
+    ]
