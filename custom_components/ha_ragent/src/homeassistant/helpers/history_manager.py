@@ -388,16 +388,19 @@ class HistoryManager:
         system_prompt_content: str,
         state_prompt_content: str,
         relevant_turn_keys: set[str] | None = None,
+        combined_prompt: bool = False,
     ) -> list[conversation.Content]:
         """Put stable rules before history and current state before the user."""
         self._stored_chat_history = list(chat_log.content)
-        self._message_history = [
-            conversation.SystemContent(content=system_prompt_content)
-        ]
+        self._message_history = [conversation.SystemContent(
+            content=(system_prompt_content + "\n\n" + state_prompt_content)
+            if combined_prompt else system_prompt_content
+        )]
         self._message_history.extend(
             self.filter_prompt_history(chat_log, relevant_turn_keys)
         )
-        self._message_history.append(conversation.SystemContent(content=state_prompt_content))
+        if not combined_prompt:
+            self._message_history.append(conversation.SystemContent(content=state_prompt_content))
         self._message_history.append(conversation.UserContent(content=user_input.text))
         return self._message_history
 

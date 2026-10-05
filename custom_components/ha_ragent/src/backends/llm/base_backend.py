@@ -81,7 +81,11 @@ class ALlmBaseBackend(ABC):
              if messages[index].get("role") == "system"),
             None,
         )
-        suffix_start = state_index if state_index is not None else len(messages) - 1
+        suffix_start = state_index if state_index is not None else next(
+            (index for index in range(len(messages) - 1, prefix - 1, -1)
+             if messages[index].get("role") == "user"),
+            len(messages) - 1,
+        )
         result = [dict(message) for message in messages[:prefix]]
         suffix = [dict(message) for message in messages[suffix_start:]]
         latest_user_index = next(

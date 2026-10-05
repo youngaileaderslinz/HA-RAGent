@@ -92,6 +92,7 @@
                     "description": "Configure the model parameters and behavior for the AI RAGent.",
                     "data": {
                         "llm_hass_api": "LLM Home Assistant API",
+                        "rag_prompt_layout": "Prompt layout",
                         "rag_rule_prompt": "Rule Prompt",
                         "rag_state_prompt": "State Prompt",
                         "rag_retrieval_method": "Retrieval Method",
@@ -115,6 +116,7 @@
                         
                     },
                     "data_description": {
+                        "rag_prompt_layout": "Split sends current state after history. Combined sends rules and state in one system message before history.",
                         "rag_rule_prompt": "Stable behavior and instructions sent before conversation history.",
                         "rag_state_prompt": "Current Home Assistant context sent after history and before the user message.",
                         "rag_retrieval_method": "Choose how devices and tools are retrieved.",

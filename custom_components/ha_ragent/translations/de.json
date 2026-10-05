@@ -92,6 +92,7 @@
                     "description": "Konfigurieren Sie die Modellparameter und das Verhalten des KI-RAGent.",
                     "data": {
                         "llm_hass_api": "LLM-Home-Assistant-API",
+                        "rag_prompt_layout": "Prompt-Anordnung",
                         "rag_rule_prompt": "Regel-Prompt",
                         "rag_state_prompt": "Zustands-Prompt",
                         "rag_retrieval_method": "Abrufmethode",
@@ -114,6 +115,7 @@
                         "rag_remember_conversation_time_minutes": "Gesprächsspeicherdauer (Minuten)"
                     },
                     "data_description": {
+                        "rag_prompt_layout": "Getrennt sendet den aktuellen Zustand nach dem Verlauf. Kombiniert sendet Regeln und Zustand gemeinsam vor dem Verlauf.",
                         "rag_rule_prompt": "Stabile Regeln und Anweisungen vor dem Gesprächsverlauf.",
                         "rag_state_prompt": "Aktueller Home-Assistant-Kontext nach dem Verlauf und vor der Benutzeranfrage.",
                         "rag_retrieval_method": "Legt fest, wie Geräte und Tools gefunden werden.",

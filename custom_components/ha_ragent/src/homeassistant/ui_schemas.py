@@ -46,6 +46,9 @@ from custom_components.ha_ragent.src.const import (
     CONF_MAX_TOOL_CALL_ITERATIONS,
     CONF_RULE_PROMPT,
     CONF_STATE_PROMPT,
+    CONF_PROMPT_LAYOUT,
+    PROMPT_LAYOUT_SPLIT,
+    PROMPT_LAYOUT_COMBINED,
     RETRIEVAL_METHOD_OPTIONS,
     CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
     CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
@@ -263,12 +266,8 @@ def ui_schema_pick_models(
 
 def ui_schema_config_options(
     hass: HomeAssistant,
-    language: str,
     options: dict[str, Any],
-    vector_db_backend_type: str,
-    embedding_backend_type: str,
-    llm_backend_type: str, 
-    subentry_type: str,
+    llm_backend_type: str,
     translations: Any,
     excluded_tool_options: list[str] | None = None,
 ) -> dict:
@@ -292,7 +291,7 @@ def ui_schema_config_options(
         _logger.log_string(logging.WARNING, f"Failed to load LLM APIs: {err}")
 
     result: dict = {
-        probatio.Optional(
+        probatio.Required(
             CONF_LLM_HASS_API,
             description={"suggested_value": selected_llm_api},
             default=selected_llm_api,
@@ -302,11 +301,23 @@ def ui_schema_config_options(
             multiple=False,
             mode=SelectSelectorMode.DROPDOWN,
         )),
-        probatio.Optional(
+        probatio.Required(
+            CONF_PROMPT_LAYOUT,
+            default=get_setting_value(CONF_PROMPT_LAYOUT, options),
+        ): SelectSelector(SelectSelectorConfig(
+            options=[
+                SelectOptionDict(value=PROMPT_LAYOUT_SPLIT, label="Split prompt"),
+                SelectOptionDict(value=PROMPT_LAYOUT_COMBINED, label="Combined prompt"),
+            ],
+            custom_value=False,
+            multiple=False,
+            mode=SelectSelectorMode.DROPDOWN,
+        )),
+        probatio.Required(
             CONF_RULE_PROMPT,
             default=default_rule_prompt,
         ): TemplateSelector(),
-        probatio.Optional(
+        probatio.Required(
             CONF_STATE_PROMPT,
             default=default_state_prompt,
         ): TemplateSelector(),
@@ -324,17 +335,17 @@ def ui_schema_config_options(
             multiple=False,
             mode=SelectSelectorMode.DROPDOWN,
         )),
-        probatio.Optional(
+        probatio.Required(
             CONF_ALLOW_AUTO_EMBEDDING,
             description={"suggested_value": get_setting_value(CONF_ALLOW_AUTO_EMBEDDING, options)},
             default=get_setting_value(CONF_ALLOW_AUTO_EMBEDDING, options),
         ): BooleanSelector(BooleanSelectorConfig()),
-        probatio.Optional(
+        probatio.Required(
             CONF_ALLOW_QUESTIONS,
             description={"suggested_value": get_setting_value(CONF_ALLOW_QUESTIONS, options)},
             default=get_setting_value(CONF_ALLOW_QUESTIONS, options),
         ): BooleanSelector(BooleanSelectorConfig()),
-        probatio.Optional(
+        probatio.Required(
             CONF_TEMPERATURE,
             description={"suggested_value": get_setting_value(CONF_TEMPERATURE, options)},
             default=get_setting_value(CONF_TEMPERATURE, options),
@@ -349,12 +360,12 @@ def ui_schema_config_options(
             description={"suggested_value": get_setting_value(CONF_CONTEXT_LENGTH, options)},
             default=get_setting_value(CONF_CONTEXT_LENGTH, options),
         ): NumberSelector(NumberSelectorConfig(min=512, max=1_048_576, step=512)),
-        probatio.Optional(
+        probatio.Required(
             CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS,
             description={"suggested_value": get_setting_value(CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS, options)},
             default=get_setting_value(CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=100, mode=NumberSelectorMode.BOX)),
-        probatio.Optional(
+        probatio.Required(
             CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
             description={"suggested_value": get_setting_value(CONF_REMEMBER_CONVERSATION_TIME_MINUTES, options)},
             default=get_setting_value(CONF_REMEMBER_CONVERSATION_TIME_MINUTES, options),
@@ -364,7 +375,7 @@ def ui_schema_config_options(
             description={"suggested_value": get_setting_value(CONF_MAX_TOOL_CALL_ITERATIONS, options)},
             default=get_setting_value(CONF_MAX_TOOL_CALL_ITERATIONS, options),
         ): int,
-        probatio.Optional(
+        probatio.Required(
             CONF_ENABLE_MODEL_THINKING,
             description={"suggested_value": get_setting_value(CONF_ENABLE_MODEL_THINKING, options)},
             default=get_setting_value(CONF_ENABLE_MODEL_THINKING, options),
@@ -389,22 +400,22 @@ def ui_schema_config_options(
             description={"suggested_value": get_setting_value(CONF_MAX_TOOLS_TO_EXTRACT, options)},
             default=get_setting_value(CONF_MAX_TOOLS_TO_EXTRACT, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=50, mode=NumberSelectorMode.BOX)),
-        probatio.Optional(
+        probatio.Required(
             CONF_MIN_MEMORIES_TO_EXTRACT,
             description={"suggested_value": get_setting_value(CONF_MIN_MEMORIES_TO_EXTRACT, options)},
             default=get_setting_value(CONF_MIN_MEMORIES_TO_EXTRACT, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=20, mode=NumberSelectorMode.BOX)),
-        probatio.Optional(
+        probatio.Required(
             CONF_MAX_MEMORIES_TO_EXTRACT,
             description={"suggested_value": get_setting_value(CONF_MAX_MEMORIES_TO_EXTRACT, options)},
             default=get_setting_value(CONF_MAX_MEMORIES_TO_EXTRACT, options),
         ): NumberSelector(NumberSelectorConfig(min=0, max=20, mode=NumberSelectorMode.BOX)),
-        probatio.Optional(
+        probatio.Required(
             CONF_MAX_MEMORY_ENTRIES,
             description={"suggested_value": get_setting_value(CONF_MAX_MEMORY_ENTRIES, options)},
             default=get_setting_value(CONF_MAX_MEMORY_ENTRIES, options),
         ): NumberSelector(NumberSelectorConfig(min=1, max=10000, mode=NumberSelectorMode.BOX)),
-        probatio.Optional(
+        probatio.Required(
             CONF_EXCLUDED_TOOLS,
             default=(get_setting_value(CONF_EXCLUDED_TOOLS, options) or []),
         ): SelectSelector(SelectSelectorConfig(
@@ -421,6 +432,7 @@ def ui_schema_config_options(
     global_order = [
         # general
         CONF_LLM_HASS_API,
+        CONF_PROMPT_LAYOUT,
         CONF_RULE_PROMPT,
         CONF_STATE_PROMPT,
         CONF_ALLOW_AUTO_EMBEDDING,
