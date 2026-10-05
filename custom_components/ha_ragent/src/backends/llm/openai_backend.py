@@ -55,10 +55,12 @@ class OpenAiLlmBackend(ALlmBaseBackend):
         return isinstance(error, BadRequestError) and error.status_code == 400 and error.type == "exceed_context_size_error"
 
     def format_messages_for_backend(self, messages: List[ChatMessage]) -> List[ChatMessage]:
-        """Convert canonical history messages to OpenAI Chat Completions format."""
+        """Keep message order while sending later system context as user content."""
         prepared: List[ChatMessage] = []
         for message in messages:
             item = dict(message)
+            if item.get("role") == "system" and prepared:
+                item["role"] = "user"
             if item.get("role") == "assistant" and item.get("tool_calls"):
                 item["tool_calls"] = [
                     {
@@ -180,7 +182,9 @@ class OpenAiLlmBackend(ALlmBaseBackend):
                 request["messages"] = (
                     prepared_messages
                     if attempt == 0
-                    else self.truncate_messages(prepared_messages, max_chars)
+                    else self.format_messages_for_backend(
+                        self.truncate_messages(messages, max_chars)
+                    )
                 )
                 pending_tool_calls: Dict[int, Dict[str, str]] = {}
                 try:

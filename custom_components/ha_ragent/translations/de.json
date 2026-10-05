@@ -10,7 +10,6 @@
                     "rag_llm_backend": "LLM-Backend",
                     "rag_selected_language": "Sprache",
 
-                    "vector_db_section": "Einstellungen der Vektordatenbank",
                     "rag_vector_db_username": "Datenbank-Benutzername",
                     "rag_vector_db_password": "Datenbank-Passwort",
                     "rag_vector_db_host": "Vector-DB-Hostname",
@@ -18,19 +17,15 @@
                     "rag_vector_db_ssl": "HTTPS verwenden",
                     "rag_vector_db_name": "Datenbankname",
 
-                    "embedding_section": "Embedding-Backend-Einstellungen",
                     "rag_embedding_host": "Embedding-Hostname",
                     "rag_embedding_port": "Embedding-Port",
                     "rag_embedding_ssl": "HTTPS verwenden",
                     "rag_embedding_api_key": "Embedding-API-Schlüssel",
-                    "rag_embedding_model": "Embedding-Modell",
 
-                    "llm_section": "LLM-Backend-Einstellungen",
                     "rag_llm_host": "LLM-Hostname",
                     "rag_llm_port": "LLM-Port",
                     "rag_llm_ssl": "HTTPS verwenden",
-                    "rag_llm_api_key": "LLM-API-Schlüssel",
-                    "rag_llm_model": "LLM-Modell"
+                    "rag_llm_api_key": "LLM-API-Schlüssel"
                 },
                 "data_description": {
                     "rag_vector_db_backend": "Wählen Sie das zu verwendende Vektordatenbank-Backend aus",
@@ -43,12 +38,10 @@
                     "rag_vector_db_host": "Hostname oder IP-Adresse der Vektordatenbank",
                     "rag_vector_db_port": "Port der Vektordatenbank",
                     "rag_vector_db_ssl": "HTTPS für die Vektordatenbank aktivieren",
-                    "rag_embedding_model": "Zu verwendendes Modell für das Embedding-Backend",
                     "rag_embedding_host": "Hostname oder IP-Adresse der Embedding-API",
                     "rag_embedding_port": "Port der Embedding-API",
                     "rag_embedding_ssl": "HTTPS für das Embedding-Backend aktivieren",
                     "rag_embedding_api_key": "Optionales Bearer-Token für die Embedding-API",
-                    "rag_llm_model": "Zu verwendendes Modell für das LLM-Backend",
                     "rag_llm_host": "Hostname oder IP-Adresse der LLM-API",
                     "rag_llm_port": "Port der LLM-API",
                     "rag_llm_ssl": "HTTPS für das LLM-Backend aktivieren",
@@ -85,6 +78,10 @@
                     "data": {
                         "rag_embedding_model": "Embedding-Modell",
                         "rag_llm_model": "LLM-Modell"
+                    },
+                    "data_description": {
+                        "rag_embedding_model": "Zu verwendendes Modell für das Embedding-Backend",
+                        "rag_llm_model": "Zu verwendendes Modell für das LLM-Backend"
                     }
                 },
                 "model_parameters": {
@@ -92,6 +89,7 @@
                     "description": "Konfigurieren Sie die Modellparameter und das Verhalten des KI-RAGent.",
                     "data": {
                         "llm_hass_api": "LLM-Home-Assistant-API",
+                        "rag_prompt_layout": "Prompt-Anordnung",
                         "rag_rule_prompt": "Regel-Prompt",
                         "rag_state_prompt": "Zustands-Prompt",
                         "rag_retrieval_method": "Abrufmethode",
@@ -114,6 +112,7 @@
                         "rag_remember_conversation_time_minutes": "Gesprächsspeicherdauer (Minuten)"
                     },
                     "data_description": {
+                        "rag_prompt_layout": "Getrennt sendet den aktuellen Zustand nach dem Verlauf. Kombiniert sendet Regeln und Zustand gemeinsam vor dem Verlauf.",
                         "rag_rule_prompt": "Stabile Regeln und Anweisungen vor dem Gesprächsverlauf.",
                         "rag_state_prompt": "Aktueller Home-Assistant-Kontext nach dem Verlauf und vor der Benutzeranfrage.",
                         "rag_retrieval_method": "Legt fest, wie Geräte und Tools gefunden werden.",
@@ -193,9 +192,15 @@
         }
     },
     "selector": {
+        "rag_prompt_layout": {
+            "options": {
+                "split": "Getrennter Prompt (Default)",
+                "combined": "Kombinierter Prompt"
+            }
+        },
         "rag_retrieval_method": {
             "options": {
-                "automatic": "Automatisch",
+                "automatic": "Automatisch (Default)",
                 "vector": "Vektorsuche",
                 "lexical": "Textsuche"
             }
@@ -204,24 +209,24 @@
             "options": {
                 "mongodb": "MongoDB",
                 "chromadb": "ChromaDB",
-                "faiss": "FAISS (Lokale DB)"
+                "faiss": "FAISS (Lokale DB) (Default)"
             }
         },
         "rag_embedding_backend": {
             "options": {
-                "ollama": "Ollama",
+                "ollama": "Ollama (Default)",
                 "openai_compatible": "OpenAI Compatible"
             }
         },
         "rag_llm_backend": {
             "options": {
-                "ollama": "Ollama",
+                "ollama": "Ollama (Default)",
                 "openai_compatible": "OpenAI Compatible"
             }
         },
         "rag_selected_language": {
             "options": {
-                "en": "Englisch",
+                "en": "Englisch (Default)",
                 "de": "Deutsch"
             }
         }

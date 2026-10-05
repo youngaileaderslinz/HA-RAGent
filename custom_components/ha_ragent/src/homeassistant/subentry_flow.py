@@ -15,8 +15,6 @@ from custom_components.ha_ragent.src.backends.embedder.base_backend import ABase
 from custom_components.ha_ragent.src.backends.llm.base_backend import ALlmBaseBackend
 
 from custom_components.ha_ragent.src.const import (
-    CONF_VECTOR_DB_BACKEND_TYPE,
-    CONF_EMBEDDING_BACKEND_TYPE,
     CONF_LLM_BACKEND_TYPE,
     CONF_EMBEDDING_MODEL,
     CONF_LLM_MODEL,
@@ -35,7 +33,7 @@ from custom_components.ha_ragent.src.const import (
 )
 
 from custom_components.ha_ragent.src.utils import (
-    get_entry_language, try_parse_int, get_setting_value
+    try_parse_int, get_setting_value
 )
 
 from custom_components.ha_ragent.src.homeassistant.ui_schemas import (
@@ -128,12 +126,8 @@ class RagentSubentryFlowHandler(ConfigSubentryFlow):
 
         schema = ui_schema_config_options(
                 self.hass,
-                get_entry_language(entry),
                 self.model_config,
-                get_setting_value(CONF_VECTOR_DB_BACKEND_TYPE, entry.data),
-                get_setting_value(CONF_EMBEDDING_BACKEND_TYPE, entry.data),
                 get_setting_value(CONF_LLM_BACKEND_TYPE, entry.data),
-                self._subentry_type,
                 entry.translations,
                 list(excluded_tool_names),
             )

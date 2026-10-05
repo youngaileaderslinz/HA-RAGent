@@ -142,10 +142,12 @@ class OllamaLlmBackend(ALlmBaseBackend):
         return available
 
     def format_messages_for_backend(self, messages: List[ChatMessage]) -> List[ChatMessage]:
-        """Convert canonical history messages to Ollama chat format."""
+        """Keep message order while sending later system context as user content."""
         prepared: List[ChatMessage] = []
         for message in messages:
             item = dict(message)
+            if item.get("role") == "system" and prepared:
+                item["role"] = "user"
             if item.get("role") == "assistant" and item.get("tool_calls"):
                 item["tool_calls"] = [
                     {

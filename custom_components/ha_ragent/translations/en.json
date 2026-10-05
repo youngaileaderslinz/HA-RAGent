@@ -10,7 +10,6 @@
                     "rag_llm_backend": "LLM backend",
                     "rag_selected_language": "Language",
 
-                    "vector_db_section": "Vector Database Settings",
                     "rag_vector_db_username": "Database Username",
                     "rag_vector_db_password": "Database Password",
                     "rag_vector_db_host": "Vector DB Hostname",
@@ -18,19 +17,15 @@
                     "rag_vector_db_ssl": "Use HTTPS",
                     "rag_vector_db_name": "Database Name",
 
-                    "embedding_section": "Embedding Backend Settings",
                     "rag_embedding_host": "Embedding Hostname",
                     "rag_embedding_port": "Embedding Port",
                     "rag_embedding_ssl": "Use HTTPS",
                     "rag_embedding_api_key": "Embedding API Key",
-                    "rag_embedding_model": "Embedding Model",
 
-                    "llm_section": "LLM Backend Settings",
                     "rag_llm_host": "LLM Hostname",
                     "rag_llm_port": "LLM Port",
                     "rag_llm_ssl": "Use HTTPS",
-                    "rag_llm_api_key": "LLM API Key",
-                    "rag_llm_model": "LLM Model"
+                    "rag_llm_api_key": "LLM API Key"
                     },
                 "data_description": {
                     "rag_vector_db_backend": "Choose which vector database backend to use",
@@ -43,12 +38,10 @@
                     "rag_vector_db_host": "Hostname or IP for the vector database",
                     "rag_vector_db_port": "Port for the vector database",
                     "rag_vector_db_ssl": "Enable HTTPS for vector database",
-                    "rag_embedding_model": "Model to use with the embedding backend",
                     "rag_embedding_host": "Hostname or IP for embedding API",
                     "rag_embedding_port": "Port for embedding API",
                     "rag_embedding_ssl": "Enable HTTPS for embedding backend",
                     "rag_embedding_api_key": "Optional bearer token for embedding API",
-                    "rag_llm_model": "Model to use with the LLM backend",
                     "rag_llm_host": "Hostname or IP for LLM API",
                     "rag_llm_port": "Port for LLM API",
                     "rag_llm_ssl": "Enable HTTPS for LLM backend",
@@ -85,6 +78,10 @@
                     "data": {
                         "rag_embedding_model": "Embedding Model",
                         "rag_llm_model": "LLM Model"
+                    },
+                    "data_description": {
+                        "rag_embedding_model": "Model to use with the embedding backend",
+                        "rag_llm_model": "Model to use with the LLM backend"
                     }
                 },
                 "model_parameters": {
@@ -92,6 +89,7 @@
                     "description": "Configure the model parameters and behavior for the AI RAGent.",
                     "data": {
                         "llm_hass_api": "LLM Home Assistant API",
+                        "rag_prompt_layout": "Prompt layout",
                         "rag_rule_prompt": "Rule Prompt",
                         "rag_state_prompt": "State Prompt",
                         "rag_retrieval_method": "Retrieval Method",
@@ -115,6 +113,7 @@
                         
                     },
                     "data_description": {
+                        "rag_prompt_layout": "Split sends current state after history. Combined sends rules and state in one system message before history.",
                         "rag_rule_prompt": "Stable behavior and instructions sent before conversation history.",
                         "rag_state_prompt": "Current Home Assistant context sent after history and before the user message.",
                         "rag_retrieval_method": "Choose how devices and tools are retrieved.",
@@ -194,9 +193,15 @@
         }
     },
     "selector": {
+        "rag_prompt_layout": {
+            "options": {
+                "split": "Split prompt (Default)",
+                "combined": "Combined prompt"
+            }
+        },
         "rag_retrieval_method": {
             "options": {
-                "automatic": "Automatic",
+                "automatic": "Automatic (Default)",
                 "vector": "Vector search",
                 "lexical": "Lexical search"
             }
@@ -205,24 +210,24 @@
             "options": {
                 "mongodb": "MongoDB",
                 "chromadb": "ChromaDB",
-                "faiss": "FAISS (Local DB)"
+                "faiss": "FAISS (Local DB) (Default)"
             }
         },
         "rag_embedding_backend": {
             "options": {
-                "ollama": "Ollama",
+                "ollama": "Ollama (Default)",
                 "openai_compatible": "OpenAI Compatible"
             }
         },
         "rag_llm_backend": {
             "options": {
-                "ollama": "Ollama",
+                "ollama": "Ollama (Default)",
                 "openai_compatible": "OpenAI Compatible"
             }
         },
         "rag_selected_language": {
             "options": {
-                "en": "English",
+                "en": "English (Default)",
                 "de": "German"
             }
         }

@@ -53,6 +53,8 @@ from custom_components.ha_ragent.src.const import (
     CONF_REMEMBER_CONVERSATION_TIME_MINUTES,
     CONF_RULE_PROMPT,
     CONF_STATE_PROMPT,
+    CONF_PROMPT_LAYOUT,
+    PROMPT_LAYOUT_COMBINED,
     CONF_RETRIEVAL_METHOD,
     CONF_MAX_TOOL_CALL_ITERATIONS,
     DOMAIN,
@@ -640,6 +642,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     rule_prompt_content,
                     state_prompt_content,
                     relevant_turn_keys=continuity.selected_turn_keys,
+                    combined_prompt=get_setting_value(CONF_PROMPT_LAYOUT, self.runtime_options) == PROMPT_LAYOUT_COMBINED,
                 )
 
                 if _logger.is_enabled_for(TRACE):
@@ -661,7 +664,9 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                             "continuity_turns": len(continuity.selected_turn_keys),
                             "history": sum(
                                 len(str(getattr(message, "content", "") or ""))
-                                for message in history_manager.message_history[1:-2]
+                                for message in history_manager.message_history[
+                                    1:-1 if get_setting_value(CONF_PROMPT_LAYOUT, self.runtime_options) == PROMPT_LAYOUT_COMBINED else -2
+                                ]
                             ),
                         },
                     )

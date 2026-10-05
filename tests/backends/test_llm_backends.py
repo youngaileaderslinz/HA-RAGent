@@ -409,9 +409,65 @@ def test_prepares_linked_tool_history(backend_case: BackendCase, hass: HomeAssis
 
     assert arguments == {"name": "Desk light"}
     assert (
-        tool_result.get("tool_call_id") == tool_call.get("id")
+        (tool_call.get("id") is not None and tool_result.get("tool_call_id") == tool_call["id"])
         or tool_result.get("tool_name") == tool_call["function"]["name"]
     )
+
+def test_openai_preserves_split_prompt_order_with_late_context_as_user(hass: HomeAssistant) -> None:
+    backend = OpenAiLlmBackend(hass, MOCK_OPENAI_CONNECTION_USER_INPUT)
+    messages = [
+        ChatMessage(role="system", content="stable rules"),
+        ChatMessage(role="user", content="earlier request"),
+        ChatMessage(role="assistant", content="earlier answer"),
+        ChatMessage(role="system", content="current state"),
+        ChatMessage(role="user", content="current request"),
+    ]
+
+    prepared = backend.format_messages_for_backend(messages)
+
+    assert [message["role"] for message in prepared] == [
+        "system", "user", "assistant", "user", "user"
+    ]
+    assert [message["content"] for message in prepared] == [
+        "stable rules", "earlier request", "earlier answer", "current state", "current request"
+    ]
+    assert messages[3] == ChatMessage(role="system", content="current state")
+
+    limit = sum(len(json.dumps(message)) for message in (messages[0], messages[3], messages[4]))
+    retried = backend.format_messages_for_backend(backend.truncate_messages(messages, limit))
+    assert [message["role"] for message in retried] == ["system", "user", "user"]
+    assert [message["content"] for message in retried] == [
+        "stable rules", "current state", "current request"
+    ]
+
+
+def test_ollama_preserves_split_prompt_order_with_late_context_as_user(hass: HomeAssistant) -> None:
+    backend = OllamaLlmBackend(hass, MOCK_OLLAMA_CONNECTION_USER_INPUT)
+    messages = [
+        ChatMessage(role="system", content="stable rules"),
+        ChatMessage(role="user", content="earlier request"),
+        ChatMessage(role="assistant", content="earlier answer"),
+        ChatMessage(role="system", content="current state"),
+        ChatMessage(role="user", content="current request"),
+    ]
+
+    prepared = backend.format_messages_for_backend(messages)
+
+    assert [message["role"] for message in prepared] == [
+        "system", "user", "assistant", "user", "user"
+    ]
+    assert [message["content"] for message in prepared] == [
+        "stable rules", "earlier request", "earlier answer", "current state", "current request"
+    ]
+    assert messages[3] == ChatMessage(role="system", content="current state")
+
+    limit = sum(len(json.dumps(message)) for message in (messages[0], messages[3], messages[4]))
+    retried = backend.format_messages_for_backend(backend.truncate_messages(messages, limit))
+    assert [message["role"] for message in retried] == ["system", "user", "user"]
+    assert [message["content"] for message in retried] == [
+        "stable rules", "current state", "current request"
+    ]
+
 
 def test_openai_truncation_keeps_complete_turns() -> None:
     """Test that OpenAI truncation does not leave orphaned tool results."""
@@ -503,6 +559,43 @@ def test_split_prompt_trimming_preserves_tool_followup() -> None:
     ]
     assert truncated[2]["content"].endswith("final target")
     assert truncated[3]["tool_calls"][0]["id"] == truncated[4]["tool_call_id"]
+    assert sum(len(json.dumps(message, default=str)) for message in truncated) <= 1000
+
+
+@pytest.mark.parametrize("backend_class,connection", [
+    (OpenAiLlmBackend, MOCK_OPENAI_CONNECTION_USER_INPUT),
+    (OllamaLlmBackend, MOCK_OLLAMA_CONNECTION_USER_INPUT),
+])
+def test_combined_prompt_trimming_preserves_tool_followup(
+    backend_class, connection, hass: HomeAssistant,
+) -> None:
+    backend = backend_class(hass, connection)
+    messages = [
+        ChatMessage(role="system", content="rules\n\ncurrent state"),
+        ChatMessage(role="user", content="older request"),
+        ChatMessage(role="assistant", content="older answer"),
+        ChatMessage(role="user", content="long request " * 10000 + "final target"),
+        ChatMessage(role="assistant", content="", tool_calls=[ChatToolCall(
+            id="call_1", type="function",
+            function=ChatFunction(name="HassTurnOn", arguments={"name": "light.office"}),
+        )]),
+        ChatMessage(role="tool", content='{"success": ["light.office"]}',
+                    tool_call_id="call_1", tool_name="HassTurnOn"),
+    ]
+
+    truncated = backend.truncate_messages(messages, 1000)
+    prepared = backend.format_messages_for_backend(truncated)
+
+    assert [message["role"] for message in prepared] == ["system", "user", "assistant", "tool"]
+    assert prepared[0]["content"] == "rules\n\ncurrent state"
+    assert prepared[1]["content"].endswith("final target")
+    assert truncated[2]["tool_calls"][0]["id"] == truncated[3]["tool_call_id"]
+    tool_call = prepared[2]["tool_calls"][0]
+    tool_result = prepared[3]
+    assert (
+        (tool_call.get("id") is not None and tool_result.get("tool_call_id") == tool_call["id"])
+        or tool_result.get("tool_name") == tool_call["function"]["name"]
+    )
     assert sum(len(json.dumps(message, default=str)) for message in truncated) <= 1000
 
 def test_send_chat_request(backend_case: BackendCase, hass: HomeAssistant) -> None:

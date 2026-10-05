@@ -1,7 +1,7 @@
 import socket
 from typing import Any
 
-from custom_components.ha_ragent.src.const import CONF_SELECTED_LANGUAGE, DEFAULT_SETTINGS
+from custom_components.ha_ragent.src.const import DEFAULT_SETTINGS
 
 
 def get_value(value: object, default: object) -> object:
@@ -20,12 +20,6 @@ def try_parse_int(value: str, default: int = 0) -> int:
 def get_setting_value(setting_key: str, settings: dict) -> Any:
     """Return a configured setting or its default value."""
     return settings[setting_key] if setting_key in settings else DEFAULT_SETTINGS.get(setting_key)
-
-
-def get_entry_language(entry: Any) -> str:
-    """Return the entry language, preferring current data over legacy options."""
-    settings = {**(getattr(entry, "options", {}) or {}), **(getattr(entry, "data", {}) or {})}
-    return get_setting_value(CONF_SELECTED_LANGUAGE, settings)
 
 
 def is_valid_host(host: str) -> bool:
