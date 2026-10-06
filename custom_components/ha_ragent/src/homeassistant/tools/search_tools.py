@@ -229,20 +229,11 @@ class RAGentSemanticSearchTool(llm.Tool):
 
 
     async def _validate_queries(self, tool_input: llm.ToolInput) -> list[str]:
-        """Keep explicit intents isolated; retain legacy single-query context."""
+        """Use model search intents; fall back to turn context when absent."""
         queries = self._model_search_queries(tool_input)
-        if "search_queries" in tool_input.tool_args:
+        if queries:
             return [query[:RAGENT_MAX_SEARCH_QUERY_CHARS] for query in queries]
-        if not queries:
-            return [self._contextual_query] if self._contextual_query else []
-        return [
-            "\n".join(
-                section
-                for section in (f"Search intent: {query}", self._contextual_query)
-                if section
-            )[:RAGENT_MAX_SEARCH_QUERY_CHARS].strip()
-            for query in queries
-        ]
+        return [self._contextual_query] if self._contextual_query else []
 
     @staticmethod
     def _merge_query_candidates(
@@ -310,33 +301,25 @@ class RAGentSemanticSearchTool(llm.Tool):
         return cache[key]
 
     def _device_search_query(
-        self, model_search_query: str, fallback_query: str, *, focused: bool = False,
+        self, model_search_query: str, fallback_query: str,
     ) -> str:
-        """Search a focused target without adding unrelated tasks."""
-        if focused:
-            return model_search_query[:RAGENT_MAX_SEARCH_QUERY_CHARS]
-        return self._latest_request or model_search_query or fallback_query
+        """Search the requested target, using context only as a fallback."""
+        return (model_search_query or fallback_query)[:RAGENT_MAX_SEARCH_QUERY_CHARS]
 
     def _tool_search_query(
         self,
         model_search_query: str,
         devices: list[Device | dict[str, object]],
         requested_capability: object = None,
-        *,
-        focused: bool = False,
+        fallback_query: str = "",
     ) -> str:
-        """Build tool intent independently from the natural-language target."""
-        if requested_capability:
-            return ToolRanker.build_tool_search_query(
-                self._latest_request, model_search_query, (), requested_capability,
-            )[:RAGENT_MAX_SEARCH_QUERY_CHARS]
-        if focused:
-            return model_search_query[:RAGENT_MAX_SEARCH_QUERY_CHARS]
+        """Search the requested operation with any declared capability."""
         return ToolRanker.build_tool_search_query(
-            self._latest_request,
-            model_search_query,
+            model_search_query or fallback_query,
+            "",
             devices,
-        )
+            requested_capability,
+        )[:RAGENT_MAX_SEARCH_QUERY_CHARS]
 
     @staticmethod
     def _tool_search_feedback(
@@ -435,7 +418,6 @@ class RAGentSemanticSearchTool(llm.Tool):
         devices: list[dict[str, object]] = []
         tools: list[dict[str, object]] = []
         errors: list[str] = []
-        focused = "search_queries" in tool_input.tool_args
         device_queries: list[str] = []
         device_candidate_batches: list[list[dict[str, object]]] = [[] for _ in queries]
         result_tool_limit = 0
@@ -467,7 +449,7 @@ class RAGentSemanticSearchTool(llm.Tool):
                         else (requested_capabilities[0] if len(requested_capabilities) == 1 else {})
                     )
                     options = {**(getattr(entry, "options", {}) or {}), **subentry.data}
-                    device_query = self._device_search_query(model_query, queries[query_index], focused=focused)
+                    device_query = self._device_search_query(model_query, queries[query_index])
                     if search_devices:
                         device_queries.append(device_query)
                     device_embedding = self._shared_query_embedding(
@@ -487,7 +469,7 @@ class RAGentSemanticSearchTool(llm.Tool):
                     if search_tools and tool_limit > 0:
                         tool_query = self._tool_search_query(
                             model_query, query_devices, requested_capability,
-                            focused=focused,
+                            fallback_query=queries[query_index],
                         )
                         tool_queries.append(tool_query)
                         tool_embedding = self._shared_query_embedding(

@@ -51,10 +51,7 @@ def test_model_search_query_can_search_outside_user_request() -> None:
         tool_args={"search_query": "find a ventilation control tool"},
     )))
 
-    assert queries == [
-        "Search intent: find a ventilation control tool\n"
-        "turn off the light strip\nGuest Bedroom\n2nd Floor\nlight.strip | Light Strip"
-    ]
+    assert queries == ["find a ventilation control tool"]
 
 
 def test_user_context_is_fallback_without_model_search_query() -> None:
@@ -150,7 +147,7 @@ def test_contextual_fallback_includes_trusted_location() -> None:
     assert queries == ["turn off the lights\nKitchen\nGround floor"]
 
 
-def test_device_search_ignores_model_guessed_concepts() -> None:
+def test_device_search_uses_explicit_model_query() -> None:
     tool = _search_tool()
     tool.set_search_context(latest_request="turn on the bathroom lights")
 
@@ -159,9 +156,22 @@ def test_device_search_ignores_model_guessed_concepts() -> None:
         "fallback query",
     )
 
-    assert query == "turn on the bathroom lights"
+    assert query == "lights bathroom area switch"
 
 
+def test_tool_search_uses_explicit_model_query_with_capability() -> None:
+    tool = _search_tool()
+    tool.set_search_context(latest_request="turn off the bedroom lights")
+
+    query = tool._tool_search_query(
+        "set kitchen fan speed", [],
+        {"action": "fan_set_speed", "domain": "fan"},
+        fallback_query="turn off the bedroom lights",
+    )
+
+    assert query.startswith("set kitchen fan speed\n")
+    assert "fan_set_speed" in query
+    assert "bedroom" not in query
 
 
 class _FakeEmbedder:
@@ -173,7 +183,7 @@ class _FakeEmbedder:
         return [1.0, 0.0]
 
 
-@pytest.mark.parametrize("mode,calls", [("automatic", 2), ("vector", 2), ("lexical", 0)])
+@pytest.mark.parametrize("mode,calls", [("automatic", 1), ("vector", 1), ("lexical", 0)])
 def test_combined_corrective_search_keeps_retrieval_independent_and_location_aliases(mode, calls):
     from custom_components.ha_ragent.src.homeassistant.helpers.message_helper import MessageHelper
 
@@ -211,7 +221,10 @@ def test_combined_corrective_search_keeps_retrieval_independent_and_location_ali
     assert len(embedder.queries) == calls
     if calls:
         assert len(vectors) == 2
-        assert vectors[0] is not vectors[1]
+        assert vectors[0] is vectors[1]
+        assert embedder.queries == ["Ventilator starten"]
+    assert result["device_search_query"] == "Ventilator starten"
+    assert result["tool_search_query"] == "Ventilator starten"
     assert result["candidate_devices"][0]["name"] == device.id
     assert result["candidate_tools"][0]["name"] == capability.name
     compact = MessageHelper._compact_candidate_devices(result["candidate_devices"])
