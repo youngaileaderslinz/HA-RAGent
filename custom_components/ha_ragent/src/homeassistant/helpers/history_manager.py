@@ -203,7 +203,7 @@ class HistoryManager:
 
             for message in turn:
                 if isinstance(message, conversation.ToolResultContent):
-                    result = getattr(message, "tool_result", None)
+                    result = MessageHelper.tool_result_data(message)
                     execution_status = result.get("execution_status") if isinstance(result, dict) else None
                     if isinstance(execution_status, dict):
                         self._add_values(actions, execution_status.get("executed_capability"))
@@ -348,7 +348,7 @@ class HistoryManager:
             successful_tool_names: set[str] = set()
             for message in turn:
                 if isinstance(message, conversation.ToolResultContent) and MessageHelper.tool_result_succeeded(
-                    getattr(message, "tool_result", None)
+                    MessageHelper.tool_result_data(message)
                 ):
                     call_id = str(getattr(message, "tool_call_id", "") or "")
                     if call_id:
@@ -375,7 +375,7 @@ class HistoryManager:
                         ))
                 elif (
                     isinstance(message, conversation.ToolResultContent)
-                    and MessageHelper.tool_result_succeeded(getattr(message, "tool_result", None))
+                    and MessageHelper.tool_result_succeeded(MessageHelper.tool_result_data(message))
                 ):
                     prompt_history.append(message)
 

@@ -1,4 +1,5 @@
 import json
+from dataclasses import dataclass
 from unittest.mock import Mock
 
 from custom_components.ha_ragent.src.homeassistant.helpers import (
@@ -7,6 +8,20 @@ from custom_components.ha_ragent.src.homeassistant.helpers import (
 from custom_components.ha_ragent.src.homeassistant.helpers.tool_helper import ToolHelper
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
+
+
+def test_parse_current_home_assistant_tool_result(monkeypatch) -> None:
+    @dataclass
+    class ToolResult:
+        data: dict
+        error: bool = False
+
+    monkeypatch.setattr(tool_helper_module.llm, "ToolResult", ToolResult, raising=False)
+
+    assert ToolHelper.parse_tool_results(ToolResult({"devices": []})) == {"devices": []}
+    assert ToolHelper.parse_tool_results(
+        ToolResult({"error": "unavailable"}, error=True)
+    ) == {"error": "unavailable", "success": False}
 
 
 def test_failed_target_candidates_excludes_unattempted_candidates() -> None:

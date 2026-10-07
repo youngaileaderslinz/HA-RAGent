@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Tuple
 
 from homeassistant.core import HomeAssistant, JsonObjectType
 from homeassistant.helpers.llm import ToolInput
-from homeassistant.helpers import area_registry, device_registry, entity_registry, floor_registry
+from homeassistant.helpers import area_registry, device_registry, entity_registry, floor_registry, llm
 from homeassistant.helpers.entity_registry import RegistryEntry as EntityEntry
 
 from custom_components.ha_ragent.src.const import (
@@ -344,6 +344,12 @@ class ToolHelper:
     @staticmethod
     def parse_tool_results(tool_result: JsonObjectType) -> Dict[str, Any]:
         """Parse tool results from LLM response."""
+        tool_result_type = getattr(llm, "ToolResult", None)
+        if tool_result_type is not None and isinstance(tool_result, tool_result_type):
+            data = tool_result.data
+            if tool_result.error and isinstance(data, dict):
+                data = {**data, "success": False}
+            tool_result = data
         if not isinstance(tool_result, dict):
             return {"result": tool_result}
 

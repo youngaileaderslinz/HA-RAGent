@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from homeassistant.components import conversation
+from homeassistant.helpers import llm
 
 from custom_components.ha_ragent.src.const import (
     RAGENT_SEMANTIC_SEARCH_TOOL_NAME,
@@ -18,6 +19,33 @@ from custom_components.ha_ragent.src.models.chat.chat_message import (
 
 
 class MessageHelper:
+    @staticmethod
+    def tool_result_data(message: conversation.ToolResultContent) -> object:
+        """Read tool data from either Home Assistant conversation format."""
+        result = getattr(message, "result", None)
+        return result.data if result is not None else message.tool_result
+
+    @staticmethod
+    def _tool_result_content(
+        agent_id: str | None,
+        tool_call_id: str | None,
+        tool_name: str,
+        data: object,
+        *,
+        error: bool = False,
+    ) -> conversation.ToolResultContent:
+        """Build a result for both legacy and current Home Assistant Core."""
+        kwargs = {
+            "agent_id": agent_id,
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+        }
+        if "result" in conversation.ToolResultContent.__dataclass_fields__:
+            return conversation.ToolResultContent(
+                **kwargs, result=llm.ToolResult(data=data, error=error)
+            )
+        return conversation.ToolResultContent(**kwargs, tool_result=data)
+
     @staticmethod
     def _is_semantic_search(tool_name: str) -> bool:
         return str(tool_name or "").rsplit("__", 1)[-1] == RAGENT_SEMANTIC_SEARCH_TOOL_NAME
@@ -165,11 +193,9 @@ class MessageHelper:
         if MessageHelper._is_semantic_search(tool_name):
             reused_result = dict(previous_result) if isinstance(previous_result, dict) else {"result": previous_result}
             reused_result["reused"] = True
-            return conversation.ToolResultContent(
-                agent_id=agent_id,
-                tool_call_id=tool_call_id,
-                tool_name=tool_name,
-                tool_result=MessageHelper.compact_tool_result_value(tool_name, reused_result),
+            return MessageHelper._tool_result_content(
+                agent_id, tool_call_id, tool_name,
+                MessageHelper.compact_tool_result_value(tool_name, reused_result),
             )
 
         success_value = previous_result.get("success")
@@ -185,12 +211,7 @@ class MessageHelper:
             if result["success"] is False and error_key in previous_result:
                 result[error_key] = previous_result[error_key]
 
-        return conversation.ToolResultContent(
-            agent_id=agent_id,
-            tool_call_id=tool_call_id,
-            tool_name=tool_name,
-            tool_result=result
-        )
+        return MessageHelper._tool_result_content(agent_id, tool_call_id, tool_name, result)
 
     @staticmethod
     def create_tool_result_message(
@@ -200,11 +221,9 @@ class MessageHelper:
         result: object,
     ) -> conversation.ToolResultContent:
         """Create a tool-result message for a successful tool call."""
-        return conversation.ToolResultContent(
-            agent_id=agent_id,
-            tool_call_id=tool_call_id,
-            tool_name=tool_name,
-            tool_result=MessageHelper.compact_tool_result_value(tool_name, result),
+        return MessageHelper._tool_result_content(
+            agent_id, tool_call_id, tool_name,
+            MessageHelper.compact_tool_result_value(tool_name, result),
         )
 
     @staticmethod
@@ -244,11 +263,8 @@ class MessageHelper:
             error=error_value,
         )
         
-        return conversation.ToolResultContent(
-            agent_id=agent_id,
-            tool_call_id=tool_call_id,
-            tool_name=tool_name,
-            tool_result=failure,
+        return MessageHelper._tool_result_content(
+            agent_id, tool_call_id, tool_name, failure, error=True,
         )
 
     @staticmethod
@@ -288,7 +304,7 @@ class MessageHelper:
                     role="tool",
                     content=MessageHelper.compact_tool_result_value(
                         message.tool_name,
-                        message.tool_result,
+                        MessageHelper.tool_result_data(message),
                     ),
                     tool_name=message.tool_name
                 )
