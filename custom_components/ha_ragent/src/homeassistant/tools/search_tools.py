@@ -360,7 +360,7 @@ class RAGentSemanticSearchTool(llm.Tool):
             "device_class": device.device_class,
             "aliases": device.aliases or [],
             "state": state.state if state else None,
-            "attributes": Device.clean_attributes(state.attributes) if state else {},
+            "attributes": Device.clean_attributes(device.domain, state.attributes) if state else {},
             "unit_of_measurement": (
                 state.attributes.get("unit_of_measurement")
                 if state

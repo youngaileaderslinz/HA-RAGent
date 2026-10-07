@@ -210,7 +210,9 @@ def test_combined_corrective_search_keeps_retrieval_independent_and_location_ali
     subentry = SimpleNamespace(data={}, title="Test")
     search = _search_tool()
     search.hass = Mock()
-    search.hass.states.get.return_value = None
+    search.hass.states.get.return_value = SimpleNamespace(
+        state="on", attributes={"speed": "high"},
+    )
     search._iter_searchable_entries = lambda: iter([(entry, "subentry", subentry, 2, 2, 2, 2)])
     search.set_search_context(latest_request="in der Küche lüften")
     result = asyncio.run(search.async_call(SimpleNamespace(tool_args={
@@ -226,6 +228,7 @@ def test_combined_corrective_search_keeps_retrieval_independent_and_location_ali
     assert result["device_search_query"] == "Ventilator starten"
     assert result["tool_search_query"] == "Ventilator starten"
     assert result["candidate_devices"][0]["name"] == device.id
+    assert result["candidate_devices"][0]["attributes"] == {"speed": "high"}
     assert result["candidate_tools"][0]["name"] == capability.name
     compact = MessageHelper._compact_candidate_devices(result["candidate_devices"])
     assert "area_aliases" not in compact[0]
