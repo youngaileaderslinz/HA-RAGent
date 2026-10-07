@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 from custom_components.ha_ragent.src.const import TOOL_RESULT_MAX_ITEMS, TOOL_RESULT_MAX_TEXT
@@ -19,6 +20,35 @@ def test_create_tool_failure_message() -> None:
         "tool": "HassTurnOn",
         "error": "failed",
     }
+
+
+def test_current_home_assistant_tool_result_format(monkeypatch) -> None:
+    @dataclass
+    class ToolResult:
+        data: object
+        error: bool = False
+
+    @dataclass
+    class ToolResultContent:
+        agent_id: str
+        tool_call_id: str
+        tool_name: str
+        result: ToolResult
+
+    monkeypatch.setattr(conversation, "ToolResultContent", ToolResultContent)
+    monkeypatch.setattr("custom_components.ha_ragent.src.homeassistant.helpers.message_helper.llm.ToolResult", ToolResult, raising=False)
+
+    search = MessageHelper.create_tool_result_message(
+        "agent", "call-1", "ha_ragent__HassSemanticSearch", {"devices": []},
+    )
+    assert search.result.data["result_type"] == "candidate_search"
+    assert MessageHelper.message_to_chat_messages([search])[0]["content"] == search.result.data
+
+    failure = MessageHelper.create_tool_failure_message(
+        "agent", "call-2", "HassTurnOn", RuntimeError("failed"),
+    )
+    assert failure.result.error is True
+    assert MessageHelper.tool_result_data(failure)["success"] is False
 
 def test_compact_tool_result_value_labels_semantic_search_candidates() -> None:
     search = conversation.ToolResultContent(
