@@ -5,6 +5,7 @@ import json
 import logging
 from typing import Any, List, Tuple
 
+from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
 from custom_components.ha_ragent.src.homeassistant.helpers.history_retriever import HistoryRetriever
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from custom_components.ha_ragent.src.logging.timing_logger import TimingLogger
@@ -410,7 +411,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                         name for name in discovered_names if name not in exposed_tool_names
                                     ]
                                     added_tools = self._exclude_prohibited_scheduled_request_tools(
-                                        ConversationRetriever.tools_from_api(llm_api, missing_names),
+                                        ToolExtractor.tools_from_api(llm_api, missing_names),
                                         scheduled_request,
                                     )
                                     if added_tools:

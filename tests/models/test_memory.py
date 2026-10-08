@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from custom_components.ha_ragent.src.backends.database.faiss_backend import FaissDbBackend
-from custom_components.ha_ragent.src.const import CONF_VECTOR_DB_NAME, DOMAIN
+from custom_components.ha_ragent.src.const import CONF_MAX_MEMORY_ENTRIES, CONF_VECTOR_DB_NAME, DOMAIN
 from custom_components.ha_ragent.src.homeassistant.helpers.memory_manager import MemoryManager
 from custom_components.ha_ragent.src.homeassistant.tools.forget_fact import RAGentForgetTool
 from custom_components.ha_ragent.src.homeassistant.tools.remember_fact import RAGentRememberTool
@@ -68,6 +71,12 @@ class FakeVectorDb:
         ]
         self.objects[collection_name] = [*retained, *embeddings]
 
+    async def async_list_objects(self, object_type, config_subentry: dict[str, Any], collection_name: str):
+        return [
+            object_type.parse_object(item.to_dict())
+            for item in self.objects.get(collection_name, [])
+        ]
+
     async def async_retrieve_scored_objects(self, object_type, config_subentry: dict[str, Any], collection_name: str, query_embedding: list[float], top_k: int):
         return [
             ScoredResult(object_type.parse_object(item.to_dict()), 1.0, rank)
@@ -75,17 +84,30 @@ class FakeVectorDb:
         ]
 
 
-def create_memory_hass() -> tuple[SimpleNamespace, FakeVectorDb]:
+def create_memory_hass(*, max_entries: int | None = None) -> tuple[SimpleNamespace, FakeVectorDb]:
     RAGentTranslations._load("en")
     vector_db = FakeVectorDb()
+    subentry_data = {"model": "embed"}
+    if max_entries is not None:
+        subentry_data[CONF_MAX_MEMORY_ENTRIES] = max_entries
     entry = SimpleNamespace(
-        subentries={"agent": SimpleNamespace(data={"model": "embed"})},
+        subentries={"agent": SimpleNamespace(data=subentry_data)},
         embedder_backend=FakeEmbedder(),
         vector_db_backend=vector_db,
         translations=RAGentTranslations("en"),
     )
     hass = SimpleNamespace(data={DOMAIN: {"entry": entry}})
     return hass, vector_db
+
+
+@pytest.fixture
+def memory_now(monkeypatch) -> datetime:
+    now = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        "custom_components.ha_ragent.src.homeassistant.helpers.memory_manager.dt_util.utcnow",
+        lambda: now,
+    )
+    return now
 
 
 def test_memory_model_round_trip() -> None:
@@ -146,6 +168,160 @@ def test_memory_manager_remember_recall_replace_and_forget() -> None:
         assert await manager.async_forget(replacement.id) is True
         assert await manager.async_forget(replacement.id) is False
         assert await manager.async_recall([1.0, 1.0, 1.0], 0, 4) == []
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("max_entries", [1, 3])
+def test_memory_limit_reached_keeps_all_entries(memory_now, max_entries) -> None:
+    async def run() -> None:
+        hass, vector_db = create_memory_hass(max_entries=max_entries)
+        manager = MemoryManager(hass, "entry", "agent")
+
+        saved = [
+            await manager.async_remember(f"Fact {index}")
+            for index in range(max_entries)
+        ]
+        assert all(memory is not None for memory in saved)
+        stored = await vector_db.async_list_objects(MemoryEmbedding, {}, manager.collection_name)
+        assert stored == saved
+        assert len(stored) == max_entries
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("max_entries", [1, 3])
+def test_memory_limit_exceeded_evicts_oldest_on_equal_retrieval_counts(memory_now, max_entries) -> None:
+    async def run() -> None:
+        hass, vector_db = create_memory_hass(max_entries=max_entries)
+        manager = MemoryManager(hass, "entry", "agent")
+        existing = [
+            Memory(
+                f"{index + 1:016x}", f"Existing fact {index}",
+                (memory_now - timedelta(minutes=max_entries - index)).isoformat(),
+            )
+            for index in range(max_entries)
+        ]
+        vector_db.objects[manager.collection_name] = [
+            MemoryEmbedding(memory, [1.0, 1.0, 1.0]) for memory in reversed(existing)
+        ]
+
+        added = await manager.async_remember("New fact")
+
+        assert added is not None
+        stored = await vector_db.async_list_objects(MemoryEmbedding, {}, manager.collection_name)
+        assert len(stored) == max_entries
+        assert {memory.id for memory in stored} == {
+            added.id, *(memory.id for memory in existing[1:]),
+        }
+
+    asyncio.run(run())
+
+
+def test_memory_limit_eviction_prioritizes_retrieval_count_over_age(memory_now) -> None:
+    async def run() -> None:
+        hass, vector_db = create_memory_hass(max_entries=3)
+        manager = MemoryManager(hass, "entry", "agent")
+        oldest = Memory(
+            "1111111111111111", "Frequently recalled old fact",
+            (memory_now - timedelta(minutes=3)).isoformat(), retrieval_count=5,
+        )
+        middle = Memory(
+            "2222222222222222", "Occasionally recalled fact",
+            (memory_now - timedelta(minutes=2)).isoformat(), retrieval_count=1,
+        )
+        newest = Memory(
+            "3333333333333333", "Unrecalled recent fact",
+            (memory_now - timedelta(minutes=1)).isoformat(), retrieval_count=0,
+        )
+        vector_db.objects[manager.collection_name] = [
+            MemoryEmbedding(memory, [1.0, 1.0, 1.0]) for memory in (oldest, middle, newest)
+        ]
+
+        added = await manager.async_remember("New fact")
+
+        assert added is not None
+        stored = await vector_db.async_list_objects(MemoryEmbedding, {}, manager.collection_name)
+        assert {memory.id for memory in stored} == {oldest.id, middle.id, added.id}
+        assert len(stored) == 3
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("max_entries", [1, 3])
+def test_replacing_memory_at_limit_keeps_other_entries(memory_now, max_entries) -> None:
+    async def run() -> None:
+        hass, vector_db = create_memory_hass(max_entries=max_entries)
+        manager = MemoryManager(hass, "entry", "agent")
+        original = await manager.async_remember("The reading lamp is beside the sofa.")
+        assert original is not None
+        others = [
+            await manager.async_remember(f"Other fact {index}")
+            for index in range(max_entries - 1)
+        ]
+        assert all(memory is not None for memory in others)
+
+        replacement = await manager.async_remember("  The reading   lamp is beside the sofa.  ")
+
+        assert replacement is not None
+        assert replacement.id == original.id
+        stored = await vector_db.async_list_objects(MemoryEmbedding, {}, manager.collection_name)
+        assert len(stored) == max_entries
+        assert {memory.id for memory in stored} == {original.id, *(memory.id for memory in others)}
+        assert next(memory for memory in stored if memory.id == original.id) == replacement
+
+    asyncio.run(run())
+
+
+def test_remember_tool_reports_success_for_immediately_evicted_memory(memory_now) -> None:
+    async def run() -> None:
+        hass, vector_db = create_memory_hass(max_entries=2)
+        manager = MemoryManager(hass, "entry", "agent")
+        existing = [
+            Memory(
+                f"{index + 1:016x}", f"Recalled fact {index}",
+                (memory_now - timedelta(minutes=index + 1)).isoformat(), retrieval_count=index + 1,
+            )
+            for index in range(2)
+        ]
+        vector_db.objects[manager.collection_name] = [
+            MemoryEmbedding(memory, [1.0, 1.0, 1.0]) for memory in existing
+        ]
+        remember = RAGentRememberTool(hass, "entry", "agent")
+
+        result = await remember._async_call(SimpleNamespace(tool_args={"memory": "New fact"}))
+
+        assert result["success"] is True
+        assert result["memory"] == "New fact"
+        stored = await vector_db.async_list_objects(MemoryEmbedding, {}, manager.collection_name)
+        assert stored == existing
+        assert result["memory_id"] not in {memory.id for memory in stored}
+
+    asyncio.run(run())
+
+
+def test_lowered_memory_limit_removes_all_excess_entries(memory_now) -> None:
+    async def run() -> None:
+        hass, vector_db = create_memory_hass(max_entries=5)
+        manager = MemoryManager(hass, "entry", "agent")
+        existing = [
+            Memory(
+                f"{index + 1:016x}", f"Existing fact {index}",
+                (memory_now - timedelta(minutes=5 - index)).isoformat(),
+            )
+            for index in range(5)
+        ]
+        vector_db.objects[manager.collection_name] = [
+            MemoryEmbedding(memory, [1.0, 1.0, 1.0]) for memory in reversed(existing)
+        ]
+        hass.data[DOMAIN]["entry"].subentries["agent"].data[CONF_MAX_MEMORY_ENTRIES] = 2
+
+        added = await manager.async_remember("New fact")
+
+        assert added is not None
+        stored = await vector_db.async_list_objects(MemoryEmbedding, {}, manager.collection_name)
+        assert len(stored) == 2
+        assert {memory.id for memory in stored} == {existing[-1].id, added.id}
 
     asyncio.run(run())
 

@@ -338,6 +338,38 @@ class ToolExtractor:
             parameters = to_openapi(source or probatio.Schema({}), custom_serializer=custom_serializer)
         return cls._openai_parameters(parameters)
 
+    @classmethod
+    def tools_from_api(cls, llm_api: Any, names: Iterable[str]) -> list[LlmTool]:
+        """Convert selected tools using the active API's current schemas."""
+        requested_names = dict.fromkeys(names)
+        api_tools = {
+            tool.name: tool
+            for tool in getattr(llm_api, "tools", ()) or ()
+            if getattr(tool, "name", None) in requested_names
+        }
+        result: list[LlmTool] = []
+        for name in requested_names:
+            tool = api_tools.get(name)
+            if tool is None:
+                continue
+            try:
+                parameters = cls._tool_parameters(tool, getattr(llm_api, "custom_serializer", None))
+            except Exception as err:
+                _logger.log_string(logging.WARNING, f"Could not convert parameters for tool {name}: {err}")
+                continue
+            try:
+                metadata = cls.extract_tool_metadata(tool, parameters)
+            except Exception as err:
+                _logger.log_string(logging.WARNING, f"Could not extract metadata for tool {name}: {err}")
+                metadata = ToolMetadata()
+            result.append(LlmTool(
+                name=tool.name,
+                description=getattr(tool, "description", ""),
+                parameters=parameters,
+                metadata=metadata,
+            ))
+        return result
+
     @staticmethod
     @callback
     def _handle_timer_event(event_type: TimerEventType, timer: TimerInfo) -> None:

@@ -9,6 +9,78 @@ import probatio
 from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_embedding import LlmToolEmbedding
+from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
+
+
+def test_live_tool_selection_uses_current_schemas_and_requested_order() -> None:
+    first = SimpleNamespace(
+        name="FirstAction", description="Current first action",
+        parameters=probatio.Schema({
+            probatio.Required("level", description="Current level description"): int,
+        }),
+        metadata={"action": "set_level", "supported_domains": ["light"]},
+    )
+    second = SimpleNamespace(name="SecondAction", description="Current second action", parameters={})
+    unrequested = SimpleNamespace(name="OtherAction", parameters={})
+    api = SimpleNamespace(tools=[first, unrequested, second], custom_serializer=None)
+
+    tools = ToolExtractor.tools_from_api(api, ["SecondAction", "MissingAction", "FirstAction", "SecondAction"])
+
+    assert [tool.name for tool in tools] == ["SecondAction", "FirstAction"]
+    assert tools[1].description == first.description
+    assert tools[1].parameters["properties"]["level"] == {
+        "type": "integer", "description": "Current level description",
+    }
+    assert tools[1].parameters["required"] == ["level"]
+    assert tools[1].canonical_action == "set_level"
+    assert tools[1].canonical_supported_domains == ("light",)
+
+
+def test_live_tool_selection_skips_invalid_schema_and_keeps_other_tools() -> None:
+    broken = SimpleNamespace(
+        name="BrokenAction",
+        parameters={"type": "function", "function": {"parameters": {"type": "array"}}},
+    )
+    valid = SimpleNamespace(name="ValidAction", parameters={})
+
+    tools = ToolExtractor.tools_from_api(SimpleNamespace(tools=[broken, valid]), [broken.name, valid.name])
+
+    assert [tool.name for tool in tools] == [valid.name]
+
+
+def test_live_tool_selection_keeps_schema_when_metadata_is_invalid() -> None:
+    raw = SimpleNamespace(
+        name="VendorAction", description="Current vendor action",
+        parameters={"type": "object", "properties": {}},
+        metadata={"supported_domains": 42},
+    )
+
+    tool, = ToolExtractor.tools_from_api(SimpleNamespace(tools=[raw]), [raw.name])
+
+    assert tool.description == raw.description
+    assert tool.parameters["type"] == "object"
+    assert tool.metadata == ToolMetadata()
+
+
+def test_live_tool_selection_passes_api_custom_serializer(monkeypatch) -> None:
+    source, serializer = object(), object()
+    calls = []
+
+    def convert(parameters, *, custom_serializer):
+        calls.append((parameters, custom_serializer))
+        return {"type": "object", "properties": {}}
+
+    monkeypatch.setattr(
+        "custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor.to_openapi", convert,
+    )
+    raw = SimpleNamespace(name="VendorAction", parameters=source)
+
+    tool, = ToolExtractor.tools_from_api(
+        SimpleNamespace(tools=[raw], custom_serializer=serializer), [raw.name],
+    )
+
+    assert tool.name == raw.name
+    assert calls == [(source, serializer)]
 
 
 def _run_async(function):
