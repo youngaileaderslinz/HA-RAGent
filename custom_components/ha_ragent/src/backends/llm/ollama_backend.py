@@ -206,6 +206,8 @@ class OllamaLlmBackend(ALlmBaseBackend):
 
                     try:
                         data = json.loads(line)
+                        if data.get("error"):
+                            raise RuntimeError(f"Ollama generation failed: {data['error']}")
 
                         reasoning_content = data.get("message", {}).get("thinking")
                         if reasoning_content and not thinking_enabled and not unexpected_reasoning_logged:

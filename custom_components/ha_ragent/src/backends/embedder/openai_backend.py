@@ -2,7 +2,7 @@ from functools import partial
 import logging
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any, Dict, List
-from openai import AsyncOpenAI, InternalServerError
+from openai import AsyncOpenAI, BadRequestError, InternalServerError
 
 
 
@@ -52,7 +52,7 @@ class OpenAiEmbedder(ABaseEmbedder):
 
     @staticmethod
     def _is_context_length_error(error: Exception) -> bool:
-        return isinstance(error, InternalServerError) and error.status_code == 500 and "increase the physical batch size" in str(error).lower()
+        return (isinstance(error, BadRequestError) and error.code == "context_length_exceeded") or (isinstance(error, InternalServerError) and "increase the physical batch size" in str(error).lower())
 
     @staticmethod
     def _truncate_inputs(inputs: List[str], max_chars: int = RAGENT_EMBEDDING_TRUNCATE_MAX_CHARS) -> List[str]:
@@ -145,6 +145,7 @@ class OpenAiEmbedder(ABaseEmbedder):
             except Exception as err:
                 if not self._is_context_length_error(err) or attempt == RAGENT_EMBEDDING_TRUNCATE_RETRIES:
                     raise
+                max_chars //= 2
                 _logger.log_string(logging.WARNING, f"Embedding input is too large. Retrying with inputs limited to {max_chars} characters.")
 
         # OpenAI-compatible embedding responses contain

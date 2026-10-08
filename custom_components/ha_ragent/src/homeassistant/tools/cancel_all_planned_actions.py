@@ -4,6 +4,7 @@ import probatio
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import llm
+from custom_components.ha_ragent.src.homeassistant.tools.base_tool import RAGentTool
 
 from custom_components.ha_ragent.src.const import (
     DOMAIN,
@@ -14,7 +15,7 @@ from custom_components.ha_ragent.src.const import (
 from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 
-class RAGentCancelAllPlannedActionsTool(llm.Tool):
+class RAGentCancelAllPlannedActionsTool(RAGentTool):
     name = RAGENT_CANCEL_SCHEDULED_ACTIONS_TOOL_NAME
     parameters = probatio.Schema({})
 
@@ -24,7 +25,7 @@ class RAGentCancelAllPlannedActionsTool(llm.Tool):
         self.translations = RAGentTranslations(language or "en")
         self.description = self.translations.tool(RAGENT_CANCEL_SCHEDULED_ACTIONS_TOOL_NAME)
 
-    async def async_call(self, _tool_input: llm.ToolInput, *args, **kwargs) -> dict[str, object]:
+    async def _async_call(self, _tool_input: llm.ToolInput, *args, **kwargs) -> dict[str, object]:
         domain_data = self.hass.data.setdefault(DOMAIN, {})
         subentry_data = domain_data.setdefault(self.subentry_id, {})
         cancellers = subentry_data.get(RAGENT_SCHEDULED_ACTION_CANCELLERS, set())

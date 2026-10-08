@@ -215,7 +215,7 @@ def test_combined_corrective_search_keeps_retrieval_independent_and_location_ali
     )
     search._iter_searchable_entries = lambda: iter([(entry, "subentry", subentry, 2, 2, 2, 2)])
     search.set_search_context(latest_request="in der Küche lüften")
-    result = asyncio.run(search.async_call(SimpleNamespace(tool_args={
+    result = asyncio.run(search._async_call(SimpleNamespace(tool_args={
         "search_query": "Ventilator starten", "scope": "devices_and_tools",
     })))
 
@@ -273,7 +273,7 @@ def test_search_mode_skips_unused_backends_and_preserves_ranking(scope, mode):
     tool._iter_searchable_entries = lambda: iter([(entry, "subentry", subentry, 1, 1, 1, 1)])
     tool.set_search_context(latest_request="Turbo ventilation")
 
-    result = asyncio.run(tool.async_call(SimpleNamespace(tool_args={
+    result = asyncio.run(tool._async_call(SimpleNamespace(tool_args={
         "search_query": "Turbo ventilation", "scope": scope,
     })))
 
@@ -335,7 +335,7 @@ def test_subentry_retrieval_method_overrides_entry(
     tool.set_search_context(latest_request="fan")
 
     result = asyncio.run(
-        tool.async_call(
+        tool._async_call(
             SimpleNamespace(tool_args={"search_query": "fan", "scope": "devices"})
         )
     )
@@ -373,7 +373,7 @@ def test_automatic_device_search_combines_exact_lexical_and_vector_results():
     tool.set_search_context(latest_request="fan.kitchen")
 
     result = asyncio.run(
-        tool.async_call(
+        tool._async_call(
             SimpleNamespace(
                 tool_args={"search_query": "fan.kitchen", "scope": "devices"}
             )
@@ -418,7 +418,7 @@ def test_zero_maximum_skips_the_requested_search_scope(scope):
     tool.set_search_context(latest_request="find it")
 
     result = asyncio.run(
-        tool.async_call(
+        tool._async_call(
             SimpleNamespace(tool_args={"search_query": "find it", "scope": scope})
         )
     )
@@ -441,7 +441,7 @@ def test_search_embedding_failure_still_discovers_custom_tool():
     tool = _search_tool()
     tool._iter_searchable_entries = lambda: iter([(entry, "subentry", subentry, 1, 1, 1, 1)])
     tool.set_search_context(latest_request="Turbo ventilation")
-    result = asyncio.run(tool.async_call(SimpleNamespace(tool_args={
+    result = asyncio.run(tool._async_call(SimpleNamespace(tool_args={
         "search_query": "Turbo ventilation", "scope": "tools",
     })))
     assert result["candidate_tools"][0]["name"] == custom.name
@@ -470,7 +470,7 @@ def test_semantic_tool_search_prioritizes_capability_without_filtering_custom_to
     )
 
     result = asyncio.run(
-        tool.async_call(
+        tool._async_call(
             SimpleNamespace(
                 tool_args={
                     "search_query": "switch off lights",
@@ -491,7 +491,7 @@ def test_structured_search_allows_query_only_discovery() -> None:
     tool._iter_searchable_entries = lambda: iter(())
     tool.set_search_context(latest_request="request")
 
-    result = asyncio.run(tool.async_call(SimpleNamespace(tool_args={
+    result = asyncio.run(tool._async_call(SimpleNamespace(tool_args={
         "search_queries": ["target operation"],
         "scope": "tools",
     })))
@@ -526,7 +526,7 @@ def test_capability_ranking_prioritizes_requested_action_without_excluding_alter
         "name": "switch.heater", "domain": ["switch"],
     }])
 
-    result = asyncio.run(tool.async_call(SimpleNamespace(tool_args={
+    result = asyncio.run(tool._async_call(SimpleNamespace(tool_args={
         "search_queries": ["operation target"],
         "capabilities": [{"action": "turn_on", "domain": "switch"}],
         "scope": "tools",
@@ -556,7 +556,7 @@ def test_weak_tool_result_returns_explicit_fallback_signal() -> None:
     )
 
     result = asyncio.run(
-        tool.async_call(
+        tool._async_call(
             SimpleNamespace(tool_args={"search_query": "heater toggle", "scope": "tools"})
         )
     )
@@ -586,7 +586,7 @@ def test_empty_tool_index_returns_no_tools_fallback() -> None:
     )
 
     result = asyncio.run(
-        tool.async_call(
+        tool._async_call(
             SimpleNamespace(tool_args={"search_query": "heater", "scope": "tools"})
         )
     )
@@ -611,7 +611,7 @@ def test_candidate_context_fallback_obeys_device_limit() -> None:
         {"name": "light.second", "domain": ["light"]},
     ])
 
-    result = asyncio.run(tool.async_call(SimpleNamespace(
+    result = asyncio.run(tool._async_call(SimpleNamespace(
         tool_args={"search_query": "target", "scope": "devices"},
     )))
 

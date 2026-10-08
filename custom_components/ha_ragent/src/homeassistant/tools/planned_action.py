@@ -11,6 +11,7 @@ import probatio
 from homeassistant.components import conversation
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import llm
+from custom_components.ha_ragent.src.homeassistant.tools.base_tool import RAGentTool
 from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
 
@@ -31,7 +32,7 @@ from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 _logger = BaseLogger(__name__)
 
-class RAGentPlannedActionTool(llm.Tool):
+class RAGentPlannedActionTool(RAGentTool):
     name = RAGENT_SCHEDULE_ACTION_TOOL_NAME
     parameters = probatio.Schema(
         {
@@ -93,7 +94,7 @@ class RAGentPlannedActionTool(llm.Tool):
         finally:
             contexts.pop(execution_id, None)
 
-    async def async_call(self, tool_input: llm.ToolInput, *args, **kwargs) -> dict[str, object]:
+    async def _async_call(self, tool_input: llm.ToolInput, *args, **kwargs) -> dict[str, object]:
         """Schedule the requested action without blocking the conversation."""
         action_request = str(tool_input.tool_args.get("action_request", "")).strip()
         if not action_request:

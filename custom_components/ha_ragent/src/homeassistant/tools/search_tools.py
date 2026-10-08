@@ -12,6 +12,7 @@ import probatio
 from homeassistant.const import CONF_LLM_HASS_API
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import llm
+from custom_components.ha_ragent.src.homeassistant.tools.base_tool import RAGentTool
 
 from custom_components.ha_ragent.src.const import (
     CONF_MIN_DEVICES_TO_EXTRACT,
@@ -37,43 +38,45 @@ from custom_components.ha_ragent.src.utils import get_setting_value
 _logger = BaseLogger(__name__)
 
 
-class RAGentSemanticSearchTool(llm.Tool):
+class RAGentSemanticSearchTool(RAGentTool):
     name = RAGENT_SEMANTIC_SEARCH_TOOL_NAME
     parameters = probatio.Schema(
         {
             probatio.Required(
                 "search_queries",
-                description=(
-                    "One self-contained query per independent target group. The array "
-                    "position must match the corresponding capabilities item."
-                ),
+                description="One self-contained query per target group; align capabilities by position.",
             ): probatio.All(
                 [str], probatio.Length(min=1, max=RAGENT_MAX_SEARCH_QUERIES)
             ),
             probatio.Optional(
                 "capabilities",
                 description=(
-                    "Optional structured capability parallel to search_queries, for example "
-                    "[{action: turn_on, domain: light}] or "
-                    "[{action: fan_set_speed, domain: fan}]."
+                    "One capability per query, e.g. {action: turn_on, domain: light}."
                 ),
             ): probatio.All(
                 [{
                     probatio.Optional(
                         "action",
                         description=(
-                            "Stable canonical action ID such as turn_on, turn_off, "
-                            "or fan_set_speed; do not put natural-language prose here."
+                            "Stable canonical action ID, e.g. turn_on, turn_off, fan_set_speed."
                         ),
                     ): str,
                     probatio.Optional(
                         "domain",
-                        description="Optional Home Assistant domain or domains.",
+                        description="Home Assistant domain or domains.",
                     ): probatio.Any(str, [str]),
                 }],
                 probatio.Length(min=1, max=RAGENT_MAX_SEARCH_QUERIES),
             ),
-            probatio.Optional("scope", default="devices_and_tools"): probatio.In(["devices", "tools", "devices_and_tools"]),
+            probatio.Optional(
+                "scope",
+                default="devices_and_tools",
+                description=(
+                    "devices: devices only; tools: tools only; devices_and_tools: both. "
+                    "Explicit tools/devices_and_tools can add callable tools. "
+                    "Omitted scope searches both without adding tools."
+                ),
+            ): probatio.In(["devices", "tools", "devices_and_tools"]),
         }
     )
 
@@ -368,7 +371,7 @@ class RAGentSemanticSearchTool(llm.Tool):
             ),
         }
 
-    async def async_call(self, tool_input, *args, **kwargs) -> dict[str, object]:
+    async def _async_call(self, tool_input, *args, **kwargs) -> dict[str, object]:
         model_search_queries = self._model_search_queries(tool_input)
         requested_capabilities = self._model_capabilities(tool_input)
         self._requested_capabilities = requested_capabilities
@@ -568,7 +571,7 @@ class RAGentSemanticSearchTool(llm.Tool):
                         if search_devices:
                             fallback_args = dict(tool_input.tool_args)
                             fallback_args["scope"] = "tools"
-                            fallback = await self.async_call(
+                            fallback = await self._async_call(
                                 SimpleNamespace(tool_args=fallback_args)
                             )
                             fallback_errors = list(fallback.get("error", []))

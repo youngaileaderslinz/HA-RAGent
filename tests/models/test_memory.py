@@ -154,7 +154,7 @@ def test_memory_tools() -> None:
     async def run() -> None:
         hass, _ = create_memory_hass()
         remember = RAGentRememberTool(hass, "entry", "agent")
-        remember_result = await remember.async_call(
+        remember_result = await remember._async_call(
             SimpleNamespace(tool_args={"memory": "The thermostat target is 21 C."})
         )
 
@@ -162,14 +162,14 @@ def test_memory_tools() -> None:
         memory_id = remember_result["memory_id"]
 
         forget = RAGentForgetTool(hass, "entry", "agent")
-        forget_result = await forget.async_call(SimpleNamespace(tool_args={"memory_id": memory_id}))
+        forget_result = await forget._async_call(SimpleNamespace(tool_args={"memory_id": memory_id}))
         assert forget_result == {
             "success": True,
             "memory_id": memory_id,
             "forgotten": True,
         }
 
-        missing_result = await forget.async_call(SimpleNamespace(tool_args={"memory_id": memory_id}))
+        missing_result = await forget._async_call(SimpleNamespace(tool_args={"memory_id": memory_id}))
         assert missing_result["success"] is False
         assert missing_result["error"] == "memory not found"
 

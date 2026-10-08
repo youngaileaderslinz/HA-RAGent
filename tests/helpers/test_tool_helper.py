@@ -24,6 +24,34 @@ def test_parse_current_home_assistant_tool_result(monkeypatch) -> None:
     ) == {"error": "unavailable", "success": False}
 
 
+def test_flagged_tool_result_preserves_normalized_failed_targets(monkeypatch) -> None:
+    @dataclass
+    class ToolResult:
+        data: dict
+        error: bool = False
+
+    monkeypatch.setattr(tool_helper_module.llm, "ToolResult", ToolResult, raising=False)
+    data = {
+        "data": {
+            "success": [{"type": "entity", "id": "light.desk"}],
+            "failed": [{"type": "entity", "id": "light.ceiling"}],
+        },
+    }
+
+    assert ToolHelper.parse_tool_results(data) == {
+        "success": ["light.desk"], "failed": ["light.ceiling"],
+    }
+    assert ToolHelper.parse_tool_results(ToolResult(data)) == {
+        "success": ["light.desk"], "failed": ["light.ceiling"],
+    }
+    parsed = ToolHelper.parse_tool_results(ToolResult(data, error=True))
+    assert parsed == {"success": False, "failed": ["light.ceiling"]}
+    assert ToolHelper.failed_target_candidates(
+        Mock(tool_args={}), parsed, [{"name": "light.ceiling"}],
+    ) == [{"name": "light.ceiling"}]
+    assert data["data"]["success"] == [{"type": "entity", "id": "light.desk"}]
+
+
 def test_failed_target_candidates_excludes_unattempted_candidates() -> None:
     candidates = [
         {"name": "light.chandelier"},

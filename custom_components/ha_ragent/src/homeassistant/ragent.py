@@ -262,6 +262,8 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         candidate_context: list[dict[str, object]],
         request_query: str,
         continuity: ContinuityContext,
+        *,
+        scheduled_request: bool = False,
     ) -> ConversationResult:
         """Process a prompt through the RAGent."""
         timing_logger = TimingLogger(__name__ + ".prompt_model")
@@ -485,7 +487,9 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 llm_api: llm.APIInstance | None = None
 
                 try:
-                    llm_api = await llm.async_get_api(self.hass, resolve_llm_api_id(get_setting_value(CONF_LLM_HASS_API, self.runtime_options)), llm_context=llm_context,)
+                    selected_api = get_setting_value(CONF_LLM_HASS_API, self.runtime_options)
+                    if selected_api and selected_api != "none":
+                        llm_api = await llm.async_get_api(self.hass, resolve_llm_api_id(selected_api), llm_context=llm_context)
                     if isinstance(llm_api, RAGentAugmentedAPIInstance):
                         llm_api.set_conversation_agent_id(user_input.agent_id)
                         llm_api.set_search_scope(self.entry_id,self.subentry_id)
@@ -682,6 +686,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     candidate_context,
                     retrieval_query,
                     continuity,
+                    scheduled_request=is_scheduled_request,
                 )
                 timing_logger.log_timed_string(level=logging.DEBUG, message="Model and tool processing")
                 return result
