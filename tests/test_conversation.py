@@ -11,8 +11,14 @@ from custom_components.ha_ragent.src.const import (
     CONF_MAX_TOOL_CALL_ITERATIONS,
     CONF_MAX_DEVICES_TO_EXTRACT,
     CONF_MAX_MEMORIES_TO_EXTRACT,
+    CONF_MAX_TOOLS_TO_EXTRACT,
+    CONF_MIN_DEVICES_TO_EXTRACT,
+    CONF_MIN_MEMORIES_TO_EXTRACT,
+    CONF_MIN_TOOLS_TO_EXTRACT,
     CONF_RETRIEVAL_METHOD,
+    RETRIEVAL_METHOD_AUTOMATIC,
     RETRIEVAL_METHOD_LEXICAL,
+    RETRIEVAL_METHOD_VECTOR,
     RAGENT_PREFIXED_SCHEDULED_REQUEST_PROHIBITED_TOOL_NAMES,
 )
 from custom_components.ha_ragent.src.homeassistant import ragent as ragent_module
@@ -58,6 +64,53 @@ def test_no_control_still_answers_without_loading_or_retrieving_tools(monkeypatc
     retriever.async_retrieve_tools.assert_not_awaited()
     assert agent._async_prompt_model.await_args.args[0] is None
     assert agent._async_prompt_model.await_args.args[2] == []
+
+
+@pytest.mark.parametrize("mode", [
+    RETRIEVAL_METHOD_AUTOMATIC, RETRIEVAL_METHOD_LEXICAL, RETRIEVAL_METHOD_VECTOR,
+])
+@pytest.mark.parametrize("minimum,maximum", [(3, 5), (5, 2), (3, 0)])
+def test_conversation_normalizes_all_exposure_ranges(monkeypatch, mode, minimum, maximum):
+    chat_log = SimpleNamespace(llm_api=None)
+    retriever = SimpleNamespace(
+        async_retrieve_devices=AsyncMock(return_value=[]),
+        async_retrieve_tools=AsyncMock(return_value=[]),
+        async_retrieve_memories=AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(ragent_module.llm, "async_get_api", AsyncMock(return_value=object()))
+    monkeypatch.setattr(ragent_module.chat_session, "async_get_chat_session", lambda *_: nullcontext(object()))
+    monkeypatch.setattr(ragent_module.conversation, "async_get_chat_log", lambda *_: nullcontext(chat_log))
+    monkeypatch.setattr(ragent_module, "HistoryManager", lambda **_: Mock(message_history=[]))
+    monkeypatch.setattr(ragent_module, "ConversationRetriever", lambda *_: retriever)
+    result = object()
+    agent = SimpleNamespace(
+        hass=SimpleNamespace(), entry=SimpleNamespace(), entry_id="entry", subentry_id="subentry",
+        subentry=SimpleNamespace(), runtime_options={
+            CONF_LLM_HASS_API: "test_api", CONF_RETRIEVAL_METHOD: mode,
+            CONF_MIN_DEVICES_TO_EXTRACT: minimum, CONF_MAX_DEVICES_TO_EXTRACT: maximum,
+            CONF_MIN_TOOLS_TO_EXTRACT: minimum, CONF_MAX_TOOLS_TO_EXTRACT: maximum,
+            CONF_MIN_MEMORIES_TO_EXTRACT: minimum, CONF_MAX_MEMORIES_TO_EXTRACT: maximum,
+        },
+        _get_current_device_location=lambda *_: (None, None),
+        _async_build_continuity_context=AsyncMock(return_value=ContinuityContext()),
+        _exclude_prohibited_scheduled_request_tools=lambda tools, _: tools,
+        _candidate_context_from_devices=lambda *_: [],
+        _async_render_prompts=AsyncMock(return_value=("rules", "state")),
+        _async_prompt_model=AsyncMock(return_value=result),
+    )
+    user_input = SimpleNamespace(
+        text="Hello", agent_id="agent", conversation_id="conversation", language="en",
+        as_llm_context=lambda _: None,
+    )
+
+    assert asyncio.run(ragent_module.RAGent.async_process(agent, user_input)) is result
+    for retrieve in (retriever.async_retrieve_devices, retriever.async_retrieve_memories, retriever.async_retrieve_tools):
+        if maximum == 0 and retrieve is not retriever.async_retrieve_tools:
+            retrieve.assert_not_awaited()
+        else:
+            retrieve.assert_awaited_once()
+            assert retrieve.await_args.kwargs["minimum"] == min(minimum, maximum)
+            assert retrieve.await_args.kwargs["maximum"] == maximum
 
 
 @pytest.mark.parametrize("available,scheduled", [(True, False), (False, False), (True, True)])

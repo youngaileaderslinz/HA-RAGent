@@ -137,8 +137,8 @@ class MemoryManager:
         maximum: int,
     ) -> list[Memory]:
         """Select valid memories whose vector confidence is close to the best match."""
-        minimum = max(0, int(minimum))
-        maximum = max(minimum, int(maximum))
+        maximum = max(0, int(maximum))
+        minimum = min(maximum, max(0, int(minimum)))
         if maximum <= 0:
             return []
 
@@ -177,8 +177,8 @@ class MemoryManager:
         maximum: int,
     ) -> list[Memory]:
         try:
-            minimum = max(0, int(minimum))
-            maximum = max(minimum, int(maximum))
+            maximum = max(0, int(maximum))
+            minimum = min(maximum, max(0, int(minimum)))
         except (TypeError, ValueError, OverflowError):
             return []
         if maximum <= 0:

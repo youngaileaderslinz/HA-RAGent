@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -151,6 +152,66 @@ def test_memory_confidence_controls_exposed_count() -> None:
         )
     ]
     assert MemoryManager.select_confident_memories(strong, 0, 4) == memories
+
+
+@pytest.mark.parametrize("scores", [
+    pytest.param([], id="empty"),
+    pytest.param([0.95, 0.05], id="fewer-than-minimum"),
+    pytest.param([0.95, 0.05, 0.04], id="exactly-minimum"),
+    pytest.param([0.95, *([0.05] * 7)], id="dominant-match"),
+    pytest.param([0.05] * 8, id="weak-matches"),
+    pytest.param([0.95] * 8, id="strong-matches"),
+])
+def test_memory_recall_enforces_minimum_and_maximum(scores) -> None:
+    async def run() -> None:
+        minimum, maximum = 3, 5
+        hass, vector_db = create_memory_hass()
+        manager = MemoryManager(hass, "entry", "agent")
+        memories = [
+            Memory(str(index), f"Memory {index}", "2026-09-01T12:00:00+00:00")
+            for index in range(len(scores))
+        ]
+        vector_db.objects[manager.collection_name] = [
+            MemoryEmbedding(memory, [1.0, 1.0, 1.0]) for memory in memories
+        ]
+
+        async def retrieve(**kwargs):
+            return [
+                ScoredResult(memory, score, index + 1)
+                for index, (memory, score) in enumerate(zip(memories, scores))
+            ][:kwargs["top_k"]]
+
+        vector_db.async_retrieve_scored_objects = AsyncMock(side_effect=retrieve)
+        result = await manager.async_recall([1.0, 1.0, 1.0], minimum, maximum)
+
+        assert min(minimum, len(memories)) <= len(result) <= min(maximum, len(memories))
+        assert len({memory.id for memory in result}) == len(result)
+        if memories:
+            assert vector_db.async_retrieve_scored_objects.await_args.kwargs["top_k"] == maximum
+        else:
+            vector_db.async_retrieve_scored_objects.assert_not_awaited()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("maximum", [0, 2])
+def test_memory_maximum_is_a_hard_ceiling_even_below_minimum(maximum) -> None:
+    async def run() -> None:
+        hass, vector_db = create_memory_hass()
+        manager = MemoryManager(hass, "entry", "agent")
+        memories = [
+            Memory(str(index), f"Memory {index}", "2026-09-01T12:00:00+00:00")
+            for index in range(6)
+        ]
+        scored = [ScoredResult(memory, 0.95, index + 1) for index, memory in enumerate(memories)]
+        vector_db.objects[manager.collection_name] = [
+            MemoryEmbedding(memory, [1.0, 1.0, 1.0]) for memory in memories
+        ]
+
+        assert MemoryManager.select_confident_memories(scored, 5, maximum) == memories[:maximum]
+        assert await manager.async_recall([1.0, 1.0, 1.0], 5, maximum) == memories[:maximum]
+
+    asyncio.run(run())
 
 
 def test_memory_manager_remember_recall_replace_and_forget() -> None:
