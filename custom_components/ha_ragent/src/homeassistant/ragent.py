@@ -5,6 +5,7 @@ import json
 import logging
 from typing import Any, List, Tuple
 
+from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
 from custom_components.ha_ragent.src.homeassistant.helpers.history_retriever import HistoryRetriever
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from custom_components.ha_ragent.src.logging.timing_logger import TimingLogger
@@ -262,6 +263,8 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         candidate_context: list[dict[str, object]],
         request_query: str,
         continuity: ContinuityContext,
+        *,
+        scheduled_request: bool = False,
     ) -> ConversationResult:
         """Process a prompt through the RAGent."""
         timing_logger = TimingLogger(__name__ + ".prompt_model")
@@ -396,6 +399,33 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                             tool_succeeded = MessageHelper.tool_result_succeeded(parsed_tool_result)
 
                             if tool_succeeded and is_search_tool:
+                                discovered_tools = parsed_tool_result.get("candidate_tools", [])
+                                discovered_names = list(dict.fromkeys([
+                                    candidate["name"] for candidate in discovered_tools
+                                    if isinstance(candidate, dict)
+                                    and isinstance(candidate.get("name"), str)
+                                ])) if isinstance(discovered_tools, list) else []
+                                requested_tool_search = tool_call.tool_args.get("scope") in {"tools", "devices_and_tools"}
+                                if requested_tool_search:
+                                    missing_names = [
+                                        name for name in discovered_names if name not in exposed_tool_names
+                                    ]
+                                    added_tools = self._exclude_prohibited_scheduled_request_tools(
+                                        ToolExtractor.tools_from_api(llm_api, missing_names),
+                                        scheduled_request,
+                                    )
+                                    if added_tools:
+                                        tool_list = [*tool_list, *added_tools]
+                                        exposed_tool_names.update(tool.name for tool in added_tools)
+                                        tool_helper = ToolHelper(self.hass, tool_list)
+                                available_tools = [name for name in discovered_names if name in exposed_tool_names]
+                                parsed_tool_result = {**parsed_tool_result, "available_tools": available_tools}
+                                if requested_tool_search and discovered_names and not available_tools:
+                                    parsed_tool_result.update({
+                                        "tool_search_status": "no_tools_available",
+                                        "fallback_required": True,
+                                        "tool_search_message": "No retrieved tools are callable for this request.",
+                                    })
                                 discovered_candidates = tool_helper.candidate_devices(parsed_tool_result)
                                 if discovered_candidates:
                                     active_candidate_context = tool_helper.merge_candidates(active_candidate_context, discovered_candidates)
@@ -485,7 +515,9 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 llm_api: llm.APIInstance | None = None
 
                 try:
-                    llm_api = await llm.async_get_api(self.hass, resolve_llm_api_id(get_setting_value(CONF_LLM_HASS_API, self.runtime_options)), llm_context=llm_context,)
+                    selected_api = get_setting_value(CONF_LLM_HASS_API, self.runtime_options)
+                    if selected_api and selected_api != "none":
+                        llm_api = await llm.async_get_api(self.hass, resolve_llm_api_id(selected_api), llm_context=llm_context)
                     if isinstance(llm_api, RAGentAugmentedAPIInstance):
                         llm_api.set_conversation_agent_id(user_input.agent_id)
                         llm_api.set_search_scope(self.entry_id,self.subentry_id)
@@ -682,6 +714,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     candidate_context,
                     retrieval_query,
                     continuity,
+                    scheduled_request=is_scheduled_request,
                 )
                 timing_logger.log_timed_string(level=logging.DEBUG, message="Model and tool processing")
                 return result

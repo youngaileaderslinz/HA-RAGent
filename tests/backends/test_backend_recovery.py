@@ -297,3 +297,73 @@ def test_openai_does_not_replay_and_closes_failed_stream(backoff):
 
     asyncio.run(run())
     assert len(attempts) == 1
+
+
+@pytest.mark.parametrize("prefix", [[], [{"message": {"content": "partial"}}]])
+def test_ollama_stream_errors_fail_without_replay(monkeypatch, backoff, prefix):
+    response = Response(lines=[*prefix, {"error": "model runner stopped"}])
+    session = Session(response)
+    backend = ollama_backend(monkeypatch, session)
+
+    async def run():
+        emitted = []
+        with pytest.raises(RuntimeError, match="model runner stopped"):
+            async for chunk in backend.async_send_chat_request(CONFIG, MESSAGES, []):
+                emitted.append(chunk)
+        assert emitted == (["partial"] if prefix else [])
+
+    asyncio.run(run())
+    assert len(session.requests) == 1
+    assert response.closed
+    backoff.assert_not_awaited()
+
+
+@pytest.mark.parametrize("status,error", [
+    (400, {"code": "context_length_exceeded", "message": "Input is too long"}),
+    (500, {"message": "Please increase the physical batch size"}),
+])
+def test_openai_embedding_context_retries_shrink_input(status, error):
+    lengths = []
+
+    def handler(request):
+        lengths.append(len(json.loads(request.content)["input"][0]))
+        if len(lengths) < 3:
+            return httpx.Response(status, json={"error": error})
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0]}]})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as transport:
+            async with AsyncOpenAI(api_key="test", http_client=transport, max_retries=0) as client:
+                backend = OpenAiEmbedder(SimpleNamespace(), {})
+                backend._client = client
+                return await backend.async_embed_text(CONFIG, "x" * 10000)
+
+    assert asyncio.run(run()) == [1.0]
+    limit = const.RAGENT_EMBEDDING_TRUNCATE_MAX_CHARS
+    assert lengths == [limit, limit // 2, limit // 4]
+
+
+def test_openai_chat_recovers_standard_context_length_error():
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        if len(requests) == 1:
+            return httpx.Response(400, json={"error": {"code": "context_length_exceeded"}})
+        chunk = {"id": "test", "object": "chat.completion.chunk", "created": 0, "model": "test",
+                 "choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": "stop"}]}
+        return httpx.Response(200, text=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n",
+                              headers={"content-type": "text/event-stream"})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as transport:
+            async with AsyncOpenAI(api_key="test", http_client=transport, max_retries=0) as client:
+                backend = OpenAiLlmBackend(SimpleNamespace(), {})
+                backend._client = client
+                return [chunk async for chunk in backend.async_send_chat_request(
+                    CONFIG, [{"role": "user", "content": "x" * 20000}], [],
+                )]
+
+    assert asyncio.run(run()) == ["ok"]
+    assert len(requests) == 2
+    assert len(requests[1]["messages"][0]["content"]) < len(requests[0]["messages"][0]["content"])

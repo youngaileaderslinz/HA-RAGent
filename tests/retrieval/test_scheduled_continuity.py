@@ -116,7 +116,7 @@ def test_scheduled_action_freezes_continuity_when_timer_is_created(monkeypatch):
 
     callbacks = []
     monkeypatch.setattr(planned_action_module, "async_call_later", lambda hass, delay, callback: callbacks.append(callback) or (lambda: None))
-    scheduled = asyncio.run(tool.async_call(SimpleNamespace(tool_args={"action_request": "turn it on", "minutes": 1})))
+    scheduled = asyncio.run(tool._async_call(SimpleNamespace(tool_args={"action_request": "turn it on", "minutes": 1})))
     assert scheduled["success"] is True
     continuity.entities.clear()
     tool._scheduling_context.continuity.entities.clear()

@@ -81,32 +81,6 @@ class MessageHelper:
         return compact
 
     @staticmethod
-    def _compact_candidate_tools(candidates: object) -> list[object]:
-        """Expose only the tool capability information needed for selection."""
-        if not isinstance(candidates, list):
-            return []
-        retained_keys = (
-            "name",
-            "description",
-            "action",
-            "domains",
-            "expected_states",
-        )
-        compact: list[object] = []
-        for candidate in candidates[:TOOL_RESULT_MAX_ITEMS]:
-            if not isinstance(candidate, dict):
-                compact.append(candidate)
-                continue
-            compact.append(
-                {
-                    key: MessageHelper._compact_value(candidate[key])
-                    for key in retained_keys
-                    if candidate.get(key) is not None
-                }
-            )
-        return compact
-
-    @staticmethod
     def _compact_value(value: object, depth: int = 0) -> object:
         if isinstance(value, (dict, list, tuple)) and depth >= TOOL_RESULT_MAX_DEPTH:
             return "[truncated]"
@@ -131,7 +105,7 @@ class MessageHelper:
             return MessageHelper._compact_value(result)
         if MessageHelper._is_semantic_search(tool_name):
             devices = result.get("candidate_devices", result.get("devices", []))
-            tools = result.get("candidate_tools", result.get("tools", []))
+            available_tools = result.get("available_tools", [])
             return {
                 "result_type": "candidate_search",
                 "candidate_notice": "Candidates only; no action has been performed.",
@@ -139,9 +113,12 @@ class MessageHelper:
                     "Use the included state and location data directly when it answers the request."
                 ),
                 "candidate_devices": MessageHelper._compact_candidate_devices(devices),
-                "candidate_tools": MessageHelper._compact_candidate_tools(tools),
+                "available_tools": [
+                    MessageHelper._compact_value(name)
+                    for name in available_tools[:TOOL_RESULT_MAX_ITEMS]
+                    if isinstance(name, str)
+                ] if isinstance(available_tools, list) else [],
                 "candidate_device_count": len(devices) if isinstance(devices, list) else 0,
-                "candidate_tool_count": len(tools) if isinstance(tools, list) else 0,
                 "tool_search_status": result.get("tool_search_status", ""),
                 "tool_search_confidence": result.get("tool_search_confidence", ""),
                 "fallback_required": bool(result.get("fallback_required", False)),
@@ -149,6 +126,7 @@ class MessageHelper:
                     result.get("tool_search_message", "")
                 ),
                 "error": MessageHelper._compact_value(result.get("error", [])),
+                **({"success": False} if result.get("success") is False else {}),
                 **({"reused": True} if result.get("reused") else {}),
             }
 

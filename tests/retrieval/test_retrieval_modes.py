@@ -85,7 +85,7 @@ def test_retrieval_mode_controls_sources_and_final_order(workflow, scope, mode, 
         search.hass.states.get.return_value = None
         search._iter_searchable_entries = lambda: iter([(entry, "agent", subentry, 1, 1, 1, 1)])
         search.set_search_context(latest_request=query)
-        result = asyncio.run(search.async_call(SimpleNamespace(tool_args={
+        result = asyncio.run(search._async_call(SimpleNamespace(tool_args={
             "search_queries": [query], "scope": scope,
         })))
         assert not result["error"]

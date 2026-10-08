@@ -180,7 +180,7 @@ class ConversationRetriever:
     
     @staticmethod
     def _required_tools(llm_api: Any) -> list[LlmTool]:
-        """Build required tools from the live API; they are not embedded."""
+        """Build required tools from the live API and are not embedded."""
         # ToolExtractor imports the LLM API and search tool, so import it after module load.
         from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
         api_tools = {

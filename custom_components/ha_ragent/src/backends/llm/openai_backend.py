@@ -52,7 +52,7 @@ class OpenAiLlmBackend(ALlmBaseBackend):
 
     @staticmethod
     def _is_context_length_error(error: Exception) -> bool:
-        return isinstance(error, BadRequestError) and error.status_code == 400 and error.type == "exceed_context_size_error"
+        return isinstance(error, BadRequestError) and (error.type == "exceed_context_size_error" or error.code == "context_length_exceeded")
 
     def format_messages_for_backend(self, messages: List[ChatMessage]) -> List[ChatMessage]:
         """Keep message order while sending later system context as user content."""

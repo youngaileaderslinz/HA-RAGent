@@ -41,6 +41,7 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
         agent_id: str
     ) -> None:
         self.hass = hass
+        self.llm_context = llm_context
         translations = getattr(hass.data.get(DOMAIN, {}).get(entry_id), "translations", None)
         translations = translations or RAGentTranslations(llm_context.language or "en")
         self._scheduling_area = ""
@@ -205,12 +206,14 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
             for tool in self.tools:
                 if tool.name == tool_input.tool_name:
                     return await tool.async_call(
+                        self.hass,
                         llm.ToolInput(
                             tool_name=RAGENT_TOOL_NAMES_BY_PREFIXED_NAME[tool_input.tool_name],
                             tool_args=tool_input.tool_args,
                             id=tool_input.id,
                             external=tool_input.external,
-                        )
+                        ),
+                        self.llm_context,
                     )
 
         return await self._wrapped_api.async_call_tool(tool_input)

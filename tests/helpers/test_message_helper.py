@@ -140,12 +140,14 @@ def test_repeated_search_reuses_compact_candidate_names() -> None:
         {
             "candidate_devices": [{"name": "light.kitchen"}],
             "candidate_tools": [{"name": "HassTurnOn"}],
+            "available_tools": ["HassTurnOn"],
             "error": [],
         },
     )
 
     assert message.tool_result["candidate_devices"] == [{"name": "light.kitchen"}]
-    assert message.tool_result["candidate_tools"] == [{"name": "HassTurnOn"}]
+    assert message.tool_result["available_tools"] == ["HassTurnOn"]
+    assert "candidate_tools" not in message.tool_result
     assert message.tool_result["reused"] is True
 
 
@@ -199,7 +201,7 @@ def test_compact_search_preserves_zero_tool_fallback_signal() -> None:
     assert result["tool_search_message"] == "Do not invent a tool name."
 
 
-def test_compact_search_keeps_capabilities_without_detailed_ranking_signals() -> None:
+def test_compact_search_reports_available_names_without_tool_definitions() -> None:
     result = MessageHelper.compact_tool_result_value(
         "ha_ragent__HassSemanticSearch",
         {
@@ -216,19 +218,32 @@ def test_compact_search_keeps_capabilities_without_detailed_ranking_signals() ->
                 },
                 "parameters": {"omitted": True},
             }],
+            "available_tools": ["HassTurnOn"],
             "tool_search_confidence": "high",
             "error": [],
         },
     )
 
-    candidate = result["candidate_tools"][0]
-    assert candidate["name"] == "HassTurnOn"
-    assert candidate["action"] == "on"
-    assert candidate["domains"] == ["light", "switch"]
-    assert "retrieval_score" not in candidate
-    assert "ranking_signals" not in candidate
-    assert "parameters" not in candidate
+    assert result["available_tools"] == ["HassTurnOn"]
+    assert "candidate_tools" not in result
     assert result["tool_search_confidence"] == "high"
+    assert MessageHelper.compact_tool_result_value("ha_ragent__HassSemanticSearch", result) == result
+
+
+def test_compact_search_does_not_mark_unexposed_candidates_as_available() -> None:
+    result = MessageHelper.compact_tool_result_value(
+        "ha_ragent__HassSemanticSearch", {"candidate_tools": [{"name": "UnexposedAction"}]},
+    )
+    assert result["available_tools"] == []
+    assert "candidate_tools" not in result
+
+
+def test_compact_search_preserves_explicit_failure_status() -> None:
+    result = MessageHelper.compact_tool_result_value(
+        "ha_ragent__HassSemanticSearch", {"success": False, "error": []},
+    )
+    assert result["success"] is False
+    assert not MessageHelper.tool_result_succeeded(result)
 
 
 def test_long_success_result_is_bounded() -> None:

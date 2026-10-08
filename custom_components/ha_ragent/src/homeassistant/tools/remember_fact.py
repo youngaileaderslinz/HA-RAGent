@@ -3,12 +3,13 @@ from __future__ import annotations
 import probatio
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import llm
+from custom_components.ha_ragent.src.homeassistant.tools.base_tool import RAGentTool
 from custom_components.ha_ragent.src.const import RAGENT_REMEMBER_TOOL_NAME, TRANSLATION_ERROR_MEMORY_EMPTY, TRANSLATION_ERROR_MEMORY_TOO_LONG, TRANSLATION_ERROR_MEMORY_STORE
 from custom_components.ha_ragent.src.homeassistant.helpers.memory_manager import MemoryManager
 from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 
-class RAGentRememberTool(llm.Tool):
+class RAGentRememberTool(RAGentTool):
     name = RAGENT_REMEMBER_TOOL_NAME
     parameters = probatio.Schema({probatio.Required("memory"): probatio.All(str, probatio.Length(min=1, max=1000))})
 
@@ -17,7 +18,7 @@ class RAGentRememberTool(llm.Tool):
         self.translations = RAGentTranslations(language or "en")
         self.description = self.translations.tool(RAGENT_REMEMBER_TOOL_NAME)
 
-    async def async_call(self, tool_input: llm.ToolInput, *args, **kwargs) -> dict[str, object]:
+    async def _async_call(self, tool_input: llm.ToolInput, *args, **kwargs) -> dict[str, object]:
         content = MemoryManager.normalize_content(str(tool_input.tool_args.get("memory", "")))
         if not content:
             return {"success": False, "error": self.translations.error(TRANSLATION_ERROR_MEMORY_EMPTY)}

@@ -56,7 +56,7 @@ def test_query_limit_is_enforced_before_any_retrieval():
     tool.translations._data = RAGentTranslations._load("en")
     tool._iter_searchable_entries = Mock(side_effect=AssertionError("Must not retrieve"))
     queries = ["repeated"] * (RAGENT_MAX_SEARCH_QUERIES + 1)
-    result = asyncio.run(tool.async_call(SimpleNamespace(tool_args={"search_queries": queries})))
+    result = asyncio.run(tool._async_call(SimpleNamespace(tool_args={"search_queries": queries})))
     assert str(RAGENT_MAX_SEARCH_QUERIES) in result["error"]
     tool._iter_searchable_entries.assert_not_called()
     with pytest.raises(probatio.Invalid):

@@ -346,10 +346,10 @@ class ToolHelper:
         """Parse tool results from LLM response."""
         tool_result_type = getattr(llm, "ToolResult", None)
         if tool_result_type is not None and isinstance(tool_result, tool_result_type):
-            data = tool_result.data
-            if tool_result.error and isinstance(data, dict):
-                data = {**data, "success": False}
-            tool_result = data
+            parsed_result = ToolHelper.parse_tool_results(tool_result.data)
+            if tool_result.error:
+                return {**parsed_result, "success": False}
+            return parsed_result
         if not isinstance(tool_result, dict):
             return {"result": tool_result}
 
