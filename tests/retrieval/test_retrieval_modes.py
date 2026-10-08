@@ -9,6 +9,7 @@ from custom_components.ha_ragent.src.const import (
     RETRIEVAL_METHOD_AUTOMATIC,
     RETRIEVAL_METHOD_LEXICAL,
     RETRIEVAL_METHOD_VECTOR,
+    RAGENT_PREFIXED_REQUIRED_TOOL_NAMES,
 )
 from custom_components.ha_ragent.src.homeassistant.helpers import device_ranker, tool_ranker, source_ranker
 from custom_components.ha_ragent.src.homeassistant.helpers.conversation_retriever import ConversationRetriever
@@ -151,3 +152,81 @@ def test_zero_optional_tool_limit_keeps_required_tool_without_source_queries(mon
     assert result == [required]
     database.async_get_lexical_objects.assert_not_awaited()
     database.async_retrieve_scored_objects.assert_not_awaited()
+
+
+@pytest.mark.parametrize("workflow", ["initial", "corrective"])
+@pytest.mark.parametrize("scope", ["devices", "tools"])
+@pytest.mark.parametrize("mode", [
+    RETRIEVAL_METHOD_AUTOMATIC, RETRIEVAL_METHOD_LEXICAL, RETRIEVAL_METHOD_VECTOR,
+])
+@pytest.mark.parametrize("scores", [
+    pytest.param([], id="empty"),
+    pytest.param([0.96, 0.05], id="fewer-than-minimum"),
+    pytest.param([0.96, 0.05, 0.04], id="exactly-minimum"),
+    pytest.param([0.96, *([0.05] * 7)], id="dominant-match"),
+    pytest.param([0.05] * 8, id="weak-matches"),
+    pytest.param([0.90] * 8, id="tied-matches"),
+])
+def test_retrieval_enforces_minimum_and_maximum_in_every_mode(workflow, scope, mode, scores, monkeypatch):
+    minimum, maximum = 3, 5
+    query = "Desk lamp"
+    if scope == "devices":
+        candidates = [
+            Device(f"light.candidate_{index}", query if index == 0 else f"Other {index}", "", "")
+            for index in range(len(scores))
+        ]
+    else:
+        candidates = [
+            LlmTool(f"Action{index}", query if index == 0 else f"Other action {index}")
+            for index in range(len(scores))
+        ]
+    scored = [
+        ScoredResult(candidate, score, index + 1)
+        for index, (candidate, score) in enumerate(zip(candidates, scores))
+    ]
+    database = SimpleNamespace(
+        async_get_lexical_objects=AsyncMock(return_value=candidates),
+        async_retrieve_scored_objects=AsyncMock(return_value=scored),
+    )
+    entry = SimpleNamespace(
+        options={CONF_RETRIEVAL_METHOD: mode}, vector_db_backend=database,
+        embedder_backend=SimpleNamespace(async_embed_text=AsyncMock(return_value=[1.0, 0.0])),
+    )
+    subentry = SimpleNamespace(data={}, title="Test")
+    required = LlmTool(RAGENT_PREFIXED_REQUIRED_TOOL_NAMES[0], "Search")
+    monkeypatch.setattr(ConversationRetriever, "_required_tools", staticmethod(lambda _: [required]))
+
+    if workflow == "initial":
+        retriever = ConversationRetriever(None, entry, "entry", "agent", subentry)
+        if scope == "devices":
+            result = asyncio.run(retriever.async_retrieve_devices(
+                [1.0, 0.0], query, minimum=minimum, maximum=maximum,
+                continuity=ContinuityContext(), retrieval_method=mode,
+            ))
+            names = [device.id for device in result]
+        else:
+            result = asyncio.run(retriever.async_retrieve_tools(
+                [1.0, 0.0], query, minimum=minimum, maximum=maximum,
+                retrieval_method=mode, llm_api=object(),
+            ))
+            assert result[0] is required
+            names = [tool.name for tool in result[1:]]
+    else:
+        search = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
+        search.entry_id = "entry"
+        search.hass = Mock()
+        search.hass.states.get.return_value = None
+        search._iter_searchable_entries = lambda: iter([
+            (entry, "agent", subentry, minimum, maximum, minimum, maximum),
+        ])
+        search.set_search_context(latest_request=query)
+        result = asyncio.run(search._async_call(SimpleNamespace(tool_args={
+            "search_queries": [query], "scope": scope,
+        })))
+        assert not result["error"]
+        names = [candidate["name"] for candidate in result[f"candidate_{scope}"]]
+
+    assert min(minimum, len(candidates)) <= len(names) <= min(maximum, len(candidates))
+    assert len(names) == len(set(names))
+    if mode != RETRIEVAL_METHOD_AUTOMATIC or (workflow == "corrective" and scope == "tools"):
+        assert len(names) == min(maximum, len(candidates))

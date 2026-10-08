@@ -18,8 +18,8 @@ HA-RAGent adds a Home Assistant conversation agent that can use your own LLM. It
 If you enable device control, the model can call Home Assistant tools and use their results to complete a request. You can also limit how much conversation history, device information, tools and memory are sent to the model. This is helpful for smaller or self-hosted models.
 
 ## Disclaimers
-### Default System Prompt
-Changes to the default system prompt apply only to newly created RAGent entries. Existing entries retain the prompt saved in their configuration. To use the latest default prompt with an existing entry, copy it into the entry’s **System Prompt** field and save the configuration or recreate the entry.
+### Default Prompts
+New AI RAGent entries receive the current translated defaults for **Rule Prompt** and **State Prompt**. Existing entries retain their saved templates. To adopt updated defaults, update those two fields in the agent's configuration or recreate the AI RAGent entry.
 
 ### OpenAI-Compatible Backends
 OpenAI-compatible backends have currently been tested only with llamaccp. Compatibility with other providers is not guaranteed, so test the selected backend thoroughly before using it in production.
@@ -82,24 +82,29 @@ Use the `Add Integration` button in the bottom right to add a new integration ca
 - The name contains database, embedding and llm backend
 
 **Pick Models**
+
 - `Embedding Model`
-    - **Only shows downloaded models** that can be used for embedding generation
+    - **Ollama** lists installed models with embedding support. **OpenAI Compatible** lists models reported by the provider (select one that supports embeddings)
     - Prefer a dedicated semantic-search embedding model.
 - `LLM Model`
-    - **Only shows downloaded models** that can be used as LLM model
+    - **Ollama** lists installed models with tool support. **OpenAI Compatible** lists models reported by the provider (select a chat model with tool support)
 
 **Fine Tuning**
+
 - `LLM Home Assistant API`
-    - **No Control** means the model is not allowed to control devices
+    - **No Control** disables all tool calls, including search, scheduling and memory changes. Configured device and recalled memory context can still be used for replies.
     - **Assist** allows the model to control devices and exposes Home Assistant tools
+- `Prompt layout`
+    - **Split** (default) sends the Rule Prompt before conversation history and the State Prompt after history, immediately before the current user message.
+    - **Combined** joins both prompts before conversation history. Entries migrated from the old single-prompt configuration retain this layout.
 - `Rule Prompt`
     - Stable instructions sent before conversation history
 - `State Prompt`
-    - Current Home Assistant context sent after conversation history and before the current user message
+    - Current Home Assistant context according to the defined prompt layout.
 - `Allow Auto Embedding`
     - Automatically rebuilds embeddings for exposed entities and tools during startup and after configuration changes
 - `Allow Follow-up Questions`
-    - Lets the assistant ask a clarification question and keep the conversation open for the user's reply
+    - Keeps the conversation open when the assistant's reply ends with `?`.
 - `Enable Model Thinking`
     - Controls whether the model may use its thinking mode. Leave disabled for faster responses when supported.
 - `Retrieval Method` (Only affects device and tool retrieval, memory always uses vector search)
@@ -108,14 +113,15 @@ Use the `Add Integration` button in the bottom right to add a new integration ca
     - **Lexical search** uses names, aliases and metadata without semantic similarity
 - `Tools excluded from embedding`
     - Excludes selected tool names from the vector index. Names are matched exactly and are case-sensitive
-- `Minimum Number of Devices` / `Maximum Number of Devices`
-    - Defaults to `2` / `4`. Confident retrieval uses the minimum; uncertain or ambiguous retrieval expands up to the maximum.
-- `Minimum Number of Tools` / `Maximum Number of Tools`
-    - Defaults to `2` / `4`. Confident retrieval uses the minimum; uncertain retrieval expands up to the maximum (required HA-RAGent tools do not count toward either limit).
-- `Minimum Number of Long-Term Memories` / `Maximum Number of Long-Term Memories`
-    - Defaults to `0` / `4`. Vector-search confidence determines how many relevant memories are added to each prompt within this range. Set the maximum to `0` to disable recall without deleting memories.
+- `Minimum Devices to Expose` / `Maximum Devices to Expose`
+    - Defaults to `2` / `4`. In all search modes, the minimum is enforced unless fewer candidates are available and the maximum is a hard cap.
+- `Minimum Searched Tools to Expose` / `Maximum Searched Tools to Expose`
+    - Defaults to `2` / `4`. In all search modes, the minimum is enforced unless fewer searchable tools are available. The maximum caps each retrieval or search result. Altough, explicit tool searches can add tools to the existing request's set. The required semantic-search tool does not count toward these limits.
+- `Minimum Long-Term Memories` / `Maximum Long-Term Memories`
+    - Defaults to `0` / `4`. Vector-search confidence determines the count within this range. The minimum is enforced unless fewer memories are available and the maximum is a hard cap. Set the maximum to `0` to disable recall without deleting memories.
 - `Maximum Memory Entries`
-    - Controls how many long-term memories are retained for this RAGent.
+    - Defaults to `100` stored memories per AI RAGent. Adding a memory beyond the limit removes entries with the lowest retrieval count, oldest first on ties. Lowering the limit takes effect on the next memory write.
+    - A new memory can be immediately evicted when existing entries have higher retrieval counts; the remember tool currently still reports success in that case.
 - `Context Length` (Ollama only)
     - Sets Ollama's model context-window size
 - `Maximum Tokens`
@@ -132,10 +138,11 @@ Use the `Add Integration` button in the bottom right to add a new integration ca
 Both history limits apply when they are greater than `0`. For example, with `10` interactions and `60` minutes, only interactions from the last hour and within the last 10 turns are kept.
 
 ### Available Prompt Variables
-Both prompts are rendered as Home Assistant Jinja templates for every request. Keep current state in the **State Prompt** so the model receives stable rules, tool definitions, conversation history, current state the current user message in that order. The following variables are available:
+
+Both prompts are rendered as Home Assistant Jinja templates for every request. Keep current state in the **State Prompt** and use **Split** layout to place it after conversation history. Tool definitions are supplied separately from prompt text. The following variables are available:
 
 - `device_list`
-    - The retrieved device candidates whose entities currently exist in Home Assistant. Each device provides `id`, `friendly_name`, `area_name`, `floor_name`, `domain`, `device_class`, `device_labels`, `services`, `aliases`, `state`, `attributes` and `unit_of_measurement`.
+    - The retrieved device candidates whose entities currently exist in Home Assistant. Each device provides `id`, `friendly_name`, `area_name`, `floor_name`, `area_aliases`, `floor_aliases`, `domain`, `device_class`, `device_labels`, `services`, `aliases`, `state`, `attributes` and `unit_of_measurement`.
 - `memory_list`
     - The retrieved memory context candidates. Each memory provides `id`, `content` and `created_at`.
 - `area_list`
@@ -151,25 +158,34 @@ Both prompts are rendered as Home Assistant Jinja templates for every request. K
 When **Assist** is selected, HA-RAGent resolves it to its custom LLM API, which provides the following additional tools:
 
 **HassSemanticSearch**
+
 - Searches for devices and Home Assistant tools without changing device state.
+- Accepts `search_queries` (up to four self-contained queries) and optional `capabilities`.
 
 **HassScheduleAction**
-- Schedules a one-time Home Assistant action for execution after a specified delay.
+
+- Schedules a one-time Home Assistant action after a delay of `1`–`1440` minutes.
+- Pending actions are held in memory and are cancelled on Home Assistant restart or integration reload.
 
 **HassListScheduledActions**
-- Lists all currently scheduled one-time Home Assistant actions.
+
+- Lists pending one-time Home Assistant actions for this AI RAGent.
 
 **HassCancelScheduledActions**
-- Cancels all currently scheduled one-time Home Assistant actions.
+
+- Cancels all pending one-time Home Assistant actions for this AI RAGent.
 
 **HassRememberFact**
+
 - Stores a fact as per-agent long-term memory when the user explicitly asks for it to be remembered.
+- Facts may contain up to `1000` characters. Repeating the same fact with different casing or whitespace replaces the existing entry.
 
 **HassForgetFact**
+
 - Deletes one recalled long-term memory by its exact memory ID.
 
 ## Services
-HA-RAGent registers the following Home Assistant services for each conversation entity created by the integration:
+HA-RAGent registers the following Home Assistant services. Target one or more conversation entities created by the integration:
 
 - `ha_ragent.embed_subentry`
     - Rebuilds device and tool embeddings for the selected AI RAGent subentry.

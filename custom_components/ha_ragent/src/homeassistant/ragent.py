@@ -539,6 +539,10 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 max_devices = get_setting_value(CONF_MAX_DEVICES_TO_EXTRACT, self.runtime_options)
                 min_tools = get_setting_value(CONF_MIN_TOOLS_TO_EXTRACT, self.runtime_options)
                 max_tools = get_setting_value(CONF_MAX_TOOLS_TO_EXTRACT, self.runtime_options)
+                # A saved minimum must never raise the maximum exposure limit.
+                min_memories = min(min_memories, max_memories)
+                min_devices = min(min_devices, max_devices)
+                min_tools = min(min_tools, max_tools)
 
                 requires_embedding = retrieval_method != RETRIEVAL_METHOD_LEXICAL or max_memories > 0
                 current_area, current_floor = self._get_current_device_location(llm_context, scheduled_context)
