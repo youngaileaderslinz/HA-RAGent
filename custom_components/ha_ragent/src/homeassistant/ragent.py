@@ -398,6 +398,33 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                             tool_succeeded = MessageHelper.tool_result_succeeded(parsed_tool_result)
 
                             if tool_succeeded and is_search_tool:
+                                discovered_tools = parsed_tool_result.get("candidate_tools", [])
+                                discovered_names = list(dict.fromkeys([
+                                    candidate["name"] for candidate in discovered_tools
+                                    if isinstance(candidate, dict)
+                                    and isinstance(candidate.get("name"), str)
+                                ])) if isinstance(discovered_tools, list) else []
+                                requested_tool_search = tool_call.tool_args.get("scope") in {"tools", "devices_and_tools"}
+                                if requested_tool_search:
+                                    missing_names = [
+                                        name for name in discovered_names if name not in exposed_tool_names
+                                    ]
+                                    added_tools = self._exclude_prohibited_scheduled_request_tools(
+                                        ConversationRetriever.tools_from_api(llm_api, missing_names),
+                                        scheduled_request,
+                                    )
+                                    if added_tools:
+                                        tool_list = [*tool_list, *added_tools]
+                                        exposed_tool_names.update(tool.name for tool in added_tools)
+                                        tool_helper = ToolHelper(self.hass, tool_list)
+                                available_tools = [name for name in discovered_names if name in exposed_tool_names]
+                                parsed_tool_result = {**parsed_tool_result, "available_tools": available_tools}
+                                if requested_tool_search and discovered_names and not available_tools:
+                                    parsed_tool_result.update({
+                                        "tool_search_status": "no_tools_available",
+                                        "fallback_required": True,
+                                        "tool_search_message": "No retrieved tools are callable for this request.",
+                                    })
                                 discovered_candidates = tool_helper.candidate_devices(parsed_tool_result)
                                 if discovered_candidates:
                                     active_candidate_context = tool_helper.merge_candidates(active_candidate_context, discovered_candidates)

@@ -70,26 +70,42 @@ def test_corrective_search_exposes_tools_only_when_explicitly_requested(availabl
     )
     action = SimpleNamespace(
         name=action_name, description="Perform the action",
-        parameters={"type": "object", "properties": {}},
+        parameters={
+            "type": "object",
+            "properties": {"level": {"type": "integer", "description": "Requested level"}},
+            "required": ["level"],
+            "additionalProperties": False,
+        },
     )
     api = SimpleNamespace(
         tools=[action] if available else [], custom_serializer=None,
         async_call_tool=AsyncMock(side_effect=[
-            {"candidate_tools": [{"name": action_name}], "candidate_devices": [], "error": []},
+            {
+                "candidate_tools": [{
+                    "name": action_name, "description": "Cached candidate description",
+                    "parameters": {"cached_schema": True}, "action": "cached_action",
+                    "domains": ["cached_domain"],
+                }],
+                "candidate_devices": [{"name": "light.desk", "state": "on"}], "error": [],
+            },
             {"success": True},
         ]),
     )
     requests = []
+    tool_definitions = []
+    request_messages = []
     should_add_tools = available and not scheduled and scope in {"tools", "devices_and_tools"}
 
     async def send(_config, _messages, tools):
         requests.append([tool.name for tool in tools])
+        tool_definitions.append([tool.to_tool_dict() for tool in tools])
+        request_messages.append([dict(message) for message in _messages])
         if len(requests) == 1:
             tool_name, arguments = search_name, {"search_queries": ["perform the action"]}
             if scope is not None:
                 arguments["scope"] = scope
         elif len(requests) == 2:
-            tool_name, arguments = action_name, {}
+            tool_name, arguments = action_name, {"level": 1}
         else:
             yield "Done."
             return
@@ -120,3 +136,18 @@ def test_corrective_search_exposes_tools_only_when_explicitly_requested(availabl
     assert requests[1] == [search_name, "ExistingAction", *([action_name] if should_add_tools else [])]
     assert api.async_call_tool.await_count == (2 if should_add_tools else 1)
     assert [tool.name for tool in initial_tools] == [search_name, "ExistingAction"]
+    if should_add_tools:
+        assert tool_definitions[1][-1]["function"]["parameters"] == action.parameters
+        assert tool_definitions[1][-1]["function"]["description"] == action.description
+    search_result = next(
+        message["content"] for message in request_messages[1]
+        if message["role"] == "tool" and message["tool_name"] == search_name
+    )
+    assert search_result["available_tools"] == ([action_name] if should_add_tools else [])
+    assert search_result["candidate_devices"] == [{"name": "light.desk", "state": "on"}]
+    assert "candidate_tools" not in search_result
+    assert "Cached candidate description" not in json.dumps(search_result)
+    assert "cached_schema" not in json.dumps(search_result)
+    if scope in {"tools", "devices_and_tools"} and not should_add_tools:
+        assert search_result["tool_search_status"] == "no_tools_available"
+        assert search_result["fallback_required"] is True
