@@ -162,7 +162,7 @@ class OllamaLlmBackend(ALlmBaseBackend):
             if item.get("role") == "tool":
                 item.pop("tool_call_id", None)
                 if not isinstance(item.get("content"), str):
-                    item["content"] = json.dumps(item.get("content"), ensure_ascii=False, default=str)
+                    item["content"] = json.dumps(item.get("content"), ensure_ascii=False, default=str, separators=(",", ":"))
             prepared.append(item)
         return prepared
     
@@ -193,7 +193,7 @@ class OllamaLlmBackend(ALlmBaseBackend):
             payload["messages"] = self.format_messages_for_backend(messages)
 
         if tools:
-            payload["tools"] = [tool.to_tool_dict() for tool in tools]
+            payload["tools"] = self.convert_tools_to_model_format(tools)
             required_tool_names, searched_tool_names = self.split_tool_names(tools)
             _logger.log_string(logging.DEBUG, f"Added {len(tools)} tools to Ollama request: required_tools={required_tool_names}, searched_tools={searched_tool_names}")
         

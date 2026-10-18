@@ -53,7 +53,9 @@ class ALlmBaseBackend(ABC):
     @staticmethod
     def convert_tools_to_model_format(tools: List[LlmTool]) -> List[Dict[str, Any]]:
         """Build complete OpenAI function tool definitions from the tool models."""
-        return [tool.to_tool_dict() for tool in tools]
+        # Retrieval rank can vary while the exposed set stays the same. Stable
+        # ordering keeps the tool prefix reusable by the model's KV cache.
+        return [tool.to_tool_dict() for tool in sorted(tools, key=lambda tool: tool.name)]
 
     @staticmethod
     def split_tool_names(tools: List[LlmTool]) -> tuple[list[str], list[str]]:

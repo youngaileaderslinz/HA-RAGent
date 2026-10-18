@@ -1,4 +1,5 @@
 from functools import partial
+import asyncio
 import json
 import logging
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
@@ -33,17 +34,20 @@ class OpenAiLlmBackend(ALlmBaseBackend):
         super().__init__(hass, client_options)
         self._openai_url = ALlmBaseBackend.format_url(**self._url_base, path="/v1")
         self._client: AsyncOpenAI | None = None
+        self._client_lock = asyncio.Lock()
 
     async def _async_get_client(self) -> AsyncOpenAI:
         if self._client is None:
-            self._client = await self._hass.async_add_executor_job(
-                partial(
-                    AsyncOpenAI,
-                    base_url=self._openai_url,
-                    api_key=self._api_key or "not-needed",
-                    max_retries=CONNECTION_RETRIES,
-                )
-            )
+            async with self._client_lock:
+                if self._client is None:
+                    self._client = await self._hass.async_add_executor_job(
+                        partial(
+                            AsyncOpenAI,
+                            base_url=self._openai_url,
+                            api_key=self._api_key or "not-needed",
+                            max_retries=CONNECTION_RETRIES,
+                        )
+                    )
         return self._client
 
     @staticmethod
@@ -79,7 +83,7 @@ class OpenAiLlmBackend(ALlmBaseBackend):
             if item.get("role") == "tool":
                 item.pop("tool_name", None)
                 if not isinstance(item.get("content"), str):
-                    item["content"] = json.dumps(item.get("content"), ensure_ascii=False, default=str)
+                    item["content"] = json.dumps(item.get("content"), ensure_ascii=False, default=str, separators=(",", ":"))
             prepared.append(item)
         return prepared
 
