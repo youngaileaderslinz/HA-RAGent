@@ -19,6 +19,9 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
     BooleanSelector,
     BooleanSelectorConfig,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
 )
 
 from custom_components.ha_ragent.src.const import (
@@ -188,7 +191,9 @@ def ui_schema_backend_connections(
     if vector_db_backend_type == BACKEND_VECTOR_DB_TYPE_MONGODB:
         schema.update({
             probatio.Optional(CONF_VECTOR_DB_USERNAME, default=vector_db_username if vector_db_username else ""): str,
-            probatio.Optional(CONF_VECTOR_DB_PASSWORD, default=vector_db_password if vector_db_password else ""): str,
+            probatio.Optional(CONF_VECTOR_DB_PASSWORD, default=vector_db_password if vector_db_password else ""): TextSelector(
+                TextSelectorConfig(type=TextSelectorType.PASSWORD)
+            ),
         })
         
     if not vector_db_backend_type == BACKEND_VECTOR_DB_TYPE_FAISS:
@@ -219,7 +224,9 @@ def ui_schema_backend_connections(
     })
 
     if embedding_backend_type in EMBEDDING_BACKENDS_WITH_API_KEY:
-        schema[probatio.Optional(CONF_EMBEDDING_API_KEY, default=embedding_api_key if embedding_api_key else "")] = str
+        schema[probatio.Optional(CONF_EMBEDDING_API_KEY, default=embedding_api_key if embedding_api_key else "")] = TextSelector(
+            TextSelectorConfig(type=TextSelectorType.PASSWORD)
+        )
     schema[probatio.Required(CONF_EMBEDDING_SSL, default=embedding_ssl if embedding_ssl is not None else embedding_default_ssl)] = bool
 
     schema.update({
@@ -228,7 +235,9 @@ def ui_schema_backend_connections(
     })
 
     if llm_backend_type in LLM_BACKENDS_WITH_API_KEY:
-        schema[probatio.Optional(CONF_LLM_API_KEY, default=llm_api_key if llm_api_key else "")] = str
+        schema[probatio.Optional(CONF_LLM_API_KEY, default=llm_api_key if llm_api_key else "")] = TextSelector(
+            TextSelectorConfig(type=TextSelectorType.PASSWORD)
+        )
     schema[probatio.Required(CONF_LLM_SSL, default=llm_ssl if llm_ssl is not None else llm_default_ssl)] = bool
 
     return probatio.Schema(schema)
