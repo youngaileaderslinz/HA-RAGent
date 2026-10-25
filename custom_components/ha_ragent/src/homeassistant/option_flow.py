@@ -22,7 +22,8 @@ from custom_components.ha_ragent.src.const import (
     CONF_VECTOR_DB_PORT,
     CONF_VECTOR_DB_SSL,
     CONF_VECTOR_DB_PASSWORD,
-    CONF_VECTOR_DB_USERNAME
+    CONF_VECTOR_DB_USERNAME,
+    CONF_VECTOR_DB_NAME,
 )
 
 from custom_components.ha_ragent.src.backends.backends import embedding_backend_to_class, llm_backend_to_class, vector_db_to_class
@@ -66,6 +67,7 @@ class RagentOptionsFlow(OptionsFlow):
             vector_db_host=get_setting_value(CONF_VECTOR_DB_HOST, client_config),
             vector_db_port=get_setting_value(CONF_VECTOR_DB_PORT, client_config),
             vector_db_ssl=get_setting_value(CONF_VECTOR_DB_SSL, client_config),
+            vector_db_name=get_setting_value(CONF_VECTOR_DB_NAME, client_config),
             embedding_host=get_setting_value(CONF_EMBEDDING_HOST, client_config),
             embedding_port=get_setting_value(CONF_EMBEDDING_PORT, client_config),
             embedding_ssl=get_setting_value(CONF_EMBEDDING_SSL, client_config),

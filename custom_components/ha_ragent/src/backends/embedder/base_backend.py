@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import asyncio
 import aiohttp
 from typing import Any, Dict, List
 
@@ -117,4 +118,9 @@ class ABaseEmbedder(ABC):
     @abstractmethod
     async def async_embed_object(self, config_subentry: dict, objects: List[EmbeddableModel], translations: RAGentTranslations | None = None) -> List[EmbeddingRecord]:
         """Embed a list of objects and return the vector embeddings."""
+        raise NotImplementedError()
+
+    @abstractmethod
+    async def async_embed_texts(self, config_subentry: dict, texts: List[str]) -> List[List[float]]:
+        """Embed a list of text strings and return the vector embeddings."""
         raise NotImplementedError()

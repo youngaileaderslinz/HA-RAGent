@@ -204,3 +204,70 @@ def test_corrective_search_exposes_tools_only_when_explicitly_requested(availabl
     if scope in {"tools", "devices_and_tools"} and not should_add_tools:
         assert search_result["tool_search_status"] == "no_tools_available"
         assert search_result["fallback_required"] is True
+
+
+@pytest.mark.parametrize("exposed", [True, False])
+def test_streaming_preserves_tool_validation_and_stores_each_message_once(exposed):
+    deltas = []
+    tool_name = "VendorAction"
+    api = SimpleNamespace(async_call_tool=AsyncMock(return_value={"success": True}))
+
+    class StreamingChatLog:
+        def __init__(self):
+            self.content = [ragent_module.conversation.UserContent(content="Perform the action")]
+
+        async def async_add_delta_content_stream(self, agent_id, stream):
+            parts = []
+            async for delta in stream:
+                assert "tool_calls" not in delta
+                deltas.append(delta)
+                parts.append(delta["content"])
+            if parts:
+                message = ragent_module.conversation.AssistantContent(
+                    agent_id=agent_id, content="".join(parts),
+                )
+                self.content.append(message)
+                yield message
+
+    requests = 0
+
+    async def send(_config, _messages, _tools):
+        nonlocal requests
+        requests += 1
+        if requests == 1:
+            yield "```home"
+            assert api.async_call_tool.await_count == 0
+            yield 'assistant\n{"tool":"VendorAction","arguments":{}}\n```'
+        else:
+            yield "Done" if exposed else "Unavailable"
+            assert deltas, "Speech was buffered until generation finished"
+            yield "."
+
+    agent = SimpleNamespace(
+        hass=SimpleNamespace(),
+        entry=SimpleNamespace(
+            llm_backend=SimpleNamespace(async_send_chat_request=send),
+            translations=RAGentTranslations.default("en"),
+        ),
+        subentry=SimpleNamespace(data={}), runtime_options={CONF_MAX_TOOL_CALL_ITERATIONS: 2},
+    )
+    user_input = SimpleNamespace(
+        text="Perform the action", agent_id="agent", language="en", conversation_id="conversation",
+    )
+    chat_log = StreamingChatLog()
+    history = HistoryManager({})
+    history.build_prompt_history(chat_log, user_input, "rules", "state")
+    tools = [LlmTool(tool_name, "Perform the action", parameters={})] if exposed else []
+
+    result = asyncio.run(ragent_module.RAGent._async_prompt_model(
+        agent, api, user_input, tools, chat_log, history,
+        [], user_input.text, ContinuityContext(),
+    ))
+
+    assert result.response.error_code is None
+    assert requests == 2
+    assert api.async_call_tool.await_count == int(exposed)
+    assert "".join(delta["content"] for delta in deltas) == ("Done." if exposed else "Unavailable.")
+    assert len(chat_log.content) == 4
+    assert len([message for message in chat_log.content if message.role == "assistant"]) == 2
+    assert chat_log.content[-1].content == ("Done." if exposed else "Unavailable.")

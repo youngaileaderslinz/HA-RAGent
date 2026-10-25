@@ -86,23 +86,6 @@ class SourceRanker:
         )
 
     @staticmethod
-    def local_candidates_confident(query: str, items: Iterable[Any]) -> bool:
-        """Skip semantic recall only for a unique, complete local name match.
-
-        Additional words may express another target or capability, so a partial
-        match is insufficient to skip semantic retrieval.
-        """
-        normalized = SourceRanker.normalize(query)
-        if not normalized:
-            return False
-        matches = 0
-        for item in items:
-            values = SourceRanker.candidate_identity_values(item)
-            if normalized in {SourceRanker.normalize(value) for value in values if value}:
-                matches += 1
-        return matches == 1
-
-    @staticmethod
     def normalize(text: object) -> str:
         return normalize_canonical_text(text)
 
@@ -110,18 +93,6 @@ class SourceRanker:
     def canonical_search_signature(query: object) -> str:
         """Normalize spelling representation without conflating distinct intents."""
         return " ".join(unicodedata.normalize("NFC", str(query or "")).casefold().split())
-
-    @staticmethod
-    def candidate_identity_values(device: Any) -> tuple[object, ...]:
-        aliases = SourceRanker.candidate_value(device, "aliases", []) or []
-        if isinstance(aliases, str):
-            aliases = [aliases]
-        return (
-            SourceRanker.candidate_value(device, "id", ""),
-            SourceRanker.candidate_value(device, "name", ""),
-            SourceRanker.candidate_value(device, "friendly_name", ""),
-            *aliases,
-        )
 
     @staticmethod
     def adaptive_candidate_limit(limit: int | float) -> int:

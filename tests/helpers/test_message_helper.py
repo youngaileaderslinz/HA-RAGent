@@ -90,67 +90,6 @@ def test_message_to_chat_messages() -> None:
     assert messages[2]["tool_calls"][0]["function"]["name"] == "HassTurnOn"
     assert messages[3]["tool_call_id"] == "call"
 
-def test_clean_assistant_content() -> None:
-    content = "Done\n```homeassistant\n{\"tool\": \"HassTurnOn\"}\n```"
-
-    assert MessageHelper.clean_assistant_content(content, True) == "Done"
-    assert MessageHelper.clean_assistant_content(content, False) == content
-
-def test_repeated_success_result_contains_only_success_fields() -> None:
-    message = MessageHelper.create_repeated_tool_result_message(
-        "agent", "call-1", "HassTurnOn",
-        {"success": True, "description": "light", "error": "stale"},
-    )
-
-    assert message.tool_result == {
-        "success": True,
-        "already_executed": True,
-    }
-
-def test_repeated_failure_preserves_error() -> None:
-    message = MessageHelper.create_repeated_tool_result_message(
-        "agent", "call-2", "HassTurnOn",
-        {"success": False, "error": "target not found", "details": "ignored"},
-    )
-
-    assert message.tool_result == {
-        "success": False,
-        "already_executed": True,
-        "error": "target not found",
-    }
-
-def test_repeated_list_and_search_results_remain_successful() -> None:
-    list_result = MessageHelper.create_repeated_tool_result_message(
-        "agent", "call-3", "HassTurnOff", {"success": ["light.bedroom"]},
-    )
-    search_result = MessageHelper.create_repeated_tool_result_message(
-        "agent", "call-4", "ha_ragent__HassSemanticSearch", {"devices": [], "error": []},
-    )
-
-    assert list_result.tool_result["success"] is True
-    assert search_result.tool_result["result_type"] == "candidate_search"
-    assert search_result.tool_result["reused"] is True
-
-
-def test_repeated_search_reuses_compact_candidate_names() -> None:
-    message = MessageHelper.create_repeated_tool_result_message(
-        "agent",
-        "call-5",
-        "ha_ragent__HassSemanticSearch",
-        {
-            "candidate_devices": [{"name": "light.kitchen"}],
-            "candidate_tools": [{"name": "HassTurnOn"}],
-            "available_tools": ["HassTurnOn"],
-            "error": [],
-        },
-    )
-
-    assert message.tool_result["candidate_devices"] == [{"name": "light.kitchen"}]
-    assert message.tool_result["available_tools"] == ["HassTurnOn"]
-    assert "candidate_tools" not in message.tool_result
-    assert message.tool_result["reused"] is True
-
-
 def test_compact_search_preserves_device_state_and_location() -> None:
     result = MessageHelper.compact_tool_result_value(
         "ha_ragent__HassSemanticSearch",

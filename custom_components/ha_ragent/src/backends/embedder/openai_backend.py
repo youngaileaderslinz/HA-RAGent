@@ -1,4 +1,5 @@
 from functools import partial
+import asyncio
 import logging
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any, Dict, List
@@ -33,17 +34,20 @@ class OpenAiEmbedder(ABaseEmbedder):
         super().__init__(hass, client_options)
         self._openai_url = ABaseEmbedder.format_url(**self._url_base, path="/v1")
         self._client: AsyncOpenAI | None = None
+        self._client_lock = asyncio.Lock()
 
     async def _async_get_client(self) -> AsyncOpenAI:
         if self._client is None:
-            self._client = await self._hass.async_add_executor_job(
-                partial(
-                    AsyncOpenAI,
-                    base_url=self._openai_url,
-                    api_key=self._api_key or "not-needed",
-                    max_retries=CONNECTION_RETRIES,
-                )
-            )
+            async with self._client_lock:
+                if self._client is None:
+                    self._client = await self._hass.async_add_executor_job(
+                        partial(
+                            AsyncOpenAI,
+                            base_url=self._openai_url,
+                            api_key=self._api_key or "not-needed",
+                            max_retries=CONNECTION_RETRIES,
+                        )
+                    )
         return self._client
     
     @staticmethod
@@ -157,6 +161,14 @@ class OpenAiEmbedder(ABaseEmbedder):
     async def async_embed_text(self, config_subentry: dict, text: str, **kwargs) -> List[float]:
         embeddings = await self._async_embed_batch(config_subentry, [text])
         return embeddings[0] if embeddings else []
+
+    async def async_embed_texts(self, config_subentry: dict, texts: List[str]) -> List[List[float]]:
+        """Embed a list of text strings and return the vector embeddings"""
+        vectors: List[List[float]] = []
+        for start in range(0, len(texts), RAGENT_EMBEDDING_BATCH_SIZE):
+            vectors.extend(await self._async_embed_batch(config_subentry, texts[start:start + RAGENT_EMBEDDING_BATCH_SIZE]))
+        
+        return vectors
 
     async def async_embed_object(self, config_subentry: dict, objects: List[EmbeddableModel], translations: RAGentTranslations | None = None) -> List[EmbeddingRecord]:
         if not objects:

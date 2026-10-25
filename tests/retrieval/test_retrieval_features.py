@@ -10,7 +10,6 @@ from custom_components.ha_ragent.src.homeassistant.helpers.tool_ranker import To
 from custom_components.ha_ragent.src.homeassistant.helpers.retrieval_confidence import RetrievalConfidence
 from custom_components.ha_ragent.src.const import RETRIEVAL_METHOD_AUTOMATIC
 from custom_components.ha_ragent.src.homeassistant.helpers.conversation_retriever import ConversationRetriever
-from custom_components.ha_ragent.src.models.embedding.device import Device
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.retrieval.lexical_index import lexical_index
 from custom_components.ha_ragent.src.models.retrieval.confidence_assessment import ConfidenceAssessment
@@ -18,12 +17,11 @@ from custom_components.ha_ragent.src.homeassistant.tools.search_tools import RAG
 
 
 @pytest.mark.parametrize("query,name", [("ab", "xabz"), ("x", "xyz"), ("厨房", "厨房吊灯"), ("مص", "مصباح")])
-def test_short_substrings_are_retrievable_without_identity_confidence(query, name):
+def test_short_substrings_are_retrievable(query, name):
     tools = [LlmTool("unrelated", "zzz"), LlmTool("target", name)]
     index = lexical_index((("zzz",), (name,)))
     assert index.scores(query)[1] > index.scores(query)[0]
     assert ToolRanker.rank_tool_candidates([], tools, query, [], 1) == [tools[1]]
-    assert not SourceRanker.local_candidates_confident(query, tools)
 
 
 @pytest.mark.parametrize("query", ["", "ab", "a", "Alpha Beta", "alpha btea", "VendorMode", "厨房", "zzz"])

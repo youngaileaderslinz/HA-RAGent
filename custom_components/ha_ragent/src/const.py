@@ -248,6 +248,8 @@ CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS = "rag_remember_conversation_num_int
 
 CONF_TEMPERATURE = "rag_temperature"
 
+TOOL_START = "```homeassistant"
+TOOL_END = "```"
 TOOL_REGEX_PATTERN = re.compile(r"```homeassistant\s*(.*?)\s*```", re.DOTALL)
 
 DEVICE_ATTRIBUTES_TO_EXCLUDE = ["friendly_name", "persistent", "supported_features"]
@@ -263,14 +265,21 @@ DEFAULT_STATE_PROMPT = """<area_prompt>
 {% if memory_list %}
 <memories_context_prompt>
 {% for memory in memory_list %}
-- {{ {"memory_id": memory.id, "content": memory.content, "created_at": memory.created_at} | tojson }}
+- {{ memory.to_prompt_dict({'id': 'memory_id', 'content': 'content'}) }}
 {% endfor %}
 {% endif %}
 
+{% if device_list %}
 <devices_prompt>
 {% for device in device_list %}
-- {{ {"name": device.id, "friendly_name": device.friendly_name, "aliases": device.aliases or [], "domain": device.domain or [], "device_class": device.device_class, "floor": device.floor_name, "area": device.area_name, "area_aliases": device.area_aliases or [], "floor_aliases": device.floor_aliases or [], "state": device.state, "unit_of_measurement": (device.attributes or {}).get('unit_of_measurement', device.unit_of_measurement), "attributes": device.attributes or {}} | tojson }}
+- {{ device.to_prompt_dict({
+    'id': 'name', 'friendly_name': 'friendly_name', 'aliases': 'aliases',
+    'domain': 'domain', 'device_class': 'device_class',
+    'floor_name': 'floor', 'area_name': 'area', 'state': 'state',
+    'unit_of_measurement': 'unit_of_measurement'
+}) }}
 {% endfor %}
+{% endif %}
 """
 
 #-----------------------------------------------

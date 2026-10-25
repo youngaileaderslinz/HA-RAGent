@@ -133,6 +133,14 @@ class OllamaEmbedder(ABaseEmbedder):
         embeddings = await self._async_embed_batch(config_subentry, [text], keep_alive=keep_alive)
         return embeddings[0] if embeddings else []
 
+    async def async_embed_texts(self, config_subentry: dict, texts: List[str]) -> List[List[float]]:
+        """Embed a list of text strings and return the vector embeddings"""
+        vectors: List[List[float]] = []
+        for start in range(0, len(texts), RAGENT_EMBEDDING_BATCH_SIZE):
+            vectors.extend(await self._async_embed_batch(config_subentry, texts[start:start + RAGENT_EMBEDDING_BATCH_SIZE]))
+        
+        return vectors
+
     async def async_embed_object(self, config_subentry: dict, objects: List[EmbeddableModel], translations: RAGentTranslations | None = None) -> List[EmbeddingRecord]:
         if not objects:
             return []

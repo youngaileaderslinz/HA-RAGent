@@ -79,20 +79,10 @@ def test_retrieval_method_normalizes_and_defaults(configured, expected):
     ("مصباح المطبخ", "مصباح المطبخ"),
     ("Ku\u0308chenlampe", "Küchenlampe"),
 ])
-def test_registered_aliases_resolve_without_language_dictionary(query, name):
+def test_registered_aliases_rank_without_language_dictionary(query, name):
     device = Device("light.a", "A", "", "", domain=["light"], aliases=[name])
     unrelated = Device("switch.b", "B", "", "", domain=["switch"])
-    assert DeviceRanker.device_resolution(query, [device, unrelated]) == ("high", (device.id,))
-
-
-@pytest.mark.parametrize("query", [
-    "all lights except Küchenlampe", "nicht Küchenlampe", "Küchenlampe ausschalten",
-    "厨房吊灯以外的灯", "there", "dort auch", "on", "lights",
-])
-def test_raw_commands_and_group_words_never_resolve_a_target_by_themselves(query):
-    device = Device("light.a", "Küchenlampe", "Kitchen", "", aliases=["厨房吊灯"])
-    assert DeviceRanker.device_resolution(query, [device])[0] == "weak"
-    assert not SourceRanker.local_candidates_confident(query, [device])
+    assert DeviceRanker.device_target_score(query, device) > DeviceRanker.device_target_score(query, unrelated)
 
 
 def test_unknown_tool_compatibility_is_neutral_even_with_an_english_name():
@@ -158,7 +148,7 @@ def test_area_and_floor_aliases_round_trip_and_are_searchable():
     device = Device("light.a", "Lamp", "Kitchen", "Ground", domain=["light"],
                     area_aliases=["Küche"], floor_aliases=["Erdgeschoss"])
     restored = Device.from_dict(device.to_dict())
-    assert "Küche" in DeviceRanker._candidate_location_values(restored)
+    assert "Küche" in DeviceRanker.text_parts(restored)
     assert "Erdgeschoss" in restored.to_embedding_text()
     legacy = Device.from_dict({"device_id": "light.old"})
     assert legacy.area_aliases is None
@@ -343,9 +333,7 @@ def test_failed_shared_embedding_falls_back_locally_without_retrying():
     asyncio.run(run())
 
 
-def test_duplicate_aliases_and_zero_limit_do_not_trigger_false_confidence():
-    items = [Device("light.a", "Lampe", "", ""), Device("light.b", "Lampe", "", "")]
-    assert not SourceRanker.local_candidates_confident("Lampe", items)
+def test_zero_retrieval_limit_does_not_call_backends():
     embed = AsyncMock()
     backend = SimpleNamespace(async_get_lexical_objects=AsyncMock(), async_retrieve_scored_objects=AsyncMock())
     assert asyncio.run(SourceRetriever.async_retrieve_sources(

@@ -210,24 +210,24 @@
             "options": {
                 "mongodb": "MongoDB",
                 "chromadb": "ChromaDB",
-                "faiss": "FAISS (Local DB) (Default)"
+                "faiss": "FAISS (Local DB)"
             }
         },
         "rag_embedding_backend": {
             "options": {
-                "ollama": "Ollama (Default)",
+                "ollama": "Ollama",
                 "openai_compatible": "OpenAI Compatible"
             }
         },
         "rag_llm_backend": {
             "options": {
-                "ollama": "Ollama (Default)",
+                "ollama": "Ollama",
                 "openai_compatible": "OpenAI Compatible"
             }
         },
         "rag_selected_language": {
             "options": {
-                "en": "English (Default)",
+                "en": "English",
                 "de": "German"
             }
         }

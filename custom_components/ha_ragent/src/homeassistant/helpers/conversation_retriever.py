@@ -32,8 +32,6 @@ _logger = BaseLogger(__name__)
 
 
 class ConversationRetriever:
-    """Orchestrate source access and domain ranking for one conversation."""
-
     def __init__(self, hass: Any, entry: Any, entry_id: str, subentry_id: str, subentry: Any) -> None:
         self.hass = hass
         self.entry = entry

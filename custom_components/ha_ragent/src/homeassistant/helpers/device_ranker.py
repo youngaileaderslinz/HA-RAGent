@@ -40,55 +40,6 @@ class DeviceRanker:
         )
 
     @staticmethod
-    def _candidate_location_values(device: Any) -> tuple[object, ...]:
-        return (
-            SourceRanker.candidate_value(device, "area_name", ""),
-            SourceRanker.candidate_value(device, "area", ""),
-            SourceRanker.candidate_value(device, "floor_name", ""),
-            SourceRanker.candidate_value(device, "floor", ""),
-            *(SourceRanker.candidate_value(device, "area_aliases", []) or []),
-            *(SourceRanker.candidate_value(device, "floor_aliases", []) or []),
-        )
-
-    @staticmethod
-    def device_resolution(query: str, devices: Iterable[Any]) -> tuple[str, tuple[str, ...]]:
-        """Resolve literal identities only; leave command scope to the LLM."""
-        devices = list(devices)
-        normalized = SourceRanker.normalize(query)
-        exact = [
-            str(SourceRanker.candidate_value(device, "id", "") or SourceRanker.candidate_value(device, "name", ""))
-            for device in devices
-            if normalized and normalized in {
-                SourceRanker.normalize(value)
-                for value in SourceRanker.candidate_identity_values(device) if value
-            }
-        ]
-        if len(exact) == 1:
-            return "high", tuple(exact)
-        names = tuple(
-            str(SourceRanker.candidate_value(device, "id", "") or SourceRanker.candidate_value(device, "name", ""))
-            for device in devices
-        )
-        return ("ambiguous" if len(devices) > 1 else "weak"), names
-
-    @staticmethod
-    def reduce_confident_devices(query: str, devices: Iterable[T]) -> list[T]:
-        """Expose only independently resolved devices when confidence is high."""
-        devices = list(devices)
-        status, names = DeviceRanker.device_resolution(query, devices)
-        if status != "high":
-            return devices
-        selected = set(names)
-        return [
-            device
-            for device in devices
-            if str(
-                SourceRanker.candidate_value(device, "id", "")
-                or SourceRanker.candidate_value(device, "name", "")
-            ) in selected
-        ]
-
-    @staticmethod
     def device_search_confidence(
         devices: Iterable[T],
         vector_results: Iterable[ScoredResult[T]] = (),
@@ -599,12 +550,6 @@ class DeviceRanker:
         if floor and device_floor == floor.casefold():
             score += 0.5
         return score
-
-    @staticmethod
-    def target_is_confident(query: str, devices: Iterable[Any]) -> bool:
-        """Return whether the current target is resolved."""
-        status, _ = DeviceRanker.device_resolution(query, devices)
-        return status == "high"
 
     @staticmethod
     def device_domains(devices: Iterable[Any]) -> set[str]:
