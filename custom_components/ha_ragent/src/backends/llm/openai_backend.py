@@ -74,7 +74,7 @@ class OpenAiLlmBackend(ALlmBaseBackend):
                             "arguments": (
                                 tool_call["function"]["arguments"]
                                 if isinstance(tool_call["function"]["arguments"], str)
-                                else json.dumps(tool_call["function"]["arguments"])
+                                else json.dumps(tool_call["function"]["arguments"], ensure_ascii=False, separators=(",", ":"))
                             ),
                         },
                     }

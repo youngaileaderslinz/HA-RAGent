@@ -26,6 +26,27 @@ class Device(SerializableModel, EmbeddableModel):
     area_aliases: List[str] = None
     floor_aliases: List[str] = None
 
+    def _prompt_data(self) -> dict[str, Any]:
+        """Keep current device facts without duplicate attributes."""
+        attributes = self._exclude_null_values(self.attributes or {})
+        unit = attributes.pop("unit_of_measurement", self.unit_of_measurement)
+        device_class = attributes.pop("device_class", self.device_class)
+        attributes.pop("friendly_name", None)
+        return {
+            "name": self.id,
+            "friendly_name": self.friendly_name,
+            "aliases": self.aliases,
+            "domain": self.domain,
+            "device_class": device_class,
+            "floor": self.floor_name,
+            "area": self.area_name,
+            "area_aliases": self.area_aliases,
+            "floor_aliases": self.floor_aliases,
+            "state": self.state,
+            "unit_of_measurement": unit,
+            "attributes": attributes,
+        }
+
     def to_dict(self) -> dict[str, Any]:
         """Return a dictionary representation of the device."""
         return {
