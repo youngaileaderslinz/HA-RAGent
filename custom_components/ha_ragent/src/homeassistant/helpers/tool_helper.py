@@ -317,31 +317,6 @@ class ToolHelper:
 
 
     @staticmethod
-    def failed_target_candidates(
-        tool_call: ToolInput,
-        result: object,
-        candidates: list[dict[str, object]],
-    ) -> list[dict[str, object]]:
-        """Return only explicitly attempted targets that the tool reported failed."""
-        failed = result.get("failed", []) if isinstance(result, dict) else []
-        if isinstance(failed, str):
-            failed = [failed]
-        failed_names = {
-            str(value).casefold()
-            for value in failed
-            if value
-        }
-        if not failed_names:
-            return []
-        return [
-            candidate
-            for candidate in candidates
-            if str(candidate.get("name", "")).casefold() in failed_names
-        ]
-
-
-
-    @staticmethod
     def parse_tool_results(tool_result: JsonObjectType) -> Dict[str, Any]:
         """Parse tool results from LLM response."""
         tool_result_type = getattr(llm, "ToolResult", None)

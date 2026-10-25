@@ -477,29 +477,6 @@ class ToolRanker:
         return assessment
 
     @staticmethod
-    def tool_search_confidence(
-        tools: Iterable[Any], query: str, devices: Iterable[Any], requested_capability: object = None,
-        vector_results: Iterable[ScoredResult[Any]] = (),
-    ) -> str:
-        """Return the explainable distribution-confidence level."""
-        return ToolRanker.tool_search_confidence_details(
-            tools,
-            query,
-            devices,
-            requested_capability,
-            vector_results,
-        ).level
-
-    @staticmethod
-    def rank_tools_for_query(
-        tools: Iterable[T], query: str, devices: Iterable[Any] = (), requested_capability: object = None,
-    ) -> list[T]:
-        tools = list(tools)
-        return ToolRanker.rank_tool_candidates(
-            [], tools, query, devices, len(tools), requested_capability=requested_capability,
-        )
-
-    @staticmethod
     def tool_device_compatibility(tool: Any, devices: Iterable[Any]) -> float:
         """Score whether a tool schema can target the retrieved devices."""
         devices = list(devices)

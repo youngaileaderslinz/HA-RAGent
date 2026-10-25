@@ -409,11 +409,7 @@ class HistoryManager:
         self._message_history.append(message)
         self._stored_chat_history.append(message)
 
-    def replace_system_prompt(self, content: str) -> None:
-        """Replace the active system prompt without retaining stale candidates."""
-        if self._message_history and isinstance(self._message_history[0], conversation.SystemContent):
-            self._message_history[0] = conversation.SystemContent(content=content)
-
     def persist_chat_history(self, chat_log: conversation.ChatLog) -> None:
         """Persist full protocol history while keeping the prompt compact."""
-        chat_log.content = self._stored_chat_history
+        # Create new list to keep the retained history independent from streaming.
+        chat_log.content = list(self._stored_chat_history)

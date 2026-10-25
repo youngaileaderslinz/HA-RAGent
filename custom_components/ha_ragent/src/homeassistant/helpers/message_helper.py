@@ -5,7 +5,6 @@ from homeassistant.helpers import llm
 
 from custom_components.ha_ragent.src.const import (
     RAGENT_SEMANTIC_SEARCH_TOOL_NAME,
-    TOOL_REGEX_PATTERN,
     TOOL_RESULT_MAX_DEPTH,
     TOOL_RESULT_MAX_ITEMS,
     TOOL_RESULT_MAX_TEXT,
@@ -127,7 +126,6 @@ class MessageHelper:
                 ),
                 "error": MessageHelper._compact_value(result.get("error", [])),
                 **({"success": False} if result.get("success") is False else {}),
-                **({"reused": True} if result.get("reused") else {}),
             }
 
         retained_keys = ("success", "failed", "error", "errors", "already_executed")
@@ -159,37 +157,6 @@ class MessageHelper:
         if success is not None:
             return bool(success)
         return not any(getattr(result, key, None) for key in ("error", "errors", "failed"))
-
-    @staticmethod
-    def create_repeated_tool_result_message(
-        agent_id: str | None,
-        tool_call_id: str | None,
-        tool_name: str,
-        previous_result: object,
-    ) -> conversation.ToolResultContent:
-        """Return the original result for a repeated tool call."""
-        if MessageHelper._is_semantic_search(tool_name):
-            reused_result = dict(previous_result) if isinstance(previous_result, dict) else {"result": previous_result}
-            reused_result["reused"] = True
-            return MessageHelper._tool_result_content(
-                agent_id, tool_call_id, tool_name,
-                MessageHelper.compact_tool_result_value(tool_name, reused_result),
-            )
-
-        success_value = previous_result.get("success")
-        if success_value is None:
-            success = not any(previous_result.get(key) for key in ("error", "errors", "failed"))
-        else:
-            success = bool(success_value)
-        result = {
-            "success": success,
-            "already_executed": True,
-        }
-        for error_key in ("error", "errors", "failed"):
-            if result["success"] is False and error_key in previous_result:
-                result[error_key] = previous_result[error_key]
-
-        return MessageHelper._tool_result_content(agent_id, tool_call_id, tool_name, result)
 
     @staticmethod
     def create_tool_result_message(
@@ -291,8 +258,3 @@ class MessageHelper:
                 formatted_messages.append(tool_message)
 
         return formatted_messages
-
-    @staticmethod
-    def clean_assistant_content(assistant_content: str, has_tool_calls: bool) -> str:
-        """Remove the internal fenced tool representation from stored content."""
-        return TOOL_REGEX_PATTERN.sub("", assistant_content).strip() if has_tool_calls else assistant_content
