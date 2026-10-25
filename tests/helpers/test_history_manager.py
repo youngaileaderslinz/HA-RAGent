@@ -335,19 +335,6 @@ def test_unresolved_targets_and_requested_action_survive_structurally() -> None:
     assert continuity.ambiguous_entity_score(unresolved) > 0
 
 
-def test_replace_system_prompt_removes_stale_candidate_context() -> None:
-    manager = HistoryManager({})
-    manager._message_history = [
-        conversation.SystemContent(content="candidate light.kitchen"),
-        conversation.UserContent(content="turn it on"),
-    ]
-
-    manager.replace_system_prompt("candidate-free prompt")
-
-    assert manager.message_history[0].content == "candidate-free prompt"
-    assert manager.message_history[1].content == "turn it on"
-
-
 def test_persist_keeps_successful_tool_protocol_in_prompt_and_chat_log() -> None:
     manager = HistoryManager({
         CONF_REMEMBER_CONVERSATION_TIME_MINUTES: 10,

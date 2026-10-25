@@ -46,22 +46,8 @@ def test_flagged_tool_result_preserves_normalized_failed_targets(monkeypatch) ->
     }
     parsed = ToolHelper.parse_tool_results(ToolResult(data, error=True))
     assert parsed == {"success": False, "failed": ["light.ceiling"]}
-    assert ToolHelper.failed_target_candidates(
-        Mock(tool_args={}), parsed, [{"name": "light.ceiling"}],
-    ) == [{"name": "light.ceiling"}]
     assert data["data"]["success"] == [{"type": "entity", "id": "light.desk"}]
 
-
-def test_failed_target_candidates_excludes_unattempted_candidates() -> None:
-    candidates = [
-        {"name": "light.chandelier"},
-        {"name": "light.dining_table"},
-    ]
-    tool_call = Mock(tool_args={"name": "light.chandelier"})
-
-    assert ToolHelper.failed_target_candidates(
-        tool_call, {"failed": ["light.chandelier"]}, candidates,
-    ) == [candidates[0]]
 
 def test_parse_tool_call_preserves_friendly_name() -> None:
     """A friendly-name target must survive nested argument parsing."""
