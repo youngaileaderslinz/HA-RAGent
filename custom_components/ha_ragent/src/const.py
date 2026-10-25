@@ -274,8 +274,7 @@ DEFAULT_STATE_PROMPT = """<area_prompt>
 {% for device in device_list %}
 - {{ device.to_prompt_dict([
     'name', 'friendly_name', 'aliases', 'domain', 'device_class',
-    'floor', 'area', 'state',
-    'unit_of_measurement', 'attributes'
+    'floor', 'area', 'state', 'unit_of_measurement'
 ]) | to_json(sort_keys=True) }}
 {% endfor %}
 {% endif %}

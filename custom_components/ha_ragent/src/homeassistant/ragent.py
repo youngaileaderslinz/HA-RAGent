@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import aclosing
 import json
 import logging
 from typing import Any, List, Tuple
@@ -22,6 +23,7 @@ from homeassistant.helpers.llm import LLMContext
 from homeassistant.helpers import area_registry as ar, device_registry as dr, floor_registry as fr
 
 from custom_components.ha_ragent.src.homeassistant.helpers.history_manager import HistoryManager
+from custom_components.ha_ragent.src.homeassistant.helpers.assistant_stream import AssistantStream
 from custom_components.ha_ragent.src.homeassistant.helpers.message_helper import MessageHelper
 from custom_components.ha_ragent.src.homeassistant.helpers.tool_helper import ToolHelper
 from custom_components.ha_ragent.src.homeassistant.helpers.conversation_retriever import ConversationRetriever
@@ -88,6 +90,8 @@ _logger = BaseLogger(__name__)
 
 class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
     """RAG-based conversation agent for Home Assistant."""
+    _attr_supports_streaming = True
+
     def __init__(self, hass: HomeAssistant, entry: RAGentConfigEntry, subentry: ConfigSubentry) -> None:
         super().__init__(hass, entry, subentry)
 
@@ -300,16 +304,21 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     tools=[tool.to_tool_dict() for tool in tool_list],
                 )
 
-                content_chunks = []
                 timing_logger.reset_timing()
-                async for chunk in self.entry.llm_backend.async_send_chat_request(
+                response_stream = AssistantStream(self.entry.llm_backend.async_send_chat_request(
                     dict(self.subentry.data),
                     formatted_messages,
                     tool_list,
-                ):
-                    content_chunks.append(chunk)
+                ))
+                async with aclosing(response_stream.async_deltas()) as deltas:
+                    if hasattr(chat_log, "async_add_delta_content_stream"):
+                        async for _ in chat_log.async_add_delta_content_stream(user_input.agent_id, deltas):
+                            pass
+                    else:
+                        async for _ in deltas:
+                            pass
 
-                assistant_content = "".join(content_chunks)
+                assistant_content = response_stream.response
                 timing_logger.log_timed_string(logging.DEBUG, f"LLM iteration {idx + 1} completed")
 
                 tool_calls_in_iteration = tool_helper.parse_tool_calls(assistant_content)
@@ -324,7 +333,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     exposed_tool_names=sorted(exposed_tool_names),
                 )
 
-                message_content = MessageHelper.clean_assistant_content(assistant_content, bool(tool_calls_in_iteration))
+                message_content = response_stream.content
                 timing_logger.log_timed_string(logging.DEBUG, "Cleaned assistant content from LLM response")
 
                 history_tool_calls = [tool_helper.to_history_tool_call(call) for call in tool_calls_in_iteration]

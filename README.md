@@ -13,190 +13,194 @@
 [![HACS](https://img.shields.io/badge/HACS-default-orange.svg?style=flat-square)](https://hacs.xyz)
 
 # HA-RAGent (Home Assistant Retrieval-Augmented Generation Agent)
-HA-RAGent adds a Home Assistant conversation agent that can use your own LLM. It finds the devices and tools relevant to each request, so the model does not need to receive your entire Home Assistant setup every time.
 
-If you enable device control, the model can call Home Assistant tools and use their results to complete a request. You can also limit how much conversation history, device information, tools and memory are sent to the model. This is helpful for smaller or self-hosted models.
+HA-RAGent is a Home Assistant conversation agent for Ollama and OpenAI-compatible APIs. It retrieves relevant devices, tools and saved facts for each request instead of sending your entire setup to the model.
+
+Use it in Assist to ask about device states, control devices or schedule one-time actions. Limits for conversation history and retrieved context help keep prompts small for local models.
 
 ## Disclaimers
-### Default Prompts
-New AI RAGent entries receive the current translated defaults for **Rule Prompt** and **State Prompt**. Existing entries retain their saved templates. To adopt updated defaults, update those two fields in the agent's configuration or recreate the AI RAGent entry.
 
-### OpenAI-Compatible Backends
-OpenAI-compatible backends have currently been tested only with llamaccp. Compatibility with other providers is not guaranteed, so test the selected backend thoroughly before using it in production.
+### Default prompts
+
+New AI RAGent entries use the current translated **Rule Prompt** and **State Prompt** defaults. Existing entries keep their saved templates. To adopt updated defaults, edit both fields in the agent settings or recreate the AI RAGent entry.
+
+### OpenAI-compatible backends
+
+OpenAI-compatible backends have been tested only with **llama.cpp**. Compatibility with other providers is not guaranteed. Test your chosen backend before using it in production.
 
 ## Installation
-### HACS (recommended)
-If HACS is installed on your system use this link to directly go to the install page:
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=youngaileaderslinz&repository=HA-RAGent)
+### HACS (recommended)
+
+Install HA-RAGent through HACS and restart Home Assistant.
+
+[![Open HA-RAGent in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=youngaileaderslinz&repository=HA-RAGent)
 
 ### Manual
-To install this integration manually you have to download the repository [HA-RAGent.zip](https://github.com/youngaileaderslinz/HA-RAGent/archive/refs/heads/main.zip) and extract its contents to `config/custom_components/ha_ragent` directory.
+
+Download [HA-RAGent.zip](https://github.com/youngaileaderslinz/HA-RAGent/archive/refs/heads/main.zip). Copy the archive's `custom_components/ha_ragent` folder into your Home Assistant `config/custom_components` directory and restart Home Assistant.
 
 ## Configuration
-### Using UI
-[![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=ha_ragent)
 
-From the Home Assistant front page go to `Configuration` and then select `Devices & Services` from the list.
-Use the `Add Integration` button in the bottom right to add a new integration called `Home Assistant RAG Agent`.
+Add **Home Assistant RAG Agent** from [Settings → Devices & services → Add integration](https://www.home-assistant.io/getting-started/integration/) or use the button below.
 
-### Add Service Entry:
-**Select Backends:**
-- `Vector database backend`
-    - **FAISS (Local DB)** stores embeddings locally and is the default, simplest setup
-    - **MongoDB** stores embeddings in an external MongoDB instance
-    - **ChromaDB** stores embeddings in an external ChromaDB server
-- `Embedding backend`
-    - **Ollama** requires an external Ollama instance and an installed embedding model [[find embedding models]](https://ollama.com/search?c=embedding)
-    - **OpenAI Compatible** works with APIs that expose an OpenAI-style embeddings endpoint
-- `LLM backend`
-    - **Ollama** requires an external Ollama instance and an installed chat model with tool support [[find tool-capable models]](https://ollama.com/search?c=tools)
-    - **OpenAI Compatible** works with APIs that expose an OpenAI-style chat completions endpoint
-- `Language`
-    - **English** or **German** determines the language of the default prompts for new AI RAGent entries
+[![Set up HA-RAGent](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=ha_ragent)
 
-**Setup Connections:**
+### Service setup
 
-- `Vector Database Options`
-    - **Database Username** optional database username, currently relevant for MongoDB
-    - **Database Password** optional database password, currently relevant for MongoDB
-    - **Vector DB Hostname** hostname or IP of the vector database server, used for MongoDB and ChromaDB
-    - **Vector DB Port** port of the vector database server, used for MongoDB and ChromaDB
-    - **Use HTTPS** enables SSL/TLS for the vector database connection when supported by the selected backend
-    - **Database Name** can be left as is or changed (Must be unique for each instance when multiple instances of HA-RAGent are configured. The default name is already unique.)
+Choose the backends and enter their connection details. Embedding and chat models can use different backends.
 
-- `Embedding Backend Options`
-    - **Embedding Hostname** hostname or IP of the embedding API server
-    - **Embedding Port** port of the embedding API server
-    - **Use HTTPS** enables SSL/TLS for the embedding API connection
-    - **Embedding API Key** optional bearer token for OpenAI-compatible embedding APIs
+| Setting | Description |
+| --- | --- |
+| Vector database backend | **FAISS** stores data locally and is the default. **MongoDB** and **ChromaDB** use a separate server. |
+| Embedding backend | **Ollama** or an **OpenAI Compatible** embeddings API. |
+| LLM backend | **Ollama** or an **OpenAI Compatible** chat completions API. |
+| Language | English or German for the agent's default prompts and tool descriptions. |
 
-- `LLM Backend Options`
-    - **LLM Hostname** hostname or IP of the LLM API server
-    - **LLM Port** port of the LLM API server
-    - **Use HTTPS** enables SSL/TLS for the LLM API connection
-    - **LLM API Key** optional bearer token for OpenAI-compatible LLM APIs
+Ollama needs an installed [embedding model](https://ollama.com/search?c=embedding) and a [chat model with tool support](https://ollama.com/search?c=tools) for device control.
 
-### Add AI RAGent Entry:
-**Pick one of the configured services**
-- The name contains database, embedding and llm backend
+#### Database connection
 
-**Pick Models**
+FAISS only needs a database name. Server connection fields appear for MongoDB and ChromaDB.
 
-- `Embedding Model`
-    - **Ollama** lists installed models with embedding support. **OpenAI Compatible** lists models reported by the provider (select one that supports embeddings)
-    - Prefer a dedicated semantic-search embedding model.
-- `LLM Model`
-    - **Ollama** lists installed models with tool support. **OpenAI Compatible** lists models reported by the provider (select a chat model with tool support)
+| Setting | Description |
+| --- | --- |
+| Database Username / Password | Optional MongoDB credentials. |
+| Vector DB Hostname | Database server hostname or IP address. |
+| Vector DB Port | Server port. Defaults: MongoDB `27017` or ChromaDB `8000`. |
+| Use HTTPS | Enables TLS for MongoDB or HTTPS for ChromaDB. |
+| Database Name | Use a unique name for each service entry. The generated default is unique. |
 
-**Fine Tuning**
+#### Model API connections
 
-- `LLM Home Assistant API`
-    - **No Control** disables all tool calls, including search, scheduling and memory changes. Configured device and recalled memory context can still be used for replies.
-    - **Assist** allows the model to control devices and exposes Home Assistant tools
-- `Prompt layout`
-    - **Split** (default) sends the Rule Prompt before conversation history and the State Prompt after history, immediately before the current user message.
-    - **Combined** joins both prompts before conversation history. Entries migrated from the old single-prompt configuration retain this layout.
-- `Rule Prompt`
-    - Stable instructions sent before conversation history
-- `State Prompt`
-    - Current Home Assistant context according to the defined prompt layout.
-- `Allow Auto Embedding`
-    - Automatically rebuilds embeddings for exposed entities and tools during startup and after configuration changes
-- `Allow Follow-up Questions`
-    - Keeps the conversation open when the assistant's reply ends with `?`.
-- `Enable Model Thinking`
-    - Controls whether the model may use its thinking mode. Leave disabled for faster responses when supported.
-- `Retrieval Method` (Only affects device and tool retrieval, memory always uses vector search)
-    - **Automatic** (default) combines vector similarity with lexical names, aliases and metadata matching
-    - **Vector search** uses embedding similarity only
-    - **Lexical search** uses names, aliases and metadata without semantic similarity
-- `Tools excluded from embedding`
-    - Excludes selected tool names from the vector index. Names are matched exactly and are case-sensitive
-- `Minimum Devices to Expose` / `Maximum Devices to Expose`
-    - Defaults to `2` / `4`. In all search modes, the minimum is enforced unless fewer candidates are available and the maximum is a hard cap.
-- `Minimum Searched Tools to Expose` / `Maximum Searched Tools to Expose`
-    - Defaults to `2` / `4`. In all search modes, the minimum is enforced unless fewer searchable tools are available. The maximum caps each retrieval or search result. Altough, explicit tool searches can add tools to the existing request's set. The required semantic-search tool does not count toward these limits.
-- `Minimum Long-Term Memories` / `Maximum Long-Term Memories`
-    - Defaults to `0` / `4`. Vector-search confidence determines the count within this range. The minimum is enforced unless fewer memories are available and the maximum is a hard cap. Set the maximum to `0` to disable recall without deleting memories.
-- `Maximum Memory Entries`
-    - Defaults to `100` stored memories per AI RAGent. Adding a memory beyond the limit removes entries with the lowest retrieval count, oldest first on ties. Lowering the limit takes effect on the next memory write.
-    - A new memory can be immediately evicted when existing entries have higher retrieval counts; the remember tool currently still reports success in that case.
-- `Context Length` (Ollama only)
-    - Sets Ollama's model context-window size
-- `Maximum Tokens`
-    - Sets the maximum number of tokens the model may generate in one response
-- `Temperature`
-    - Controls sampling randomness; lower values are more deterministic
-- `Maximum Tool Call Iterations`
-    - Limits the number of model/tool rounds per request. A single round may contain multiple tool calls
-- `Conversation Memory Interactions`
-    - Maximum number of previous user interactions retained for context and retrieval. Set to `0` to disable this limit.
-- `Conversation Memory Duration`
-    - Maximum age of conversation history in minutes. Set to `0` to disable this limit. If both history settings are `0`, no conversation history is used.
+Configure the embedding and LLM connections separately.
 
-Both history limits apply when they are greater than `0`. For example, with `10` interactions and `60` minutes, only interactions from the last hour and within the last 10 turns are kept.
+| Setting | Description |
+| --- | --- |
+| Embedding Hostname / LLM Hostname | Server hostname or IP address without a URL scheme or API path. |
+| Embedding Port / LLM Port | Server port. Defaults: Ollama `11434` or OpenAI Compatible `443`. |
+| Use HTTPS | Enables HTTPS. Defaults to off for Ollama and on for OpenAI Compatible. |
+| Embedding API Key / LLM API Key | Bearer token for OpenAI-compatible APIs that require authentication. |
 
-### Available Prompt Variables
+The OpenAI-compatible backends use `/v1` endpoints and require model listing. The chat backend also sends tool parsing and thinking options that the server must accept. Compatibility depends on the server.
 
-Both prompts are rendered as Home Assistant Jinja templates for every request. Keep current state in the **State Prompt** and use **Split** layout to place it after conversation history. Tool definitions are supplied separately from prompt text. The following variables are available:
+### Add an AI RAGent
 
-- `device_list`
-    - The retrieved device candidates whose entities currently exist in Home Assistant. Each device provides `id`, `friendly_name`, `area_name`, `floor_name`, `area_aliases`, `floor_aliases`, `domain`, `device_class`, `device_labels`, `services`, `aliases`, `state`, `attributes` and `unit_of_measurement`.
-- `memory_list`
-    - The retrieved memory context candidates. Each memory provides `id`, `content` and `created_at`.
-- `area_list`
-    - A list of the distinct, non-empty area names found in `device_list`. It contains only areas associated with the retrieved candidates, not every area in Home Assistant.
-- `area_name`
-    - The area of the device through which the conversation was started or `None` when no area is available.
-- `floor_name`
-    - The floor of the device through which the conversation was started or `None` when no floor is available.
-- `max_retries`
-    - The configured maximum number of tool-call iterations.
+Add an **AI RAGent** to the configured service. Each agent has its own models, prompts, history and saved facts.
 
-## Custom Tools
-When **Assist** is selected, HA-RAGent resolves it to its custom LLM API, which provides the following additional tools:
+| Setting | Description |
+| --- | --- |
+| Embedding Model | Choose a model for semantic search. |
+| LLM Model | Choose a chat model with tool support for device control. |
 
-**HassSemanticSearch**
+Ollama lists models with the required capability. OpenAI-compatible APIs list all models reported by the provider so you need to choose a suitable one.
 
-- Searches for devices and Home Assistant tools without changing device state.
-- Accepts `search_queries` (up to four self-contained queries) and optional `capabilities`.
+#### Agent settings
 
-**HassScheduleAction**
+| Setting | Description |
+| --- | --- |
+| LLM Home Assistant API | **Assist** enables Home Assistant tools. **No Control** disables all tool calls but keeps retrieved context available. |
+| Prompt layout | **Split** (default) sends rules before history and current state before the user message. **Combined** sends both before history. |
+| Rule Prompt | Stable instructions for the assistant. |
+| State Prompt | Current device and memory context from a Jinja template. |
+| Allow Auto Embedding | Rebuilds device and tool indexes at startup or integration reload. |
+| Allow Follow-up Questions | Keeps the conversation open when a reply ends with `?` or `？`. |
+| Enable Model Thinking | Requests the model's thinking mode. Leave off for faster replies when supported. |
+| Retrieval Method | **Automatic** (default) combines semantic search with names, aliases and metadata. **Vector search** uses embedding similarity. **Lexical search** uses text matching. |
+| Tools excluded from embedding | Excludes exact tool names from indexing. Names are case-sensitive. |
+| Minimum / Maximum Devices to Expose | Device candidates per retrieval. Defaults: `2` / `4`. |
+| Minimum / Maximum Searched Tools to Expose | Optional tool candidates per search. Defaults: `2` / `4`. |
+| Minimum / Maximum Long-Term Memories | Recalled facts per request. Defaults: `0` / `4`. Maximum `0` disables recall without deleting facts. |
+| Maximum Memory Entries | Stored facts per agent. Defaults to `100`. Removes least-recalled facts first, then oldest on ties. |
+| Context Length | Ollama's context window in tokens. Includes rules, history, state, tools and generated output. |
+| Maximum Tokens | Maximum tokens generated per model response. |
+| Temperature | Lower values make replies more predictable. |
+| Maximum Tool Call Iterations | Maximum model rounds per request. One round can contain multiple tool calls. |
+| Conversation Memory Interactions | Maximum previous user interactions kept. `0` disables this limit. |
+| Conversation Memory Duration (minutes) | Maximum history age. `0` disables this limit. |
 
-- Schedules a one-time Home Assistant action after a delay of `1`–`1440` minutes.
-- Pending actions are held in memory and are cancelled on Home Assistant restart or integration reload.
+Device and tool retrieval use the selected method. Memory recall always uses vector search.
 
-**HassListScheduledActions**
+Minimum counts apply when enough candidates are available. Maximums cap each retrieval. Explicit tool searches can add tools during a request. The required semantic-search tool does not count toward tool limits.
 
-- Lists pending one-time Home Assistant actions for this AI RAGent.
+Both history limits apply when set. With `10` interactions and `60` minutes, history includes at most 10 interactions from the past hour. Setting both limits to `0` disables conversation history.
 
-**HassCancelScheduledActions**
+Memory storage limits take effect on the next write. At capacity, a new fact can be removed immediately even when the remember tool reports success.
 
-- Cancels all pending one-time Home Assistant actions for this AI RAGent.
+Choose the agent in your [Assist configuration](https://www.home-assistant.io/voice_control/voice_remote_local_assistant/) and expose the devices it should access.
 
-**HassRememberFact**
+### Prompts
 
-- Stores a fact as per-agent long-term memory when the user explicitly asks for it to be remembered.
-- Facts may contain up to `1000` characters. Repeating the same fact with different casing or whitespace replaces the existing entry.
+Older entries migrated from a single prompt keep the **Combined** layout.
 
-**HassForgetFact**
+The default rules favor exact entity IDs for individual devices and area targeting for whole-area requests. They allow multiple tool calls and ask for essential clarification. Replies stay brief and naturally varied.
 
-- Deletes one recalled long-term memory by its exact memory ID.
+Both prompts use Home Assistant Jinja templates. Keep stable instructions in the Rule Prompt and changing context in the State Prompt. Tool definitions are sent separately.
+
+The default State Prompt uses compact JSON records. Empty fields are omitted. Extra device attributes and memory timestamps are not included by default.
+
+Within the device or memory loop, choose the fields to include with `to_prompt_dict()`:
+
+```jinja
+{{ device.to_prompt_dict(['name', 'friendly_name', 'state', 'attributes']) | to_json(sort_keys=True) }}
+{{ memory.to_prompt_dict(['memory_id', 'content', 'created_at']) | to_json(sort_keys=True) }}
+```
+
+Only selected fields are included. Null values are removed from nested data too. In device records, `name` is the entity ID.
+
+#### Template variables
+
+| Variable | Description |
+| --- | --- |
+| `device_list` | Retrieved devices whose entities still exist. Includes current state and available attributes. |
+| `memory_list` | Retrieved saved facts. Fields: `id`, `content`, `created_at` and `retrieval_count`. |
+| `area_list` | Distinct area names from retrieved devices. Does not include every Home Assistant area. |
+| `area_name` | Area of the device that started the conversation or `None`. |
+| `floor_name` | Floor of that device or `None`. |
+| `max_retries` | Configured maximum tool-call iterations. |
+
+Device objects provide `id`, `friendly_name`, `aliases`, `domain`, `device_class`, `device_labels`, `services`, `area_name`, `floor_name`, `area_aliases`, `floor_aliases`, `state`, `attributes` and `unit_of_measurement`.
+
+For `to_prompt_dict()`, use `name` instead of `id`, `area` instead of `area_name` and `floor` instead of `floor_name`. Device labels and services are not available through this method. Memory records use `memory_id` instead of `id`.
+
+### Response time
+
+Replies stream to Home Assistant as text arrives. Clients with streaming support can display or speak them before generation finishes.
+
+For smaller local models, keep prompts short and limit retrieved context. **Split** layout keeps stable rules before history to help prompt-cache reuse. Changing the tool set can still require prompt reprocessing. Total response time also includes tool calls and the final model reply.
+
+## Custom tools
+
+Selecting **Assist** adds these tools to the Home Assistant API. Apart from semantic search, tools are exposed when retrieved for a request.
+
+| Tool | Description |
+| --- | --- |
+| `HassSemanticSearch` | Finds device candidates or tools without changing device state. |
+| `HassScheduleAction` | Schedules a one-time action `1`–`1440` minutes ahead. |
+| `HassListScheduledActions` | Lists this agent's pending one-time actions. |
+| `HassCancelScheduledActions` | Cancels all this agent's pending one-time actions. |
+| `HassRememberFact` | Saves a fact when the user explicitly asks. Maximum `1000` characters. |
+| `HassForgetFact` | Deletes one recalled fact using its exact memory ID. |
+
+Semantic search accepts up to four self-contained `search_queries`. Optional `capabilities` must match the queries by position. Set `scope` to `devices`, `tools` or `devices_and_tools`. Explicit tool searches can add callable tools to the current request; omitting `scope` searches both without adding tools.
+
+Scheduled actions are held in memory. A Home Assistant restart or integration reload cancels them.
+
+Repeating a saved fact with different casing or whitespace replaces the existing entry.
 
 ## Services
-HA-RAGent registers the following Home Assistant services. Target one or more conversation entities created by the integration:
 
-- `ha_ragent.embed_subentry`
-    - Rebuilds device and tool embeddings for the selected AI RAGent subentry.
-- `ha_ragent.preload_models` (only works with Ollama as of now)
-    - Preloads the embedding model and LLM for the selected AI RAGent subentry.
-- `ha_ragent.unload_models` (only works with Ollama as of now)
-    - Unloads the embedding model and LLM for the selected AI RAGent subentry to free resources.
+Target one or more conversation entities created by HA-RAGent.
+
+| Service | Description |
+| --- | --- |
+| `ha_ragent.embed_subentry` | Rebuilds device and tool indexes for the selected agents. |
+| `ha_ragent.preload_models` | Preloads the selected agents' models. Ollama only. |
+| `ha_ragent.unload_models` | Unloads the selected agents' models to free resources. Ollama only. |
 
 ## Scripts
-Scripts exposed to conversation/assist are available as tools and are excluded from device embeddings.
-Scripts that act on entities can return their affected entity IDs example shown below:
+
+Scripts exposed to Assist are available as tools rather than device candidates. Scripts that act on entities can return affected entity IDs in a `success` list:
 
 ```yaml
 - variables:
@@ -206,12 +210,9 @@ Scripts that act on entities can return their affected entity IDs example shown 
 - stop: Playback command sent
   response_variable: response
 ```
-## New Features, Help and Contribution
-**Have an idea what is missing?** <br>
-Open an issue [[open issue]](https://github.com/youngaileaderslinz/HA-RAGent/issues) or implement it yourself and create a pull request.
 
-**Found a bug?** <br>
-Open an issue [[open issue]](https://github.com/youngaileaderslinz/HA-RAGent/issues) and I’ll take a look or implement it yourself and create a pull request.
+## Help and development
 
-**How to start development?** <br>
-Example of how to setup the development environment [[see more]](https://github.com/youngaileaderslinz/HA-RAGent/blob/main/dev/DEV_SETUP.md)
+Report bugs or suggest features in [GitHub issues](https://github.com/youngaileaderslinz/HA-RAGent/issues). Contributions are welcome through pull requests.
+
+See the [development setup](dev/DEV_SETUP.md) to run the project locally.
