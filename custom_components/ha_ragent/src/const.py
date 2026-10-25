@@ -265,17 +265,19 @@ DEFAULT_STATE_PROMPT = """<area_prompt>
 {% if memory_list %}
 <memories_context_prompt>
 {% for memory in memory_list %}
-- {{ memory.to_prompt_dict(['memory_id', 'content']) | to_json(sort_keys=True) }}
+- {{ memory.to_prompt_dict({'id': 'memory_id', 'content': 'content'}) }}
 {% endfor %}
 {% endif %}
 
 {% if device_list %}
 <devices_prompt>
 {% for device in device_list %}
-- {{ device.to_prompt_dict([
-    'name', 'friendly_name', 'aliases', 'domain', 'device_class',
-    'floor', 'area', 'state', 'unit_of_measurement'
-]) | to_json(sort_keys=True) }}
+- {{ device.to_prompt_dict({
+    'id': 'name', 'friendly_name': 'friendly_name', 'aliases': 'aliases',
+    'domain': 'domain', 'device_class': 'device_class',
+    'floor_name': 'floor', 'area_name': 'area', 'state': 'state',
+    'unit_of_measurement': 'unit_of_measurement'
+}) }}
 {% endfor %}
 {% endif %}
 """

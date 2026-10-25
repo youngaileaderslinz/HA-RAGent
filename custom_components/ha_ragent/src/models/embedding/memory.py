@@ -14,15 +14,6 @@ class Memory(SerializableModel, EmbeddableModel):
     created_at: str
     retrieval_count: int = 0
 
-    def _prompt_data(self) -> dict[str, Any]:
-        """Expose memory facts using the identifier expected by memory tools."""
-        return {
-            "memory_id": self.id,
-            "content": self.content,
-            "created_at": self.created_at,
-            "retrieval_count": self.retrieval_count,
-        }
-
     def to_dict(self) -> dict[str, Any]:
         """Return a dictionary representation of the memory."""
         return {

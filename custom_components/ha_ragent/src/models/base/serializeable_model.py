@@ -22,17 +22,19 @@ class SerializableModel(ABC):
         """Serialize the model to a JSON string."""
         return json.dumps(self.to_dict())
 
-    def to_prompt_dict(self, fields: list[str]) -> dict[str, Any]:
-        """Return requested prompt facts without empty fields or null values."""
+    def to_prompt_dict(self, fields: dict[str, str]) -> str:
+        """Return compact JSON with mapped field names and no empty values or nulls."""
+        if not isinstance(fields, dict):
+            raise TypeError("fields must be a dictionary mapping class field names to prompt names")
         candidate = self._exclude_null_values(self._prompt_data())
-        return {
-            field: candidate[field] for field in fields
+        return json.dumps({
+            prompt_name: candidate[field] for field, prompt_name in fields.items()
             if field in candidate and candidate[field] not in (None, "", [], {})
-        }
+        }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
     def _prompt_data(self) -> dict[str, Any]:
-        """Use serialized fields unless a model supplies prompt-specific names."""
-        return self.to_dict()
+        """Use class fields unless a model supplies normalized prompt data."""
+        return vars(self)
 
     @classmethod
     def _exclude_null_values(cls, value: Any) -> Any:

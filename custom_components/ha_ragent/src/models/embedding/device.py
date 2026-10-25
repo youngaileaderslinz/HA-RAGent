@@ -33,18 +33,20 @@ class Device(SerializableModel, EmbeddableModel):
         device_class = attributes.pop("device_class", self.device_class)
         attributes.pop("friendly_name", None)
         return {
-            "name": self.id,
+            "id": self.id,
             "friendly_name": self.friendly_name,
             "aliases": self.aliases,
             "domain": self.domain,
             "device_class": device_class,
-            "floor": self.floor_name,
-            "area": self.area_name,
+            "floor_name": self.floor_name,
+            "area_name": self.area_name,
             "area_aliases": self.area_aliases,
             "floor_aliases": self.floor_aliases,
             "state": self.state,
             "unit_of_measurement": unit,
             "attributes": attributes,
+            "device_labels": self.device_labels,
+            "services": self.services
         }
 
     def to_dict(self) -> dict[str, Any]:

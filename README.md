@@ -139,29 +139,25 @@ Both prompts use Home Assistant Jinja templates. Keep stable instructions in the
 
 The default State Prompt uses compact JSON records. Empty fields are omitted. Extra device attributes and memory timestamps are not included by default.
 
-Within the device or memory loop, choose the fields to include with `to_prompt_dict()`:
+Within the device or memory loop, pass a dictionary to `to_prompt_dict()`. Keys are class field names and values are the names used in the prompt. It returns compact JSON text directly:
 
 ```jinja
-{{ device.to_prompt_dict(['name', 'friendly_name', 'state', 'attributes']) | to_json(sort_keys=True) }}
-{{ memory.to_prompt_dict(['memory_id', 'content', 'created_at']) | to_json(sort_keys=True) }}
+{{ device.to_prompt_dict({'id': 'name', 'friendly_name': 'friendly_name', 'state': 'state', 'attributes': 'attributes'}) }}
+{{ memory.to_prompt_dict({'id': 'memory_id', 'content': 'content', 'created_at': 'created_at'}) }}
 ```
 
-Only selected fields are included. Null values are removed from nested data too. In device records, `name` is the entity ID.
+Only mapped fields are included. Empty fields and nested null values are omitted. The default mapping uses `name` for device IDs and `memory_id` for memory IDs.
 
 #### Template variables
 
 | Variable | Description |
 | --- | --- |
-| `device_list` | Retrieved devices whose entities still exist. Includes current state and available attributes. |
+| `device_list` | Retrieved devices whose entities still exist. Fields: `id`, `friendly_name`, `aliases`, `domain`, `device_class`, `device_labels`, `services`, `area_name`, `floor_name`, `area_aliases`, `floor_aliases`, `state`, `attributes` and `unit_of_measurement`. |
 | `memory_list` | Retrieved saved facts. Fields: `id`, `content`, `created_at` and `retrieval_count`. |
 | `area_list` | Distinct area names from retrieved devices. Does not include every Home Assistant area. |
 | `area_name` | Area of the device that started the conversation or `None`. |
 | `floor_name` | Floor of that device or `None`. |
 | `max_retries` | Configured maximum tool-call iterations. |
-
-Device objects provide `id`, `friendly_name`, `aliases`, `domain`, `device_class`, `device_labels`, `services`, `area_name`, `floor_name`, `area_aliases`, `floor_aliases`, `state`, `attributes` and `unit_of_measurement`.
-
-For `to_prompt_dict()`, use `name` instead of `id`, `area` instead of `area_name` and `floor` instead of `floor_name`. Device labels and services are not available through this method. Memory records use `memory_id` instead of `id`.
 
 ### Response time
 
