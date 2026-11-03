@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
+import re
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 from typing import Any
 
@@ -61,6 +63,94 @@ class MemoryManager:
         normalized = MemoryManager.normalize_content(content).casefold()
         return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
+    async def async_export_memories(self) -> str:
+        """Export this agent's memories as portable JSON without embeddings."""
+        entry, config = self._get_entry_and_config()
+        if entry is None:
+            raise ValueError("The HA-RAGent agent subentry is not available.")
+        async with self._get_lock():
+            memories = await entry.vector_db_backend.async_list_objects(
+                MemoryEmbedding, config, self.collection_name,
+            )
+            return json.dumps(
+                {"memories": [memory.to_dict() for memory in sorted(memories, key=lambda item: item.id)]},
+                ensure_ascii=False,
+            )
+
+    async def async_import_memories(self, payload: str | dict[str, Any]) -> int:
+        """Validate an export, rebuild embeddings, and merge memories by ID."""
+        try:
+            data = json.loads(payload) if isinstance(payload, str) else payload
+        except (TypeError, ValueError) as err:
+            raise ValueError("Memories must be valid JSON.") from err
+        if not isinstance(data, dict) or not isinstance(data.get("memories"), list):
+            raise ValueError('Expected a JSON object containing a "memories" list.')
+
+        memories: list[Memory] = []
+        seen_ids: set[str] = set()
+        for record in data["memories"]:
+            if not isinstance(record, dict):
+                raise ValueError("Each memory must be a JSON object.")
+            memory_id = record.get("id")
+            content = record.get("content")
+            created_at = record.get("created_at")
+            retrieval_count = record.get("retrieval_count", 0)
+            if not isinstance(memory_id, str) or not re.fullmatch(r"[0-9a-f]{16}", memory_id):
+                raise ValueError("Each memory ID must be 16 lowercase hexadecimal characters.")
+            if memory_id in seen_ids:
+                raise ValueError(f"Duplicate memory ID: {memory_id}.")
+            if not isinstance(content, str) or not content.strip() or len(content) > 1000:
+                raise ValueError("Memory content must contain 1 to 1000 characters.")
+            if not isinstance(created_at, str) or dt_util.parse_datetime(created_at) is None:
+                raise ValueError("Each memory must have a valid created_at timestamp.")
+            if type(retrieval_count) is not int or retrieval_count < 0:
+                raise ValueError("Memory retrieval_count must be a non-negative integer.")
+            seen_ids.add(memory_id)
+            memories.append(Memory(memory_id, content, created_at, retrieval_count))
+
+        entry, config = self._get_entry_and_config()
+        if entry is None:
+            raise ValueError("The HA-RAGent agent subentry is not available.")
+        embeddings: list[MemoryEmbedding] = []
+        for memory in memories:
+            vector = await entry.embedder_backend.async_embed_text(
+                config, memory.to_embedding_text(entry.translations), input_type="document",
+            )
+            if not vector:
+                raise ValueError("The embedding backend returned an empty memory embedding.")
+            embeddings.append(MemoryEmbedding(memory, vector))
+
+        if embeddings:
+            async with self._get_lock():
+                await entry.vector_db_backend.async_ensure_collection_exists(
+                    config, self.collection_name, len(embeddings[0].vector_embedding),
+                )
+                await entry.vector_db_backend.async_upsert_objects(
+                    config, self.collection_name, "id", embeddings,
+                )
+                await self._async_prune_memories(entry, config)
+        return len(memories)
+
+    async def _async_prune_memories(self, entry: Any, config: dict[str, Any]) -> None:
+        """Apply the storage limit while the caller holds the memory lock."""
+        list_objects = getattr(entry.vector_db_backend, "async_list_objects", None)
+        if list_objects:
+            memories = await list_objects(
+                object_type=MemoryEmbedding,
+                config_subentry=config,
+                collection_name=self.collection_name,
+            )
+            max_entries = int(get_setting_value(CONF_MAX_MEMORY_ENTRIES, config))
+            if max_entries > 0 and len(memories) > max_entries:
+                memories_to_delete = sorted(
+                    (item for item in memories if isinstance(item, Memory)),
+                    key=lambda item: (item.retrieval_count, item.created_at),
+                )[: len(memories) - max_entries]
+                await entry.vector_db_backend.async_delete_objects(
+                    config, self.collection_name, "id",
+                    [memory.id for memory in memories_to_delete],
+                )
+
     async def async_remember(self, content: str) -> Memory | None:
         normalized_content = self.normalize_content(content)
         if not normalized_content:
@@ -95,25 +185,7 @@ class MemoryManager:
                 [MemoryEmbedding(memory, vector)],
             )
 
-            list_objects = getattr(entry.vector_db_backend, "async_list_objects", None)
-            if list_objects:
-                memories = await list_objects(
-                    object_type=MemoryEmbedding,
-                    config_subentry=config,
-                    collection_name=self.collection_name,
-                )
-                max_entries = int(get_setting_value(CONF_MAX_MEMORY_ENTRIES, config))
-                if max_entries > 0 and len(memories) > max_entries:
-                    memories_to_delete = sorted(
-                        (item for item in memories if isinstance(item, Memory)),
-                        key=lambda item: (item.retrieval_count, item.created_at),
-                    )[: len(memories) - max_entries]
-                    await entry.vector_db_backend.async_delete_objects(
-                        config,
-                        self.collection_name,
-                        "id",
-                        [memory.id for memory in memories_to_delete],
-                    )
+            await self._async_prune_memories(entry, config)
 
         return memory
 

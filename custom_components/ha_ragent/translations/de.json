@@ -232,6 +232,20 @@
         }
     },
     "services": {
+        "export_memories": {
+            "name": "Erinnerungen exportieren",
+            "description": "Die Konversationsentität eines Agenten auswählen, um seine Erinnerungen als JSON im Antwortfeld json zu exportieren."
+        },
+        "import_memories": {
+            "name": "Erinnerungen importieren",
+            "description": "Die Konversationsentität eines Agenten auswählen, um JSON-Erinnerungen zu importieren und deren Einbettungen neu zu erstellen.",
+            "fields": {
+                "json": {
+                    "name": "Erinnerungen als JSON",
+                    "description": "JSON-Text oder ein Objekt mit der exportierten Erinnerungsliste."
+                }
+            }
+        },
         "embed_subentry": {
             "name": "Subeintrag einbetten",
             "description": "Bindet Geräte und Tools für eine bestimmte Integrationsinstanz ein.",

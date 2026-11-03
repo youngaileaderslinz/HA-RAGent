@@ -186,13 +186,33 @@ Repeating a saved fact with different casing or whitespace replaces the existing
 
 ## Services
 
-Target one or more conversation entities created by HA-RAGent.
+Select conversation entities created by HA-RAGent as service targets. Memory services require exactly one agent subentry; select its conversation entity using the target picker.
 
 | Service | Description |
 | --- | --- |
 | `ha_ragent.embed_subentry` | Rebuilds device and tool indexes for the selected agents. |
 | `ha_ragent.preload_models` | Preloads the selected agents' models. Ollama only. |
 | `ha_ragent.unload_models` | Unloads the selected agents' models to free resources. Ollama only. |
+| `ha_ragent.export_memories` | Returns one subentry's memories as a JSON string in the response's `json` field. |
+| `ha_ragent.import_memories` | Imports JSON text or an object into one subentry, rebuilding embeddings and merging by memory ID. |
+
+Export and import use the same JSON format: `{"memories": [{"id": "0123456789abcdef", "content": "The desk is in the office.", "created_at": "2026-09-01T12:00:00+00:00", "retrieval_count": 0}]}`. Timestamps and retrieval counts are preserved. Import applies the selected agent's memory storage limit and leaves unrelated memories in place unless the limit requires pruning.
+
+The import `json` field accepts either JSON text or an already parsed object. Home Assistant templates can automatically convert the exported JSON text to an object; both forms work.
+
+To copy memories between agents in a script:
+
+```yaml
+- action: ha_ragent.export_memories
+  target:
+    entity_id: conversation.source_agent
+  response_variable: exported
+- action: ha_ragent.import_memories
+  target:
+    entity_id: conversation.destination_agent
+  data:
+    json: "{{ exported.json }}"
+```
 
 ## Scripts
 
