@@ -1,4 +1,3 @@
-"""Deterministic search constraints and compact, scoped result identities."""
 from __future__ import annotations
 
 import hashlib
