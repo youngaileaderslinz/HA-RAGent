@@ -47,7 +47,11 @@ class RAGentSemanticSearchTool(RAGentTool):
             )): dict,
             probatio.Optional("search_queries", description="One self-contained query per target group; align capabilities by position."
             ): probatio.All([str], probatio.Length(min=1, max=RAGENT_MAX_SEARCH_QUERIES)),
-            probatio.Optional("capabilities", description=("One capability per query, e.g. {action: turn_on, domain: light}.")
+            probatio.Optional("capabilities", description=(
+                "Optional list with exactly one entry per search query, in the same order, "
+                "e.g. {action: turn_on, domain: light}. Use {} for a query without a hint, "
+                "or omit capabilities entirely. Without search_queries, supply one entry for the context query."
+            )
             ): probatio.All(
                 [{
                     probatio.Optional("action", description=("Stable canonical action ID, e.g. turn_on, turn_off, fan_set_speed.")): str,
@@ -457,8 +461,14 @@ class RAGentSemanticSearchTool(RAGentTool):
             if not all(isinstance(q, str) and len(q) <= RAGENT_MAX_SEARCH_QUERY_CHARS for q in raw_queries):
                 raise ValueError("Invalid search query")
             raw_capabilities = arguments.get("capabilities", [])
-            if not isinstance(raw_capabilities, list) or (raw_capabilities and len(raw_capabilities) != len(raw_queries)):
-                raise ValueError("Supply one capability per query")
+            if not isinstance(raw_capabilities, list):
+                raise ValueError("capabilities must be a list of objects; omit it when no hints are needed")
+            if raw_capabilities and len(raw_capabilities) != len(raw_queries):
+                raise ValueError(
+                    f"Received {len(raw_capabilities)} capabilities for {len(raw_queries)} search queries. "
+                    "Supply one capability per query in the same order; use {} for queries without a hint, "
+                    "or omit capabilities entirely"
+                )
             if any(not isinstance(c, dict) or set(c) - {"action", "domain"}
                    or ("action" in c and not isinstance(c["action"], str))
                    or ("domain" in c and not (isinstance(c["domain"], str)

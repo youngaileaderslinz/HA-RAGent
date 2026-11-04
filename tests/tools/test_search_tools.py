@@ -58,6 +58,57 @@ def test_model_search_query_can_search_outside_user_request() -> None:
     assert queries == ["find a ventilation control tool"]
 
 
+@pytest.mark.parametrize("queries,capabilities", [
+    (["office", "kitchen"], [{"action": "turn_on"}]),
+    (["office"], [{"action": "turn_on"}, {"action": "turn_off"}]),
+    (None, [{"action": "turn_on"}, {"action": "turn_off"}]),
+])
+def test_capability_count_error_explains_alignment_before_retrieval(queries, capabilities):
+    tool = _search_tool()
+    tool.set_search_context(latest_request="turn on the lights")
+    tool._iter_searchable_entries = Mock(side_effect=AssertionError("Retrieval started"))
+    arguments = {"scope": "tools", "capabilities": capabilities}
+    if queries is not None:
+        arguments["search_queries"] = queries
+
+    result = asyncio.run(tool._async_call(SimpleNamespace(tool_args=arguments)))
+
+    assert result["status"] == "validation_error"
+    assert f"{len(capabilities)} capabilities for {len(queries) if queries is not None else 1} search queries" in result["error"]
+    assert "{}" in result["error"]
+    assert "omit capabilities" in result["error"]
+    tool._iter_searchable_entries.assert_not_called()
+
+
+@pytest.mark.parametrize("capabilities", [None, {"action": "turn_on"}, "turn_on"])
+def test_capabilities_require_a_list_before_retrieval(capabilities):
+    tool = _search_tool()
+    tool._iter_searchable_entries = Mock(side_effect=AssertionError("Retrieval started"))
+
+    result = asyncio.run(tool._async_call(SimpleNamespace(tool_args={
+        "scope": "tools", "search_queries": ["office"], "capabilities": capabilities,
+    })))
+
+    assert result["status"] == "validation_error"
+    assert "capabilities must be a list" in result["error"]
+    tool._iter_searchable_entries.assert_not_called()
+
+
+def test_empty_capability_placeholder_preserves_query_alignment():
+    tool = _search_tool()
+    tool._iter_searchable_entries = lambda: iter(())
+    capabilities = [{}, {"action": "turn_off", "domain": "light"}]
+    arguments = tool.parameters({
+        "scope": "tools", "search_queries": ["office", "kitchen"],
+        "capabilities": capabilities,
+    })
+
+    result = asyncio.run(tool._async_call(SimpleNamespace(tool_args=arguments)))
+
+    assert result["status"] == "no_matches"
+    assert tool.requested_capabilities == [{}, {"action": "turn_off", "domains": ("light",)}]
+
+
 def test_user_context_is_fallback_without_model_search_query() -> None:
     tool = _search_tool()
     tool._contextual_query = "turn off a light"
