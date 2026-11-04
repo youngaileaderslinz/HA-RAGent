@@ -178,7 +178,11 @@ Selecting **Assist** adds these tools to the Home Assistant API. Apart from sema
 | `HassRememberFact` | Saves a fact when the user explicitly asks. Maximum `1000` characters. |
 | `HassForgetFact` | Deletes one recalled fact using its exact memory ID. |
 
-Semantic search accepts up to four self-contained `search_queries`. Optional `capabilities` must match the queries by position. Set `scope` to `devices`, `tools` or `devices_and_tools`. Explicit tool searches can add callable tools to the current request; omitting `scope` searches both without adding tools.
+Semantic search accepts up to four self-contained `search_queries`. Optional
+`capabilities` match queries by position. Required `scope` selects either
+`devices` or `tools`. The agent's retrieval setting controls the search method.
+Optional AND filters constrain area, floor, domain, integration, entity
+type, device class or explicit state values/comparisons.
 
 Scheduled actions are held in memory. A Home Assistant restart or integration reload cancels them.
 
