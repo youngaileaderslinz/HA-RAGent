@@ -15,6 +15,9 @@ from custom_components.ha_ragent.src.models.embedding.device import Device
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
 from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
+from custom_components.ha_ragent.src.homeassistant.helpers.message_helper import MessageHelper
+from tests.retrieval.benchmark_search_tokens import fixture
+import asyncio
 
 
 def test_empty_history_produces_no_structured_or_prompt_history() -> None:
@@ -23,6 +26,45 @@ def test_empty_history_produces_no_structured_or_prompt_history() -> None:
 
     assert manager.structured_turn_contexts(chat_log) == []
     assert manager.filter_prompt_history(chat_log) == []
+
+
+def test_compact_search_and_duplicate_references_retain_weak_canonical_continuity():
+    search, _ = fixture()
+    search_call = SimpleNamespace(tool_args={"search_queries": ["office"], "scope": "devices"})
+    messages = [conversation.UserContent(content="Find the office lights")]
+    for call_id in ("first", "duplicate"):
+        result = asyncio.run(search._async_call(search_call))
+        identities = search.history_candidate_entities(result)
+        assert len(identities) == 4
+        messages.append(MessageHelper.create_tool_result_message(
+            "agent", call_id, "ha_ragent__HassSemanticSearch", result, candidate_entities=identities))
+    messages.extend([conversation.AssistantContent(agent_id="agent", content="Which office light?"),
+                     conversation.UserContent(content="The first one")])
+    # Stored canonical identity survives the scoped search tool's turn reset.
+    search.reset_turn()
+    manager = HistoryManager({CONF_REMEMBER_CONVERSATION_NUM_INTERACTIONS: 10})
+    context = manager.structured_turn_contexts(SimpleNamespace(content=messages))[0]
+    assert context.ambiguous_entities == tuple(f"light.office_{n}" for n in range(4))
+    assert not context.entities
+    assert not context.target_groups
+    continuity = HistoryRetriever.build_continuity_context([(context, 1.0)])
+    device = Device("light.office_0", "Office light 0", "Office", "Ground")
+    assert continuity.ambiguous_entity_score(device) > 0
+    assert continuity.entity_score(device) == 0
+    assert continuity.successful_target_score(device) == 0
+    wire = str(MessageHelper.message_to_chat_messages(messages))
+    assert "_candidate_entities" not in wire
+    assert "light.office_0" not in wire
+
+
+def test_compact_candidate_names_and_tool_ids_are_not_used_as_entity_ids():
+    ambiguous = set()
+    HistoryManager._collect_search_candidates({
+        "results": [{"id": "device-id", "type": "device", "name": "Office lamp"},
+                    {"id": "tool-id", "type": "tool", "name": "VendorLight"}],
+        "_candidate_entities": {"tool-id": "VendorLight", "unlisted-id": "light.unlisted"},
+    }, ambiguous)
+    assert ambiguous == set()
 
 
 def test_structured_context_prefers_canonical_tool_calls_and_results() -> None:

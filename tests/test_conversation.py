@@ -28,14 +28,107 @@ from custom_components.ha_ragent.src.models.retrieval.continuity_context import 
 from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 
+@pytest.mark.parametrize("available,scheduled", [(True, False), (False, False), (True, True)])
+@pytest.mark.parametrize("discover_device", [False, True])
+def test_compact_search_defers_live_schema_until_detail_and_executes(available, scheduled, discover_device):
+    from tests.retrieval.benchmark_search_tokens import fixture
+    from custom_components.ha_ragent.src.homeassistant.ragent_api import RAGentAugmentedAPIInstance
+    search, actions = fixture()
+    action = actions[0]
+    if scheduled:
+        action.name = RAGENT_PREFIXED_SCHEDULED_REQUEST_PROHIBITED_TOOL_NAMES[0]
+    live_action = SimpleNamespace(name=action.name, description="Live action", parameters={
+        "type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"],
+    })
+    api = RAGentAugmentedAPIInstance.__new__(RAGentAugmentedAPIInstance)
+    api.hass = search.hass
+    api.tools = [search, *([live_action] if available else [])]
+    api.custom_serializer = None
+    api._wrapped_api = SimpleNamespace()
+    exposed = []
+    requests = []
+    selected = {}
+    schemas = []
+
+    async def execute(call):
+        if call.tool_name.endswith("HassSemanticSearch"):
+            result = await search._async_call(call)
+            if "results" in result:
+                for candidate in result["results"]:
+                    selected.setdefault(candidate["type"] + "s", candidate["id"])
+            return result
+        exposed.append(call.tool_name)
+        return {"success": True}
+
+    api.async_call_tool = execute
+
+    async def send(_config, messages, tools):
+        requests.append(([t.name for t in tools], [dict(m) for m in messages]))
+        schemas.append({t.name: t.parameters for t in tools})
+        n = len(requests)
+        if n == 1:
+            if discover_device:
+                yield "```homeassistant\n" + json.dumps({"tool": "ha_ragent__HassSemanticSearch", "arguments": {
+                    "search_queries": ["office lights"], "scope": "devices"}}) + "\n```\n"
+            args = {"search_queries": ["office lights"], "scope": "tools"}
+            name = "ha_ragent__HassSemanticSearch"
+        elif n == 2:
+            if "devices" in selected:
+                yield "```homeassistant\n" + json.dumps({"tool": "ha_ragent__HassSemanticSearch", "arguments": {
+                    "operation": "detail", "result_id": selected["devices"], "scope": "devices"}}) + "\n```\n"
+            args = {"operation": "detail", "result_id": selected["tools"], "scope": "tools"}
+            name = "ha_ragent__HassSemanticSearch"
+        elif n == 3 and available and not scheduled:
+            args = {"name": "light.office_0"}
+            name = action.name
+        else:
+            yield "Done."
+            return
+        yield "```homeassistant\n" + json.dumps({"tool": name, "arguments": args}) + "\n```"
+
+    agent = SimpleNamespace(
+        hass=api.hass, entry=SimpleNamespace(llm_backend=SimpleNamespace(async_send_chat_request=send),
+                                          translations=RAGentTranslations.default("en")),
+        subentry=SimpleNamespace(data={}), runtime_options={CONF_MAX_TOOL_CALL_ITERATIONS: 4},
+        _exclude_prohibited_scheduled_request_tools=ragent_module.RAGent._exclude_prohibited_scheduled_request_tools)
+    history = HistoryManager({})
+    initial = [LlmTool("ha_ragent__HassSemanticSearch", "Search", parameters={"type": "object"})]
+    result = asyncio.run(ragent_module.RAGent._async_prompt_model(
+        agent, api, SimpleNamespace(agent_id="agent", language="en", conversation_id="turn"), initial,
+        SimpleNamespace(content=[]), history, [], "Control office lights", ContinuityContext(), scheduled_request=scheduled))
+    assert result.response.error_code is None
+    assert requests[0][0] == requests[1][0] == [initial[0].name]
+    assert (action.name in requests[2][0]) == (available and not scheduled)
+    assert exposed == ([action.name] if available and not scheduled else [])
+    assert "_candidate_entities" not in json.dumps([messages for _, messages in requests])
+    if discover_device:
+        from custom_components.ha_ragent.src.homeassistant.helpers.message_helper import MessageHelper
+        stored_candidates = [MessageHelper.tool_result_data(message).get("_candidate_entities")
+                             for message in history.message_history
+                             if isinstance(message, ragent_module.conversation.ToolResultContent)]
+        identities = next(mapping for mapping in stored_candidates if mapping)
+        assert set(identities.values()) == {f"light.office_{n}" for n in range(4)}
+    detail = [m["content"] for m in requests[2][1] if m["role"] == "tool"][-1]
+    if available and not scheduled:
+        assert detail["detail"]["name"] == action.name
+        assert "parameters" not in detail["detail"]  # exactly one copy in tools
+        assert schemas[2][action.name] == {**live_action.parameters, "additionalProperties": False}
+    else:
+        assert detail["status"] == "detail_error"
+
+
 @pytest.mark.parametrize("selected_api", ["none", None])
-def test_no_control_still_answers_without_loading_or_retrieving_tools(monkeypatch, selected_api):
+@pytest.mark.parametrize("context", [None, SimpleNamespace(user_id="user")])
+@pytest.mark.parametrize("supports_context", [False, True])
+def test_no_control_still_answers_without_loading_or_retrieving_tools(monkeypatch, selected_api, context, supports_context):
     chat_log = SimpleNamespace(llm_api=None)
     history = Mock(message_history=[])
     get_api = AsyncMock(side_effect=AssertionError("No Control loaded an API"))
     retriever = SimpleNamespace(async_retrieve_tools=AsyncMock())
     monkeypatch.setattr(ragent_module.llm, "async_get_api", get_api)
-    monkeypatch.setattr(ragent_module.chat_session, "async_get_chat_session", lambda *_: nullcontext(object()))
+    get_chat_session = Mock(return_value=nullcontext(object()))
+    monkeypatch.setattr(ragent_module.chat_session, "async_get_chat_session", get_chat_session)
+    monkeypatch.setattr(ragent_module, "_CHAT_SESSION_SUPPORTS_CONTEXT", supports_context)
     monkeypatch.setattr(ragent_module.conversation, "async_get_chat_log", lambda *_: nullcontext(chat_log))
     monkeypatch.setattr(ragent_module, "HistoryManager", lambda **_: history)
     monkeypatch.setattr(ragent_module, "ConversationRetriever", lambda *_: retriever)
@@ -56,10 +149,13 @@ def test_no_control_still_answers_without_loading_or_retrieving_tools(monkeypatc
     )
     user_input = SimpleNamespace(
         text="Hello", agent_id="agent", conversation_id="conversation", language="en",
+        context=context,
         as_llm_context=lambda _: None,
     )
 
     assert asyncio.run(ragent_module.RAGent.async_process(agent, user_input)) is result
+    expected_kwargs = {"context": context} if supports_context else {}
+    get_chat_session.assert_called_once_with(agent.hass, user_input.conversation_id, **expected_kwargs)
     get_api.assert_not_awaited()
     retriever.async_retrieve_tools.assert_not_awaited()
     assert agent._async_prompt_model.await_args.args[0] is None
@@ -78,7 +174,7 @@ def test_conversation_normalizes_all_exposure_ranges(monkeypatch, mode, minimum,
         async_retrieve_memories=AsyncMock(return_value=[]),
     )
     monkeypatch.setattr(ragent_module.llm, "async_get_api", AsyncMock(return_value=object()))
-    monkeypatch.setattr(ragent_module.chat_session, "async_get_chat_session", lambda *_: nullcontext(object()))
+    monkeypatch.setattr(ragent_module.chat_session, "async_get_chat_session", lambda *_, **kwargs: nullcontext(object()))
     monkeypatch.setattr(ragent_module.conversation, "async_get_chat_log", lambda *_: nullcontext(chat_log))
     monkeypatch.setattr(ragent_module, "HistoryManager", lambda **_: Mock(message_history=[]))
     monkeypatch.setattr(ragent_module, "ConversationRetriever", lambda *_: retriever)
@@ -100,6 +196,7 @@ def test_conversation_normalizes_all_exposure_ranges(monkeypatch, mode, minimum,
     )
     user_input = SimpleNamespace(
         text="Hello", agent_id="agent", conversation_id="conversation", language="en",
+        context=SimpleNamespace(user_id="user"),
         as_llm_context=lambda _: None,
     )
 
@@ -114,7 +211,7 @@ def test_conversation_normalizes_all_exposure_ranges(monkeypatch, mode, minimum,
 
 
 @pytest.mark.parametrize("available,scheduled", [(True, False), (False, False), (True, True)])
-@pytest.mark.parametrize("scope", [None, "devices", "tools", "devices_and_tools"])
+@pytest.mark.parametrize("scope", ["devices", "tools"])
 def test_corrective_search_exposes_tools_only_when_explicitly_requested(available, scheduled, scope):
     search_name = "ha_ragent__HassSemanticSearch"
     action_name = (
@@ -147,7 +244,7 @@ def test_corrective_search_exposes_tools_only_when_explicitly_requested(availabl
     requests = []
     tool_definitions = []
     request_messages = []
-    should_add_tools = available and not scheduled and scope in {"tools", "devices_and_tools"}
+    should_add_tools = available and not scheduled and scope == "tools"
 
     async def send(_config, _messages, tools):
         requests.append([tool.name for tool in tools])
@@ -201,7 +298,7 @@ def test_corrective_search_exposes_tools_only_when_explicitly_requested(availabl
     assert "candidate_tools" not in search_result
     assert "Cached candidate description" not in json.dumps(search_result)
     assert "cached_schema" not in json.dumps(search_result)
-    if scope in {"tools", "devices_and_tools"} and not should_add_tools:
+    if scope == "tools" and not should_add_tools:
         assert search_result["tool_search_status"] == "no_tools_available"
         assert search_result["fallback_required"] is True
 

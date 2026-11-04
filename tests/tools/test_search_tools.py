@@ -25,11 +25,15 @@ def _search_tool() -> RAGentSemanticSearchTool:
     return tool
 
 
+def _candidates(tool, result, kind):
+    return [tool._results[r["id"]]["data"] for r in result["results"] if r["type"] == kind]
+
+
 def test_semantic_search_schema_explains_parallel_structured_capabilities() -> None:
     schema = to_openapi(RAGentSemanticSearchTool.parameters)
 
-    assert "search_queries" in schema["required"]
-    assert "capabilities" not in schema["required"]
+    assert "search_queries" not in schema.get("required", [])
+    assert "capabilities" not in schema.get("required", [])
     assert "position" in schema["properties"]["search_queries"]["description"]
     capability_description = schema["properties"]["capabilities"]["description"]
     assert "turn_on" in capability_description
@@ -183,8 +187,9 @@ class _FakeEmbedder:
         return [1.0, 0.0]
 
 
+@pytest.mark.parametrize("scope", ["devices", "tools"])
 @pytest.mark.parametrize("mode,calls", [("automatic", 1), ("vector", 1), ("lexical", 0)])
-def test_combined_corrective_search_keeps_retrieval_independent_and_location_aliases(mode, calls):
+def test_scoped_search_retrieves_only_requested_collection(mode, calls, scope):
     from custom_components.ha_ragent.src.homeassistant.helpers.message_helper import MessageHelper
 
     device = Device("fan.a", "Ventilator", "Kitchen", "Ground",
@@ -216,23 +221,23 @@ def test_combined_corrective_search_keeps_retrieval_independent_and_location_ali
     search._iter_searchable_entries = lambda: iter([(entry, "subentry", subentry, 2, 2, 2, 2)])
     search.set_search_context(latest_request="in der Küche lüften")
     result = asyncio.run(search._async_call(SimpleNamespace(tool_args={
-        "search_query": "Ventilator starten", "scope": "devices_and_tools",
+        "search_query": "Ventilator starten", "scope": scope,
     })))
 
-    assert not result["error"]
+    assert result["status"] == "ok"
     assert len(embedder.queries) == calls
     if calls:
-        assert len(vectors) == 2
-        assert vectors[0] is vectors[1]
+        assert len(vectors) == 1
         assert embedder.queries == ["Ventilator starten"]
-    assert result["device_search_query"] == "Ventilator starten"
-    assert result["tool_search_query"] == "Ventilator starten"
-    assert result["candidate_devices"][0]["name"] == device.id
-    assert result["candidate_devices"][0]["attributes"] == {"speed": "high"}
-    assert result["candidate_tools"][0]["name"] == capability.name
-    compact = MessageHelper._compact_candidate_devices(result["candidate_devices"])
-    assert "area_aliases" not in compact[0]
-    assert "floor_aliases" not in compact[0]
+    if scope == "devices":
+        assert _candidates(search, result, "device")[0]["name"] == device.id
+        assert _candidates(search, result, "device")[0]["attributes"] == {"speed": "high"}
+        compact = MessageHelper._compact_candidate_devices(_candidates(search, result, "device"))
+        assert "area_aliases" not in compact[0]
+        assert "floor_aliases" not in compact[0]
+    else:
+        assert _candidates(search, result, "tool")[0]["name"] == capability.name
+    assert len(result["results"]) == 1
 
 
 class _FakeToolVectorDatabase:
@@ -278,7 +283,7 @@ def test_search_mode_skips_unused_backends_and_preserves_ranking(scope, mode):
     })))
 
     is_vector = mode == const.RETRIEVAL_METHOD_VECTOR
-    candidate_name = result[f"candidate_{scope}"][0]["name"]
+    candidate_name = _candidates(tool, result, "device" if scope == "devices" else "tool")[0]["name"]
     assert candidate_name == (
         semantic.name if is_vector and scope == "tools"
         else semantic.id if is_vector
@@ -303,9 +308,12 @@ def test_search_mode_skips_unused_backends_and_preserves_ranking(scope, mode):
             const.RETRIEVAL_METHOD_VECTOR,
             const.RETRIEVAL_METHOD_VECTOR,
         ),
+        (const.RETRIEVAL_METHOD_VECTOR, None, const.RETRIEVAL_METHOD_VECTOR),
+        (const.RETRIEVAL_METHOD_LEXICAL, None, const.RETRIEVAL_METHOD_LEXICAL),
+        (const.RETRIEVAL_METHOD_VECTOR, const.RETRIEVAL_METHOD_AUTOMATIC, const.RETRIEVAL_METHOD_AUTOMATIC),
     ],
 )
-def test_subentry_retrieval_method_overrides_entry(
+def test_search_mode_uses_configuration(
     entry_mode, subentry_mode, expected_mode,
 ):
     lexical_device = Device("fan.lexical", "Lexical fan", "", "")
@@ -323,7 +331,7 @@ def test_subentry_retrieval_method_overrides_entry(
         vector_db_backend=database,
     )
     subentry = SimpleNamespace(
-        data={const.CONF_RETRIEVAL_METHOD: subentry_mode},
+        data={const.CONF_RETRIEVAL_METHOD: subentry_mode} if subentry_mode is not None else {},
         title="Test",
     )
     tool = _search_tool()
@@ -334,19 +342,30 @@ def test_subentry_retrieval_method_overrides_entry(
     )
     tool.set_search_context(latest_request="fan")
 
-    result = asyncio.run(
-        tool._async_call(
-            SimpleNamespace(tool_args={"search_query": "fan", "scope": "devices"})
-        )
-    )
+    arguments = {"search_query": "fan", "scope": "devices"}
+    result = asyncio.run(tool._async_call(SimpleNamespace(tool_args=arguments)))
 
+    assert result["mode"] == expected_mode
     is_vector = expected_mode == const.RETRIEVAL_METHOD_VECTOR
-    assert result["candidate_devices"][0]["name"] == (
-        vector_device.id if is_vector else lexical_device.id
-    )
+    if expected_mode != const.RETRIEVAL_METHOD_AUTOMATIC:
+        assert _candidates(tool, result, "device")[0]["name"] == (
+            vector_device.id if is_vector else lexical_device.id
+        )
     assert database.async_get_lexical_objects.await_count == int(not is_vector)
-    assert database.async_retrieve_scored_objects.await_count == int(is_vector)
-    assert len(embedder.queries) == int(is_vector)
+    uses_vectors = expected_mode != const.RETRIEVAL_METHOD_LEXICAL
+    assert database.async_retrieve_scored_objects.await_count == int(uses_vectors)
+    assert len(embedder.queries) == int(uses_vectors)
+
+
+@pytest.mark.parametrize("mode", ["automatic", "lexical", "vector", "guess", None])
+def test_search_rejects_model_supplied_mode_before_retrieval(mode):
+    tool = _search_tool()
+    tool._iter_searchable_entries = Mock(side_effect=AssertionError("Retrieval started"))
+    result = asyncio.run(tool._async_call(SimpleNamespace(tool_args={
+        "scope": "devices", "search_queries": ["fan"], "mode": mode,
+    })))
+    assert result["status"] == "validation_error"
+    tool._iter_searchable_entries.assert_not_called()
 
 
 def test_automatic_device_search_combines_exact_lexical_and_vector_results():
@@ -380,7 +399,7 @@ def test_automatic_device_search_combines_exact_lexical_and_vector_results():
         )
     )
 
-    assert result["candidate_devices"][0]["name"] == local_device.id
+    assert _candidates(tool, result, "device")[0]["name"] == local_device.id
     assert embedder.queries == ["fan.kitchen"]
     database.async_get_lexical_objects.assert_awaited_once()
     database.async_retrieve_scored_objects.assert_awaited_once()
@@ -423,7 +442,7 @@ def test_zero_maximum_skips_the_requested_search_scope(scope):
         )
     )
 
-    assert result[f"candidate_{scope}"] == []
+    assert _candidates(tool, result, "device" if scope == "devices" else "tool") == []
     database.async_get_lexical_objects.assert_not_awaited()
     database.async_retrieve_scored_objects.assert_not_awaited()
 
@@ -444,7 +463,7 @@ def test_search_embedding_failure_still_discovers_custom_tool():
     result = asyncio.run(tool._async_call(SimpleNamespace(tool_args={
         "search_query": "Turbo ventilation", "scope": "tools",
     })))
-    assert result["candidate_tools"][0]["name"] == custom.name
+    assert _candidates(tool, result, "tool")[0]["name"] == custom.name
     database.async_retrieve_scored_objects.assert_not_awaited()
 
 
@@ -481,7 +500,7 @@ def test_semantic_tool_search_prioritizes_capability_without_filtering_custom_to
         )
     )
 
-    candidate_names = [candidate["name"] for candidate in result["candidate_tools"]]
+    candidate_names = [candidate["name"] for candidate in _candidates(tool, result, "tool")]
     assert candidate_names[0] == "HassTurnOff"
     assert set(candidate_names) == {"HassTimerCancel", "HassLightSet", "HassTurnOff"}
 
@@ -496,8 +515,8 @@ def test_structured_search_allows_query_only_discovery() -> None:
         "scope": "tools",
     })))
 
-    assert result["requested_capabilities"] == []
-    assert not result.get("error")
+    assert result["status"] == "no_matches"
+    assert "requested_capabilities" not in result
 
 
 def test_capability_ranking_prioritizes_requested_action_without_excluding_alternatives() -> None:
@@ -532,13 +551,13 @@ def test_capability_ranking_prioritizes_requested_action_without_excluding_alter
         "scope": "tools",
     })))
 
-    assert [candidate["name"] for candidate in result["candidate_tools"]] == [
+    assert [candidate["name"] for candidate in _candidates(tool, result, "tool")] == [
         "HassTurnOn",
         "HassForgetFact",
     ]
 
 
-def test_weak_tool_result_returns_explicit_fallback_signal() -> None:
+def test_weak_tool_result_retains_bounded_compact_candidates() -> None:
     vector_database = _FakeToolVectorDatabase([
         LlmTool(name="HassBroadcast", description="Broadcast a message"),
     ])
@@ -561,14 +580,12 @@ def test_weak_tool_result_returns_explicit_fallback_signal() -> None:
         )
     )
 
-    assert [candidate["name"] for candidate in result["candidate_tools"]] == [
+    assert [candidate["name"] for candidate in _candidates(tool, result, "tool")] == [
         "HassBroadcast"
     ]
-    assert result["candidate_devices"] == []
-    assert result["tool_search_status"] == "weak_candidates"
-    assert result["tool_search_confidence"] == "low"
-    assert result["fallback_required"] is True
-    assert "do not invent a tool" in result["tool_search_message"]
+    assert _candidates(tool, result, "device") == []
+    assert result["status"] == "ok"
+    assert "tool_search_confidence" not in result
 
 
 def test_empty_tool_index_returns_no_tools_fallback() -> None:
@@ -591,13 +608,11 @@ def test_empty_tool_index_returns_no_tools_fallback() -> None:
         )
     )
 
-    assert result["candidate_tools"] == []
-    assert result["tool_search_status"] == "no_tools_found"
-    assert result["tool_search_confidence"] == "none"
-    assert result["fallback_required"] is True
+    assert _candidates(tool, result, "tool") == []
+    assert result["status"] == "no_matches"
 
 
-def test_candidate_context_fallback_obeys_device_limit() -> None:
+def test_no_match_does_not_reintroduce_unrelated_context() -> None:
     entry = SimpleNamespace(
         options={},
         embedder_backend=_FakeEmbedder(),
@@ -615,6 +630,5 @@ def test_candidate_context_fallback_obeys_device_limit() -> None:
         tool_args={"search_query": "target", "scope": "devices"},
     )))
 
-    assert result["candidate_devices"] == [
-        {"name": "light.first", "domain": ["light"]}
-    ]
+    assert result["status"] == "no_matches"
+    assert result["results"] == []
