@@ -235,9 +235,7 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
 
 class RAGentLLMAPI(llm.API):
     def __init__(self, hass: HomeAssistant) -> None:
-        self.hass = hass
-        self.id = RAGENT_LLM_API_ID
-        self.name = RAGENT_LLM_API_NAME
+        super().__init__(hass=hass, id=RAGENT_LLM_API_ID, name=RAGENT_LLM_API_NAME)
 
     async def async_get_api_instance(self, llm_context: llm.LLMContext, *args: Any, **kwargs: Any) -> llm.APIInstance:
         assist_api = await llm.async_get_api(self.hass, getattr(llm, "LLM_API_ASSIST", "assist"), llm_context=llm_context)

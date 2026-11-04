@@ -1,14 +1,14 @@
 import asyncio
 from dataclasses import dataclass
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import probatio
 import pytest
 from homeassistant.helpers import llm
 
-from custom_components.ha_ragent.src.const import DOMAIN, RAGENT_PREFIXED_TOOL_NAMES_BY_NAME
-from custom_components.ha_ragent.src.homeassistant.ragent_api import RAGentAugmentedAPIInstance
+from custom_components.ha_ragent.src.const import DOMAIN, RAGENT_LLM_API_ID, RAGENT_PREFIXED_TOOL_NAMES_BY_NAME
+from custom_components.ha_ragent.src.homeassistant.ragent_api import RAGentAugmentedAPIInstance, RAGentLLMAPI
 from custom_components.ha_ragent.src.homeassistant.tools.list_planned_actions import RAGentListPlannedActionsTool
 from custom_components.ha_ragent.src.homeassistant.tools.remember_fact import RAGentRememberTool
 
@@ -17,6 +17,25 @@ from custom_components.ha_ragent.src.homeassistant.tools.remember_fact import RA
 class ToolResult:
     data: dict
     error: bool = False
+
+
+def test_registered_ragent_api_can_be_loaded_through_home_assistant(monkeypatch):
+    hass = Mock(data={})
+    api = RAGentLLMAPI(hass)
+    context = llm.LLMContext(
+        platform=DOMAIN, context=None, language="en", assistant="conversation", device_id=None,
+    )
+    instance = object()
+    get_instance = AsyncMock(return_value=instance)
+    monkeypatch.setattr(api, "async_get_api_instance", get_instance)
+    unregister = llm.async_register_api(hass, api)
+    try:
+        result = asyncio.run(llm.async_get_api(hass, RAGENT_LLM_API_ID, llm_context=context))
+    finally:
+        unregister()
+
+    assert result is instance
+    get_instance.assert_awaited_once_with(context)
 
 
 def test_native_tool_call_returns_structured_result(monkeypatch):
