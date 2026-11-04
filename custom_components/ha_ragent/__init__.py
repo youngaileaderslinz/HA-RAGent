@@ -15,6 +15,8 @@ from custom_components.ha_ragent.src.backends.llm.base_backend import ALlmBaseBa
 from custom_components.ha_ragent.src.homeassistant.services.embed_subentry_service import register_embed_subentry_service
 from custom_components.ha_ragent.src.homeassistant.services.preload_service import register_preload_models_service
 from custom_components.ha_ragent.src.homeassistant.services.unload_service import register_unload_models_service
+from custom_components.ha_ragent.src.homeassistant.services.export_memories_service import register_export_memories_service
+from custom_components.ha_ragent.src.homeassistant.services.import_memories_service import register_import_memories_service
 from custom_components.ha_ragent.src.homeassistant.extractors.device_extractor import DeviceExtractor
 from custom_components.ha_ragent.src.homeassistant.ragent_api import RAGentLLMAPI
 from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
@@ -119,6 +121,12 @@ async def _async_update_listener(hass: HomeAssistant, entry: RAGentConfigEntry) 
         _logger.log_string(logging.WARNING, f"Config entry {entry.entry_id} is unloading, skipping reload after subentry change")
 
 async def _register_services(hass: HomeAssistant):
+    if not hass.services.has_service(DOMAIN, "export_memories"):
+        register_export_memories_service(hass)
+
+    if not hass.services.has_service(DOMAIN, "import_memories"):
+        register_import_memories_service(hass)
+
     if not hass.services.has_service(DOMAIN, "embed_subentry"):
         register_embed_subentry_service(hass)
 

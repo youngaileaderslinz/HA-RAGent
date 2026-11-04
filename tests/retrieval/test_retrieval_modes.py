@@ -82,15 +82,16 @@ def test_retrieval_mode_controls_sources_and_final_order(workflow, scope, mode, 
     else:
         search = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
         search.entry_id = "entry"
+        search.subentry_id = "agent"
         search.hass = Mock()
         search.hass.states.get.return_value = None
         search._iter_searchable_entries = lambda: iter([(entry, "agent", subentry, 1, 1, 1, 1)])
         search.set_search_context(latest_request=query)
-        result = asyncio.run(search._async_call(SimpleNamespace(tool_args={
-            "search_queries": [query], "scope": scope,
-        })))
-        assert not result["error"]
-        names = [candidate["name"] for candidate in result[f"candidate_{scope}"]]
+        arguments = {"search_queries": [query], "scope": scope}
+        result = asyncio.run(search._async_call(SimpleNamespace(tool_args=arguments)))
+        assert result["status"] in {"ok", "no_matches"}
+        assert result["mode"] == mode
+        names = [search._results[candidate["id"]]["data"]["name"] for candidate in result["results"]]
 
     if source_state == "empty" or (source_state == "failure" and mode == RETRIEVAL_METHOD_VECTOR):
         assert names == []
@@ -214,6 +215,7 @@ def test_retrieval_enforces_minimum_and_maximum_in_every_mode(workflow, scope, m
     else:
         search = RAGentSemanticSearchTool.__new__(RAGentSemanticSearchTool)
         search.entry_id = "entry"
+        search.subentry_id = "agent"
         search.hass = Mock()
         search.hass.states.get.return_value = None
         search._iter_searchable_entries = lambda: iter([
@@ -223,8 +225,8 @@ def test_retrieval_enforces_minimum_and_maximum_in_every_mode(workflow, scope, m
         result = asyncio.run(search._async_call(SimpleNamespace(tool_args={
             "search_queries": [query], "scope": scope,
         })))
-        assert not result["error"]
-        names = [candidate["name"] for candidate in result[f"candidate_{scope}"]]
+        assert result["status"] in {"ok", "no_matches"}
+        names = [search._results[candidate["id"]]["data"]["name"] for candidate in result["results"]]
 
     assert min(minimum, len(candidates)) <= len(names) <= min(maximum, len(candidates))
     assert len(names) == len(set(names))

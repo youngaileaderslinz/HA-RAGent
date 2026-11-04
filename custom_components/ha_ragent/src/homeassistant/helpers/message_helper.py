@@ -103,6 +103,11 @@ class MessageHelper:
         if not isinstance(result, dict):
             return MessageHelper._compact_value(result)
         if MessageHelper._is_semantic_search(tool_name):
+            if result.get("status") in ("ok", "no_matches", "same_as", "validation_error", "detail_error", "retrieval_error"):
+                # Search owns the bounded contract. In particular, a selected
+                # detail schema must not be truncated into invalid JSON Schema.
+                keys = ("status", "search_id", "mode", "results", "result_ids", "filters", "detail", "error")
+                return {key: result[key] for key in keys if key in result}
             devices = result.get("candidate_devices", result.get("devices", []))
             available_tools = result.get("available_tools", [])
             return {
@@ -147,6 +152,8 @@ class MessageHelper:
     def tool_result_succeeded(result: object) -> bool:
         """Return whether a tool result represents a success."""
         if isinstance(result, dict):
+            if result.get("status") in ("validation_error", "detail_error", "retrieval_error"):
+                return False
             if "success" in result:
                 return bool(result["success"])
             if any(result.get(key) for key in ("error", "errors", "failed")):
@@ -164,11 +171,16 @@ class MessageHelper:
         tool_call_id: str | None,
         tool_name: str,
         result: object,
+        *,
+        candidate_entities: dict[str, str] | None = None,
     ) -> conversation.ToolResultContent:
-        """Create a tool-result message for a successful tool call."""
+        """Retain internal candidate identity without adding it to model input."""
+        data = MessageHelper.compact_tool_result_value(tool_name, result)
+        if MessageHelper._is_semantic_search(tool_name) and isinstance(data, dict) and candidate_entities:
+            data = {**data, "_candidate_entities": dict(candidate_entities)}
         return MessageHelper._tool_result_content(
             agent_id, tool_call_id, tool_name,
-            MessageHelper.compact_tool_result_value(tool_name, result),
+            data,
         )
 
     @staticmethod

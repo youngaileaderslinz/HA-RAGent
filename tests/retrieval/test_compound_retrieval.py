@@ -56,24 +56,17 @@ def test_query_limit_is_enforced_before_any_retrieval():
     tool.translations._data = RAGentTranslations._load("en")
     tool._iter_searchable_entries = Mock(side_effect=AssertionError("Must not retrieve"))
     queries = ["repeated"] * (RAGENT_MAX_SEARCH_QUERIES + 1)
-    result = asyncio.run(tool._async_call(SimpleNamespace(tool_args={"search_queries": queries})))
+    result = asyncio.run(tool._async_call(SimpleNamespace(tool_args={"search_queries": queries, "scope": "tools"})))
     assert str(RAGENT_MAX_SEARCH_QUERIES) in result["error"]
     tool._iter_searchable_entries.assert_not_called()
     with pytest.raises(probatio.Invalid):
-        tool.parameters({"search_queries": queries})
+        tool.parameters({"search_queries": queries, "scope": "tools"})
     valid_queries = queries[:RAGENT_MAX_SEARCH_QUERIES]
     assert tool.parameters({
         "search_queries": valid_queries,
+        "scope": "tools",
         "capabilities": [
             {"action": f"operation_{index}"}
             for index, _query in enumerate(valid_queries)
         ],
     })
-
-
-def test_partial_query_coverage_requires_follow_up():
-    status, fallback, _ = RAGentSemanticSearchTool._tool_search_feedback(
-        True, "none", [{"name": "intent__HassTurnOn"}],
-    )
-    assert status == "weak_candidates"
-    assert fallback

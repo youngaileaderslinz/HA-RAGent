@@ -122,6 +122,24 @@ class HistoryManager:
         """Collect search matches as weak evidence, not successful targets."""
         if not isinstance(result, dict):
             return
+        if isinstance(result.get("detail"), dict) and result["detail"].get("type") == "device":
+            cls._add_values(ambiguous_entities, result["detail"].get("name"))
+        # Compact names are display labels. Resolve their opaque IDs using the
+        # private mapping retained with the result, never as successful actions.
+        identities = result.get("_candidate_entities", {})
+        if isinstance(identities, dict):
+            compact_candidates = result.get("results", [])
+            if isinstance(compact_candidates, list):
+                for candidate in compact_candidates:
+                    if isinstance(candidate, dict) and candidate.get("type") == "device":
+                        result_id = candidate.get("id")
+                        if isinstance(result_id, str):
+                            cls._add_values(ambiguous_entities, identities.get(result_id))
+            references = result.get("result_ids", [])
+            if isinstance(references, list):
+                for result_id in references:
+                    if isinstance(result_id, str):
+                        cls._add_values(ambiguous_entities, identities.get(result_id))
         candidates = result.get("candidate_devices", result.get("devices", []))
         if not isinstance(candidates, list):
             return

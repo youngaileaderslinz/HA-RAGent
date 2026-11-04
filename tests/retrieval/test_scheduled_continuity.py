@@ -44,7 +44,9 @@ def test_scheduled_request_passes_snapshot_continuity_through_retrieval_and_hist
     chat_log = SimpleNamespace(llm_api=None)
     history_manager = Mock()
     history_manager.message_history = []
-    monkeypatch.setattr(ragent_module.chat_session, "async_get_chat_session", lambda *args: nullcontext(object()))
+    get_chat_session = Mock(return_value=nullcontext(object()))
+    monkeypatch.setattr(ragent_module.chat_session, "async_get_chat_session", get_chat_session)
+    monkeypatch.setattr(ragent_module, "_CHAT_SESSION_SUPPORTS_CONTEXT", True)
     monkeypatch.setattr(ragent_module.conversation, "async_get_chat_log", lambda *args: nullcontext(chat_log))
     monkeypatch.setattr(ragent_module.llm, "async_get_api", AsyncMock(return_value=object()))
     monkeypatch.setattr(ragent_module, "HistoryManager", lambda **kwargs: history_manager)
@@ -74,10 +76,12 @@ def test_scheduled_request_passes_snapshot_continuity_through_retrieval_and_hist
     user_input = SimpleNamespace(
         text=f"{RAGENT_SCHEDULED_REQUEST_PREFIX}{RAGENT_SCHEDULED_CONTEXT_PREFIX}token] turn it on",
         agent_id="agent", conversation_id=None, language="en",
+        context=SimpleNamespace(user_id="user"),
         as_llm_context=lambda domain: None,
     )
 
     assert asyncio.run(RAGent.async_process(agent, user_input)) is result
+    get_chat_session.assert_called_once_with(agent.hass, None, context=user_input.context)
     passed_continuity = retriever.async_retrieve_devices.call_args.kwargs["continuity"]
     assert isinstance(passed_continuity, ContinuityContext)
     assert passed_continuity.selected_turn_keys == set()

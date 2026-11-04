@@ -18,3 +18,27 @@ unload_models:
     entity:
       domain: conversation
       integration: ha_ragent
+
+export_memories:
+  name: Export Memories
+  description: Select one agent's conversation entity to export its memories as JSON in the response's json field.
+  target:
+    entity:
+      domain: conversation
+      integration: ha_ragent
+
+import_memories:
+  name: Import Memories
+  description: Select one agent's conversation entity to import JSON memories and rebuild their embeddings.
+  target:
+    entity:
+      domain: conversation
+      integration: ha_ragent
+  fields:
+    json:
+      name: Memories JSON
+      description: JSON text or an object containing the exported memories list.
+      required: true
+      selector:
+        text:
+          multiline: true
