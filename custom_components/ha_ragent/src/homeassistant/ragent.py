@@ -410,40 +410,69 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                             tool_result = await llm_api.async_call_tool(sanitized_tool_call)
                             parsed_tool_result = tool_helper.parse_tool_results(tool_result)
                             tool_succeeded = MessageHelper.tool_result_succeeded(parsed_tool_result)
+                            history_candidates = None
 
                             if tool_succeeded and is_search_tool:
-                                discovered_tools = parsed_tool_result.get("candidate_tools", [])
-                                discovered_names = list(dict.fromkeys([
-                                    candidate["name"] for candidate in discovered_tools
-                                    if isinstance(candidate, dict)
-                                    and isinstance(candidate.get("name"), str)
-                                ])) if isinstance(discovered_tools, list) else []
-                                requested_tool_search = tool_call.tool_args.get("scope") in {"tools", "devices_and_tools"}
-                                if requested_tool_search:
-                                    missing_names = [
-                                        name for name in discovered_names if name not in exposed_tool_names
-                                    ]
+                                compact_search = "status" in parsed_tool_result
+                                if compact_search and is_custom_api:
+                                    history_candidates = llm_api.search_history_candidates(parsed_tool_result)
+                                    selected_devices, selected_names = llm_api.search_result_context(parsed_tool_result)
                                     added_tools = self._exclude_prohibited_scheduled_request_tools(
-                                        ToolExtractor.tools_from_api(llm_api, missing_names),
-                                        scheduled_request,
+                                        ToolExtractor.tools_from_api(llm_api, [
+                                            name for name in selected_names if name not in exposed_tool_names
+                                        ]), scheduled_request,
                                     )
                                     if added_tools:
                                         tool_list = [*tool_list, *added_tools]
                                         exposed_tool_names.update(tool.name for tool in added_tools)
                                         tool_helper = ToolHelper(self.hass, tool_list)
-                                available_tools = [name for name in discovered_names if name in exposed_tool_names]
-                                parsed_tool_result = {**parsed_tool_result, "available_tools": available_tools}
-                                if requested_tool_search and discovered_names and not available_tools:
-                                    parsed_tool_result.update({
-                                        "tool_search_status": "no_tools_available",
-                                        "fallback_required": True,
-                                        "tool_search_message": "No retrieved tools are callable for this request.",
-                                    })
-                                discovered_candidates = tool_helper.candidate_devices(parsed_tool_result)
-                                if discovered_candidates:
-                                    active_candidate_context = tool_helper.merge_candidates(active_candidate_context, discovered_candidates)
-                                    if is_custom_api:
+                                    if selected_names:
+                                        if not all(name in exposed_tool_names for name in selected_names):
+                                            parsed_tool_result = {"status": "detail_error", "error": "Selected tool is not callable for this request"}
+                                        else:
+                                            # The live schema is already in the tool list.
+                                            # Keep one copy, and never trust cached schemas.
+                                            detail = parsed_tool_result["detail"]
+                                            parsed_tool_result = {**parsed_tool_result, "detail": {
+                                                key: value for key, value in detail.items()
+                                                if key not in {"parameters", "metadata", "description"}
+                                            }}
+                                    if selected_devices:
+                                        active_candidate_context = tool_helper.merge_candidates(active_candidate_context, selected_devices)
                                         llm_api.refresh_search_candidates(active_candidate_context)
+                                if not compact_search:
+                                    discovered_tools = parsed_tool_result.get("candidate_tools", [])
+                                    discovered_names = list(dict.fromkeys([
+                                        candidate["name"] for candidate in discovered_tools
+                                        if isinstance(candidate, dict)
+                                        and isinstance(candidate.get("name"), str)
+                                    ])) if isinstance(discovered_tools, list) else []
+                                    requested_tool_search = tool_call.tool_args.get("scope") == "tools"
+                                    if requested_tool_search:
+                                        missing_names = [
+                                            name for name in discovered_names if name not in exposed_tool_names
+                                        ]
+                                        added_tools = self._exclude_prohibited_scheduled_request_tools(
+                                            ToolExtractor.tools_from_api(llm_api, missing_names),
+                                            scheduled_request,
+                                        )
+                                        if added_tools:
+                                            tool_list = [*tool_list, *added_tools]
+                                            exposed_tool_names.update(tool.name for tool in added_tools)
+                                            tool_helper = ToolHelper(self.hass, tool_list)
+                                    available_tools = [name for name in discovered_names if name in exposed_tool_names]
+                                    parsed_tool_result = {**parsed_tool_result, "available_tools": available_tools}
+                                    if requested_tool_search and discovered_names and not available_tools:
+                                        parsed_tool_result.update({
+                                            "tool_search_status": "no_tools_available",
+                                            "fallback_required": True,
+                                            "tool_search_message": "No retrieved tools are callable for this request.",
+                                        })
+                                    discovered_candidates = tool_helper.candidate_devices(parsed_tool_result)
+                                    if discovered_candidates:
+                                        active_candidate_context = tool_helper.merge_candidates(active_candidate_context, discovered_candidates)
+                                        if is_custom_api:
+                                            llm_api.refresh_search_candidates(active_candidate_context)
                             elif tool_succeeded:
                                 if is_custom_api:
                                     llm_api.refresh_search_candidates(active_candidate_context)
@@ -454,7 +483,8 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                     agent_id=user_input.agent_id,
                                     tool_call_id=tool_call.id,
                                     tool_name=tool_name,
-                                    result=parsed_tool_result
+                                    result=parsed_tool_result,
+                                    candidate_entities=history_candidates,
                                 )
                             )
                         except Exception as tool_err:

@@ -4,14 +4,13 @@ import logging
 from custom_components.ha_ragent.src.homeassistant.helpers.tool_ranker import ToolRanker
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 import json
-from types import SimpleNamespace
 from typing import Any
 
 import probatio
 
 from homeassistant.const import CONF_LLM_HASS_API
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import llm
+from homeassistant.helpers import llm, entity_registry
 from custom_components.ha_ragent.src.homeassistant.tools.base_tool import RAGentTool
 
 from custom_components.ha_ragent.src.const import (
@@ -23,15 +22,13 @@ from custom_components.ha_ragent.src.const import (
     RAGENT_MAX_SEARCH_QUERY_CHARS,
     RAGENT_MAX_SEARCH_QUERIES,
     RAGENT_SEMANTIC_SEARCH_TOOL_NAME,
-    RETRIEVAL_METHOD_LEXICAL,
-    TRANSLATION_ERROR_SEARCH_QUERY_EMPTY,
-    TRANSLATION_ERROR_SEARCH_QUERIES_TOO_MANY,
 )
 from custom_components.ha_ragent.src.models.embedding.device import Device
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.homeassistant.helpers.source_retriever import SourceRetriever
 from custom_components.ha_ragent.src.homeassistant.helpers.conversation_retriever import ConversationRetriever
 from custom_components.ha_ragent.src.models.retrieval.query_embedding import QueryEmbedding
+from custom_components.ha_ragent.src.models.retrieval.search_contract import SearchFilters, normalized, opaque_id
 from custom_components.ha_ragent.src.translation import RAGentTranslations
 from custom_components.ha_ragent.src.utils import get_setting_value
 
@@ -42,41 +39,24 @@ class RAGentSemanticSearchTool(RAGentTool):
     name = RAGENT_SEMANTIC_SEARCH_TOOL_NAME
     parameters = probatio.Schema(
         {
-            probatio.Required(
-                "search_queries",
-                description="One self-contained query per target group; align capabilities by position.",
-            ): probatio.All(
-                [str], probatio.Length(min=1, max=RAGENT_MAX_SEARCH_QUERIES)
-            ),
-            probatio.Optional(
-                "capabilities",
-                description=(
-                    "One capability per query, e.g. {action: turn_on, domain: light}."
-                ),
+            probatio.Optional("operation", description="Default: search. detail selects one result."): probatio.In(["search", "detail"]),
+            probatio.Optional("result_id", description="One current result ID for detail."): str,
+            probatio.Optional("filters", description=(
+                "AND constraints: area, floor, domain, integration, entity_type (domain), "
+                "device_type (device class), state (value or {operator: eq/ne/gt/gte/lt/lte, value})."
+            )): dict,
+            probatio.Optional("search_queries", description="One self-contained query per target group; align capabilities by position."
+            ): probatio.All([str], probatio.Length(min=1, max=RAGENT_MAX_SEARCH_QUERIES)),
+            probatio.Optional("capabilities", description=("One capability per query, e.g. {action: turn_on, domain: light}.")
             ): probatio.All(
                 [{
-                    probatio.Optional(
-                        "action",
-                        description=(
-                            "Stable canonical action ID, e.g. turn_on, turn_off, fan_set_speed."
-                        ),
-                    ): str,
-                    probatio.Optional(
-                        "domain",
-                        description="Home Assistant domain or domains.",
-                    ): probatio.Any(str, [str]),
+                    probatio.Optional("action", description=("Stable canonical action ID, e.g. turn_on, turn_off, fan_set_speed.")): str,
+                    probatio.Optional("domain", description="Home Assistant domain or domains."): probatio.Any(str, [str]),
                 }],
                 probatio.Length(min=1, max=RAGENT_MAX_SEARCH_QUERIES),
             ),
-            probatio.Optional(
-                "scope",
-                default="devices_and_tools",
-                description=(
-                    "devices: devices only; tools: tools only; devices_and_tools: both. "
-                    "Explicit tools/devices_and_tools can add callable tools. "
-                    "Omitted scope searches both without adding tools."
-                ),
-            ): probatio.In(["devices", "tools", "devices_and_tools"]),
+            probatio.Required("scope", description=("Choose devices or tools for search and detail."),
+            ): probatio.In(["devices", "tools"]),
         }
     )
 
@@ -90,6 +70,14 @@ class RAGentSemanticSearchTool(RAGentTool):
         self._contextual_query = ""
         self._candidate_context: list[dict[str, object]] = []
         self._requested_capabilities: list[dict[str, object]] = []
+        self.reset_turn()
+
+    def reset_turn(self) -> None:
+        """Invalidate cached searches and detail access at a turn/scope boundary."""
+        self._searches: dict[str, dict] = {}
+        self._results: dict[str, dict] = {}
+        self._details: dict[str, str] = {}
+        self._requested_capabilities = []
 
     @staticmethod
     def _clean(value: object) -> str:
@@ -150,6 +138,7 @@ class RAGentSemanticSearchTool(RAGentTool):
         candidates: list[dict[str, object]] | None = None,
     ) -> None:
         """Bind trusted context for the current conversation turn."""
+        self.reset_turn()
         self._latest_request = self._clean(latest_request)
         self._contextual_query = self._build_search_query(
             latest_request=latest_request,
@@ -219,18 +208,6 @@ class RAGentSemanticSearchTool(RAGentTool):
                 seen.add(normalized)
         return queries
 
-    def _model_capabilities(self, tool_input: llm.ToolInput) -> list[dict[str, object]]:
-        """Return structured requested operations without parsing natural language."""
-        raw = tool_input.tool_args.get("capabilities", [])
-        if isinstance(raw, dict):
-            raw = [raw]
-        return [
-            ToolRanker.normalize_requested_capability(capability)
-            if isinstance(capability, dict) else {}
-            for capability in raw
-        ]
-
-
     async def _validate_queries(self, tool_input: llm.ToolInput) -> list[str]:
         """Use model search intents; fall back to turn context when absent."""
         queries = self._model_search_queries(tool_input)
@@ -278,9 +255,6 @@ class RAGentSemanticSearchTool(RAGentTool):
 
     async def _embed_query_for_subentry(self, entry: Any, subentry: Any, query: str) -> list[float]:
         """Embed a search query for a specific subentry."""
-        options = {**(getattr(entry, "options", {}) or {}), **subentry.data}
-        if SourceRetriever.retrieval_method(options) == RETRIEVAL_METHOD_LEXICAL:
-            return []
         try:
             return await entry.embedder_backend.async_embed_text(dict(subentry.data), query) or []
         except Exception as err:
@@ -324,31 +298,6 @@ class RAGentSemanticSearchTool(RAGentTool):
             requested_capability,
         )[:RAGENT_MAX_SEARCH_QUERY_CHARS]
 
-    @staticmethod
-    def _tool_search_feedback(
-        search_tools: bool,
-        confidence: str,
-        tools: list[dict[str, object]],
-    ) -> tuple[str, bool, str]:
-        """Return an explicit status without discarding uncertain candidates."""
-        if not search_tools:
-            return "not_requested", False, ""
-        if not tools:
-            return (
-                "no_tools_found",
-                True,
-                "No tools were retrieved. Do not invent a tool name; "
-                "broaden retrieval or report that no action tool is available.",
-            )
-        if confidence in {"none", "low"}:
-            return (
-                "weak_candidates",
-                True,
-                "Candidate confidence is weak. Reuse these candidates, "
-                "broaden retrieval if needed, and do not invent a tool.",
-            )
-        return "candidates_found", False, ""
-
     def _device_candidate(self, device: Device) -> dict[str, object]:
         """Return enough current device data to answer without another search."""
         state = self.hass.states.get(device.id)
@@ -362,6 +311,8 @@ class RAGentSemanticSearchTool(RAGentTool):
             "domain": device.domain,
             "device_class": device.device_class,
             "aliases": device.aliases or [],
+            "device_labels": device.device_labels or [],
+            "services": device.services or [],
             "state": state.state if state else None,
             "attributes": Device.clean_attributes(device.domain, state.attributes) if state else {},
             "unit_of_measurement": (
@@ -371,273 +322,229 @@ class RAGentSemanticSearchTool(RAGentTool):
             ),
         }
 
+    def _result_id(self, kind: str, identity: str) -> str:
+        return opaque_id(self.entry_id, self.subentry_id, kind, identity)
+
+    def result_context(self, result: dict) -> tuple[list[dict], list[str]]:
+        """Return trusted execution data only after an explicit detail lookup."""
+        if result.get("status") != "ok" or "detail" not in result:
+            return [], []
+        record = self._results.get(result["detail"].get("id"))
+        if not record:
+            return [], []
+        return ([record["data"]], []) if record["type"] == "device" else ([], [record["data"]["name"]])
+
+    def history_candidate_entities(self, result: dict) -> dict[str, str]:
+        """Resolve compact references to canonical device IDs for internal history."""
+        if result.get("status") not in ("ok", "same_as"):
+            return {}
+        candidates = result.get("results", [])
+        if not isinstance(candidates, list):
+            return {}
+        result_ids = [candidate.get("id") for candidate in candidates if isinstance(candidate, dict)]
+        references = result.get("result_ids", [])
+        if isinstance(references, list):
+            result_ids.extend(references)
+        return {result_id: record["data"]["name"] for result_id in result_ids
+                if isinstance(result_id, str) and (record := self._results.get(result_id))
+                and record["type"] == "device"
+                and result_id == self._result_id("device", record["data"]["name"])}
+
+    def _device_filter(self, filters: SearchFilters, device: Device) -> bool:
+        data = self._device_candidate(device)
+        data["entity_type"] = device.id.partition(".")[0]
+        data["device_type"] = data["device_class"]
+        if "integration" in filters.values:
+            entry = entity_registry.async_get(self.hass).async_get(device.id)
+            data["integration"] = entry.platform if entry else None
+        return filters.matches(data)
+
+    @staticmethod
+    def _tool_filter(filters: SearchFilters, tool: LlmTool, devices: list[Device]) -> bool:
+        values = dict(filters.values)
+        domains = tool.canonical_supported_domains
+        # Location, live state and entity integration constrain targets, then
+        # tool applicability; a tool itself has no room or live entity state.
+        target_fields = {"area", "floor", "state", "integration", "device_type"}
+        if target_fields & values.keys():
+            if not devices:
+                return False
+            if domains and not any(set(d.domain or ()) & set(domains) for d in devices):
+                return False
+            for field in target_fields:
+                values.pop(field, None)
+        return SearchFilters(values).matches({"domain": domains, "entity_type": domains})
+
+    def _compact_result(self, kind: str, data: dict, query: str, filters: SearchFilters) -> dict:
+        identity = data["name"]
+        result_id = self._result_id(kind, identity)
+        self._results[result_id] = {"type": kind, "data": data}
+        if kind == "device":
+            name = data.get("friendly_name") or identity
+            domains = data.get("domain") or [identity.partition(".")[0]]
+            summary = data.get("device_class") or "/".join(domains)
+            if data.get("state") is not None:
+                summary += "; " + str(data["state"])
+                if data.get("unit_of_measurement"):
+                    summary += " " + str(data["unit_of_measurement"])
+            location = "/".join(str(data[key]) for key in ("floor", "area") if data.get(key))
+        else:
+            name = identity
+            summary = data.get("action") or data.get("description") or identity
+            if data.get("domains"):
+                summary += "; " + "/".join(data["domains"])
+            location = ""
+        # Codes describe deterministic evidence; no free-form ranking payload.
+        if normalized(query) in {normalized(identity), normalized(str(name))}:
+            rationale = "name_match"
+        elif "state" in filters.values:
+            rationale = "state_match"
+        elif "area" in filters.values or "floor" in filters.values:
+            rationale = "area_match"
+        elif kind == "tool" and data.get("action"):
+            rationale = "capability_match"
+        else:
+            rationale = None
+        compact = {"id": result_id, "type": kind, "name": str(name)[:160], "summary": str(summary)[:160]}
+        if location:
+            compact["location"] = location[:160]
+        if rationale:
+            compact["rationale"] = rationale
+        return compact
+
+    def _detail(self, arguments: dict) -> dict:
+        result_id = arguments.get("result_id")
+        if set(arguments) - {"operation", "result_id", "scope"} or not isinstance(result_id, str) or not result_id:
+            return {"status": "detail_error", "error": "detail requires exactly one result_id"}
+        record = self._results.get(result_id)
+        if (record is None or arguments["scope"] != record["type"] + "s"
+                or result_id != self._result_id(record["type"], record["data"]["name"])):
+            return {"status": "detail_error", "error": "Unknown, stale or out-of-scope result_id"}
+        data = dict(record["data"])
+        if record["type"] == "device":
+            state = self.hass.states.get(data["name"])
+            if state is None:
+                return {"status": "detail_error", "error": "Device is no longer available"}
+            data["state"] = state.state
+            data["attributes"] = Device.clean_attributes(data.get("domain"), state.attributes)
+            data["unit_of_measurement"] = state.attributes.get("unit_of_measurement", data.get("unit_of_measurement"))
+            data = {key: value for key, value in data.items() if value is not None and value != "" and value != [] and value != {}}
+        signature = opaque_id(data)
+        if self._details.get(result_id) == signature:
+            return {"status": "same_as", "result_ids": [result_id]}
+        self._details[result_id] = signature
+        record["data"] = data
+        return {"status": "ok", "detail": {"id": result_id, "type": record["type"], **data}}
+
     async def _async_call(self, tool_input, *args, **kwargs) -> dict[str, object]:
-        model_search_queries = self._model_search_queries(tool_input)
-        requested_capabilities = self._model_capabilities(tool_input)
-        self._requested_capabilities = requested_capabilities
-        raw_queries = tool_input.tool_args.get("search_queries", model_search_queries)
-        if len(raw_queries) > RAGENT_MAX_SEARCH_QUERIES:
-            return {
-                "error": self.translations.error(
-                    TRANSLATION_ERROR_SEARCH_QUERIES_TOO_MANY,
-                    max_queries=RAGENT_MAX_SEARCH_QUERIES,
-                )
+        arguments = tool_input.tool_args
+        operation = arguments.get("operation", "search")
+        scope = arguments.get("scope")
+        if scope not in ("devices", "tools"):
+            return {"status": "detail_error" if operation == "detail" else "validation_error",
+                    "error": "scope is required and must be devices or tools"}
+        if operation == "detail":
+            return self._detail(arguments)
+        try:
+            if operation != "search" or set(arguments) - {
+                "operation", "search_queries", "search_query", "scope", "filters", "capabilities"
+            }:
+                raise ValueError("Invalid search operation or arguments")
+            filters = SearchFilters.parse(arguments.get("filters", {}))
+            raw_queries = arguments.get("search_queries", [arguments.get("search_query", "")])
+            if not isinstance(raw_queries, list) or not 1 <= len(raw_queries) <= RAGENT_MAX_SEARCH_QUERIES:
+                raise ValueError(f"Supply 1 to {RAGENT_MAX_SEARCH_QUERIES} search_queries")
+            if not all(isinstance(q, str) and len(q) <= RAGENT_MAX_SEARCH_QUERY_CHARS for q in raw_queries):
+                raise ValueError("Invalid search query")
+            raw_capabilities = arguments.get("capabilities", [])
+            if not isinstance(raw_capabilities, list) or (raw_capabilities and len(raw_capabilities) != len(raw_queries)):
+                raise ValueError("Supply one capability per query")
+            if any(not isinstance(c, dict) or set(c) - {"action", "domain"}
+                   or ("action" in c and not isinstance(c["action"], str))
+                   or ("domain" in c and not (isinstance(c["domain"], str)
+                       or isinstance(c["domain"], list) and all(isinstance(d, str) for d in c["domain"])))
+                   for c in raw_capabilities):
+                raise ValueError("Invalid capability")
+            # Keep capability/query pairs aligned, including duplicate text.
+            pairs = []
+            for index, query in enumerate(raw_queries):
+                query = self._clean(query)
+                capability = ToolRanker.normalize_requested_capability(raw_capabilities[index]) if raw_capabilities else {}
+                pair = (query or self._contextual_query, capability)
+                if not any(normalized(pair[0]) == normalized(q) and capability == c for q, c in pairs):
+                    pairs.append(pair)
+            if not pairs or any(not query for query, _ in pairs):
+                raise ValueError("Search query must not be empty")
+        except (ValueError, TypeError) as error:
+            return {"status": "validation_error", "error": str(error)}
+
+        searchable_entries = list(self._iter_searchable_entries())
+        options = {}
+        if searchable_entries:
+            entry, _, subentry, *_ = searchable_entries[0]
+            options = {
+                **getattr(entry, "options", {}), **subentry.data,
             }
-        queries = await self._validate_queries(tool_input)
-        if not queries:
-            return {"error": self.translations.error(TRANSLATION_ERROR_SEARCH_QUERY_EMPTY)}
-        query = queries[0]
-        _logger.log_payload(
-            "search.request", 
-            tool_arguments=tool_input.tool_args,
-            model_search_queries=model_search_queries, 
-            validated_queries=queries,
-            requested_capabilities=requested_capabilities,
-            latest_request=self._latest_request,
-            contextual_query=self._contextual_query,
-            candidate_context=self._candidate_context
-        )
+        mode = SourceRetriever.retrieval_method(options)
 
-        scope = (
-            str(tool_input.tool_args.get("scope", "devices_and_tools")).strip().lower()
-            or "devices_and_tools"
-        )
-        search_devices = scope in {"devices", "devices_and_tools"}
-        search_tools = scope in {"tools", "devices_and_tools"}
-        if (
-            "search_queries" in tool_input.tool_args
-            and search_tools
-            and requested_capabilities
-            and len(requested_capabilities) != len(model_search_queries)
-        ):
-            return {
-                "error": (
-                    "When provided, structured capabilities must contain one item "
-                    "per tool-search query."
-                ),
-                "requested_capabilities": requested_capabilities,
-            }
-
-        devices: list[dict[str, object]] = []
-        tools: list[dict[str, object]] = []
-        errors: list[str] = []
-        device_queries: list[str] = []
-        device_candidate_batches: list[list[dict[str, object]]] = [[] for _ in queries]
-        result_tool_limit = 0
-        tool_confidences: list[str] = []
-        device_limit = 0
-        tool_limit = 0
-        tool_query = ""
-        tool_queries: list[str] = []
-        tool_candidate_batches: list[list[dict[str, object]]] = [
-            [] for _ in queries
-        ]
-        tool_confidence = "not_requested"
-        embedding_cache: dict[tuple[object, str, str], QueryEmbedding] = {}
-
-        for searchable_entry in self._iter_searchable_entries():
-            entry, subentry_id, subentry, min_devices, max_devices, min_tools, max_tools = searchable_entry
+        self._requested_capabilities = [capability for _, capability in pairs]
+        key = opaque_id(self.entry_id, self.subentry_id, scope, mode, filters.values,
+                        [(normalized(query), capability) for query, capability in pairs])
+        if key in self._searches:
+            previous = self._searches[key]
+            return {"status": "same_as", "search_id": previous["search_id"],
+                    "result_ids": [result["id"] for result in previous["results"]]}
+        device_batches, tool_batches = [], []
+        device_limit = tool_limit = 0
+        embedding_cache = {}
+        failures: list[str] = []
+        for entry, subentry_id, subentry, min_devices, max_devices, min_tools, max_tools in searchable_entries:
             retriever = ConversationRetriever(self.hass, entry, self.entry_id, subentry_id, subentry)
-            device_limit = max_devices
-            tool_limit = max_tools
-            result_tool_limit = max(result_tool_limit, max_tools)
-            for query_index, model_query in enumerate(model_search_queries or [""]):
-                try:
-                    query_devices: list[Device | dict[str, object]] = list(
-                        self._candidate_context
-                    )
-                    requested_capability = (
-                        requested_capabilities[query_index]
-                        if query_index < len(requested_capabilities)
-                        else (requested_capabilities[0] if len(requested_capabilities) == 1 else {})
-                    )
-                    options = {**(getattr(entry, "options", {}) or {}), **subentry.data}
-                    device_query = self._device_search_query(model_query, queries[query_index])
-                    if search_devices:
-                        device_queries.append(device_query)
-                    device_embedding = self._shared_query_embedding(
-                        embedding_cache, entry, subentry, device_query,
-                    )
-                    if search_devices and device_limit > 0:
-                        query_devices = await retriever.async_retrieve_search_devices(
-                            device_embedding, device_query,
-                            minimum=min_devices, maximum=max_devices,
-                            retrieval_method=SourceRetriever.retrieval_method(options),
-                        )
-                        device_candidate_batches[query_index].extend(
-                            self._device_candidate(device)
-                            for device in query_devices
-                        )
-
-                    if search_tools and tool_limit > 0:
-                        tool_query = self._tool_search_query(
-                            model_query, query_devices, requested_capability,
-                            fallback_query=queries[query_index],
-                        )
-                        tool_queries.append(tool_query)
-                        tool_embedding = self._shared_query_embedding(
-                            embedding_cache, entry, subentry, tool_query,
-                        )
-                        retrieved_tools, scored_tools, tool_ranking_evidence = (
-                            await retriever.async_retrieve_search_tools(
-                                tool_embedding, tool_query,
-                                devices=query_devices, maximum=tool_limit,
-                                requested_capability=requested_capability,
-                                retrieval_method=SourceRetriever.retrieval_method(options),
-                            )
-                        )
-                        semantic_ranks = {
-                            result.item.name: result.rank
-                            for result in scored_tools
-                        }
-                        semantic_scores = {
-                            result.item.name: result.score
-                            for result in scored_tools
-                        }
-                        confidence = ToolRanker.tool_search_confidence_details(
-                            retrieved_tools[:max_tools],
-                            tool_query,
-                            query_devices,
-                            requested_capability,
-                            scored_tools,
-                            tool_ranking_evidence,
-                            retrieval_method=SourceRetriever.retrieval_method(options),
-                        )
-                        query_confidence = confidence.level
-                        tool_confidences.append(query_confidence)
-                        query_tool_limit = min(max_tools, len(retrieved_tools))
-                        _logger.log_payload(
-                            "search.tool_exposure",
-                            query_index=query_index,
-                            query=tool_query,
-                            requested_capability=requested_capability,
-                            confidence=query_confidence,
-                            confidence_reason=confidence.reason,
-                            top_score=confidence.top_score,
-                            second_score=confidence.second_score,
-                            margin=confidence.margin,
-                            ratio=confidence.ratio,
-                            selected_candidate_count=min(query_tool_limit, len(retrieved_tools))
-                        )
-                        seen_query_tool_names: set[str] = set()
-                        for tool in retrieved_tools:
-                            if not isinstance(tool, LlmTool) or tool.name in seen_query_tool_names:
-                                continue
-                            seen_query_tool_names.add(tool.name)
-                            metadata = tool.metadata.to_dict() if tool.metadata else None
-                            if metadata is not None:
-                                metadata["supported_domains"] = list(
-                                    tool.canonical_supported_domains
-                                )
-                            ranking_signals = ToolRanker.tool_ranking_signals(
-                                tool,
-                                tool_query,
-                                query_devices,
-                                semantic_rank=semantic_ranks.get(tool.name),
-                                semantic_score=semantic_scores.get(tool.name),
-                                requested_capability=requested_capability,
-                                retrieval_method=SourceRetriever.retrieval_method(options),
-                            )
-                            tool_candidate_batches[query_index].append(
-                                {
-                                    "name": tool.name,
-                                    "description": tool.description,
-                                    "parameters": tool.parameters or {},
-                                    "metadata": metadata,
-                                    "action": tool.canonical_action,
-                                    "domains": tool.canonical_supported_domains,
-                                    "expected_states": (
-                                        tool.metadata.expected_states if tool.metadata else ()
-                                    ),
-                                    "canonical_action": tool.canonical_action,
-                                    "supported_domains": tool.canonical_supported_domains,
-                                    "ranking_signals": {
-                                        name: round(value, 4)
-                                        for name, value in ranking_signals.items()
-                                    },
-                                    "retrieval_score": round(
-                                        ToolRanker.tool_signal_score(ranking_signals),
-                                        4,
-                                    ),
-                                }
-                            )
-                            if len(tool_candidate_batches[query_index]) >= query_tool_limit:
-                                break
-                except Exception as err:
-                    errors.append(f"Failed to search subentry {subentry.title}: {err}")
-                    if search_tools:
-                        tool_confidences.append("none")
-                        # Retry failed combined searches in tools-only mode.
-                        if search_devices:
-                            fallback_args = dict(tool_input.tool_args)
-                            fallback_args["scope"] = "tools"
-                            fallback = await self._async_call(
-                                SimpleNamespace(tool_args=fallback_args)
-                            )
-                            fallback_errors = list(fallback.get("error", []))
-                            fallback_errors.insert(0, errors[-1])
-                            fallback["error"] = fallback_errors
-                            return fallback
-
-        if search_tools:
-            tools = self._merge_query_candidates(tool_candidate_batches, result_tool_limit)
-            # A strong result for one task does not establish coverage of another.
-            confidence_rank = {"none": 0, "low": 1, "medium": 2, "high": 3}
-            tool_confidence = min(tool_confidences, key=confidence_rank.get) if tool_confidences else "none"
-        capability_coverage = []
-        if search_tools:
-            exposed_names = {str(tool.get("name", "")) for tool in tools}
-            for index, capability in enumerate(requested_capabilities):
-                batch = tool_candidate_batches[index] if index < len(tool_candidate_batches) else []
-                covered_by = [
-                    str(candidate.get("name", "")) for candidate in batch
-                    if str(candidate.get("name", "")) in exposed_names
-                ]
-                capability_coverage.append({
-                    "capability_index": index,
-                    "covered": bool(covered_by),
-                    "candidate_tools": covered_by,
-                })
-        devices = self._merge_query_candidates(device_candidate_batches, device_limit)
-        if devices:
-            self.refresh_candidates(devices)
-
-        returned_devices = devices
-        if not returned_devices and search_devices:
-            returned_devices = list(self._candidate_context[:device_limit])
-        tool_status, fallback_required, tool_message = self._tool_search_feedback(
-            search_tools,
-            tool_confidence,
-            tools,
-        )
-        result = {
-            "result_type": "candidate_search",
-            "candidate_notice": "Candidates only; no action has been performed.",
-            "candidate_data_notice": (
-                "Use the included state and location data directly when it answers the request."
-            ),
-            "search_query": query,
-            "search_queries": queries,
-            "requested_capabilities": requested_capabilities,
-            "capability_coverage": capability_coverage,
-            "device_search_query": device_queries[0] if device_queries else "",
-            "device_search_queries": device_queries,
-            "tool_search_query": tool_queries[0] if search_tools and tool_queries else "",
-            "tool_search_queries": tool_queries if search_tools else [],
-            "scope": scope,
-            "candidate_devices": returned_devices,
-            "candidate_tools": tools if search_tools else [],
-            "tool_search_status": tool_status,
-            "tool_search_confidence": tool_confidence,
-            "fallback_required": fallback_required,
-            "tool_search_message": tool_message,
-            "error": errors,
-        }
-        _logger.log_payload(
-            "search.result", 
-            result=result,
-            device_candidate_batches=device_candidate_batches,
-            tool_candidate_batches=tool_candidate_batches,
-            tool_confidences=tool_confidences,
-        )
-        return result
+            device_limit, tool_limit = max_devices, max_tools
+            for query, capability in pairs:
+                embedding = self._shared_query_embedding(embedding_cache, entry, subentry, query)
+                devices = list(self._candidate_context)
+                # Tools-only searches with target constraints use the entire
+                # filtered target catalog, without wasting model result slots.
+                target_filters = bool({"area", "floor", "state", "integration", "device_type"} & filters.values.keys())
+                if scope == "tools" and target_filters:
+                    from custom_components.ha_ragent.src.models.embedding.device_embedding import DeviceEmbedding
+                    catalog = await SourceRetriever.async_retrieve_catalog(
+                        entry.vector_db_backend, DeviceEmbedding,
+                        {**getattr(entry, "options", {}), **subentry.data}, f"devices_{subentry_id}", failures)
+                    if failures:
+                        return {"status": "retrieval_error", "error": failures[0]}
+                    devices = [d for d in catalog if self._device_filter(filters, d)]
+                if scope == "devices" and max_devices > 0:
+                    devices = await retriever.async_retrieve_search_devices(
+                        embedding, query, minimum=min_devices, maximum=max_devices, retrieval_method=mode,
+                        predicate=(lambda d: self._device_filter(filters, d)) if filters.values else None,
+                        failures=failures)
+                    if failures:
+                        return {"status": "retrieval_error", "error": failures[0]}
+                    device_batches.append([self._device_candidate(d) for d in devices])
+                if scope == "tools" and max_tools > 0:
+                    tool_query = self._tool_search_query(query, devices, capability)
+                    tool_embedding = self._shared_query_embedding(embedding_cache, entry, subentry, tool_query)
+                    tools, scored, evidence = await retriever.async_retrieve_search_tools(
+                        tool_embedding, tool_query, devices=devices, maximum=max_tools,
+                        requested_capability=capability, retrieval_method=mode,
+                        predicate=(lambda t: self._tool_filter(filters, t, [d for d in devices if isinstance(d, Device)]))
+                        if filters.values else None, failures=failures)
+                    if failures:
+                        return {"status": "retrieval_error", "error": failures[0]}
+                    _logger.log_payload("search.ranking", query=tool_query, vector=scored, evidence=evidence)
+                    tool_batches.append([{
+                        "name": t.name, "description": t.description, "parameters": t.parameters or {},
+                        "metadata": t.metadata.to_dict() if t.metadata else {},
+                        "action": t.canonical_action, "domains": list(t.canonical_supported_domains),
+                    } for t in tools[:max_tools]])
+        devices = self._merge_query_candidates(device_batches, device_limit)
+        tools = self._merge_query_candidates(tool_batches, tool_limit)
+        results = [self._compact_result(kind, data, pairs[0][0], filters)
+                   for kind, batch in (("device", devices), ("tool", tools)) for data in batch]
+        response = {"status": "ok" if results else "no_matches", "search_id": key, "mode": mode, "results": results}
+        if not results and filters.values:
+            response["filters"] = filters.values
+        self._searches[key] = response
+        return response

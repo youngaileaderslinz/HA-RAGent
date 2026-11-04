@@ -115,14 +115,14 @@ class ConversationRetriever:
 
     async def async_retrieve_search_devices(
         self, embedding: QueryEmbedding, query: str, *, minimum: int, maximum: int,
-        retrieval_method: str,
+        retrieval_method: str, predicate=None, failures: list[str] | None = None,
     ) -> list[Device]:
         """Retrieve device candidates for the semantic-search tool."""
         candidate_limit = SourceRanker.adaptive_candidate_limit(maximum)
         options = self._options(retrieval_method)
         scored_devices, all_devices = await SourceRetriever.async_retrieve_sources(
             self.entry.vector_db_backend, DeviceEmbedding, options,
-            f"devices_{self.subentry_id}", embedding, candidate_limit, query=query,
+            f"devices_{self.subentry_id}", embedding, candidate_limit, query=query, predicate=predicate, failures=failures,
         )
 
         def identity_score(device: Device) -> float:
@@ -149,13 +149,14 @@ class ConversationRetriever:
         self, embedding: QueryEmbedding, query: str, *,
         devices: list[Device | dict[str, object]], maximum: int,
         requested_capability: object = None, retrieval_method: str,
+        predicate=None, failures: list[str] | None = None,
     ) -> tuple[list[LlmTool], list[ScoredResult[LlmTool]], dict[str, dict[str, float]]]:
         """Retrieve tool candidates and diagnostics for the semantic-search tool."""
         candidate_limit = SourceRanker.adaptive_candidate_limit(maximum)
         options = self._options(retrieval_method)
         scored_tools, all_tools = await SourceRetriever.async_retrieve_sources(
             self.entry.vector_db_backend, LlmToolEmbedding, options,
-            f"tools_{self.subentry_id}", embedding, candidate_limit, query=query,
+            f"tools_{self.subentry_id}", embedding, candidate_limit, query=query, predicate=predicate, failures=failures,
         )
         ranking_evidence: dict[str, dict[str, float]] = {}
         tools = await asyncio.to_thread(

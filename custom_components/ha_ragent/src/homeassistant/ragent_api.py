@@ -147,6 +147,7 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
             if isinstance(tool, RAGentSemanticSearchTool):
                 tool.entry_id = entry_id
                 tool.subentry_id = subentry_id
+                tool.reset_turn()
             elif isinstance(tool, (RAGentRememberTool, RAGentForgetTool)):
                 tool.entry_id = entry_id
                 tool.subentry_id = subentry_id
@@ -198,6 +199,20 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
                 if tool.requested_capabilities:
                     return tool.requested_capabilities
         return []
+
+    def search_result_context(self, result: dict) -> tuple[list[dict], list[str]]:
+        """Keep canonical identities private until a result is selected."""
+        for tool in self.tools:
+            if isinstance(tool, RAGentSemanticSearchTool):
+                return tool.result_context(result)
+        return [], []
+
+    def search_history_candidates(self, result: dict) -> dict[str, str]:
+        """Resolve search candidate identities for history, without exposing details."""
+        for tool in self.tools:
+            if isinstance(tool, RAGentSemanticSearchTool):
+                return tool.history_candidate_entities(result)
+        return {}
 
     async def async_call_tool(self, tool_input: llm.ToolInput) -> Any:
         """Intercept calls to RAGent tools and delegate to the appropriate tool instance."""

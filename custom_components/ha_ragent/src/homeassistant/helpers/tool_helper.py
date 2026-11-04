@@ -15,6 +15,7 @@ from custom_components.ha_ragent.src.const import (
     RAGENT_SCHEDULE_ACTION_TOOL_NAME,
     RAGENT_TOOL_NAME_ALIASES,
 )
+from custom_components.ha_ragent.src.models.retrieval.search_contract import normalized
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
 
@@ -237,10 +238,15 @@ class ToolHelper:
         """Return a stable signature for a tool name and its arguments."""
         arguments = tool_call.tool_args
         if ToolHelper.is_semantic_search_tool(tool_call.tool_name):
-            arguments = {
-                "search_query": ToolHelper._normalize_search_query(arguments.get("search_query", "")),
-                "scope": str(arguments.get("scope", "devices_and_tools")).strip().casefold(),
-            }
+            arguments = dict(arguments)
+            for key in ("search_query", "search_queries"):
+                value = arguments.get(key)
+                if isinstance(value, str):
+                    arguments[key] = normalized(value)
+                elif isinstance(value, list):
+                    arguments[key] = [normalized(q) if isinstance(q, str) else q for q in value]
+            if isinstance(arguments.get("scope"), str):
+                arguments["scope"] = normalized(arguments["scope"])
         return json.dumps(
             {
                 "tool": tool_call.tool_name,
