@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import aclosing
+from inspect import signature
 import json
 import logging
 from typing import Any, List, Tuple
@@ -87,6 +88,9 @@ from custom_components.ha_ragent.src.const import (
 from custom_components.ha_ragent.src.utils import get_setting_value
 
 _logger = BaseLogger(__name__)
+
+# Older supported Home Assistant releases do not accept a session context yet.
+_CHAT_SESSION_SUPPORTS_CONTEXT = "context" in signature(chat_session.async_get_chat_session).parameters
 
 class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
     """RAG-based conversation agent for Home Assistant."""
@@ -517,8 +521,11 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             llm_context = user_input.as_llm_context(DOMAIN)
             timing_logger.log_timed_string(level=logging.DEBUG, message="Context prepared")
 
+            session_kwargs = {"context": user_input.context} if _CHAT_SESSION_SUPPORTS_CONTEXT else {}
             with (
-                chat_session.async_get_chat_session(self.hass, user_input.conversation_id) as session,
+                chat_session.async_get_chat_session(
+                    self.hass, user_input.conversation_id, **session_kwargs
+                ) as session,
                 conversation.async_get_chat_log(self.hass, session, user_input) as chat_log,
             ):
                 llm_api: llm.APIInstance | None = None
