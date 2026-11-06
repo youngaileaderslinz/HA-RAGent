@@ -25,7 +25,194 @@ from custom_components.ha_ragent.src.homeassistant import ragent as ragent_modul
 from custom_components.ha_ragent.src.homeassistant.helpers.history_manager import HistoryManager
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.retrieval.continuity_context import ContinuityContext
+from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
 from custom_components.ha_ragent.src.translation import RAGentTranslations
+
+
+@pytest.mark.parametrize("scenario,requests_expected,searches_expected,final_only", [
+    ("repeat", 4, 1, True),
+    ("invalid", 4, 1, True),
+    ("detail", 5, 2, True),
+    ("detail_small_budget", 4, 2, True),
+    ("equivalent", 4, 2, True),
+    ("changed_query", 4, 2, False),
+    ("changed_query_same_results", 4, 2, True),
+    ("changing_queries", 4, 3, True),
+    ("changing_failed_queries", 4, 3, True),
+    ("changed_filter", 4, 2, False),
+    ("after_action", 4, 2, False),
+    ("final_tool_attempt", 4, 1, True),
+    ("small_budget", 2, 1, False),
+])
+def test_search_loops_stop_without_blocking_new_information(
+    compact_search, scenario, requests_expected, searches_expected, final_only,
+):
+    from custom_components.ha_ragent.src.homeassistant.ragent_api import RAGentAugmentedAPIInstance
+
+    search, _ = compact_search
+    search.async_call = AsyncMock(wraps=search.async_call)
+    if scenario == "changing_failed_queries":
+        search._async_call = AsyncMock(return_value={"status": "retrieval_error", "error": "Source unavailable"})
+    if scenario == "changing_queries":
+        database = search.hass.data[ragent_module.DOMAIN][search.entry_id].vector_db_backend
+        original = database.async_retrieve_scored_objects.side_effect
+
+        async def reordered_results(*args):
+            results = await original(*args)
+            if search.async_call.await_count % 2 == 0:
+                results.reverse()
+            return [ScoredResult(item.item, item.score, index + 1) for index, item in enumerate(results)]
+
+        database.async_retrieve_scored_objects.side_effect = reordered_results
+    action_name = "VendorAction"
+
+    async def action(_call):
+        search.hass.states.get("light.office_0").state = "on"
+        return {"success": True}
+
+    api = RAGentAugmentedAPIInstance.__new__(RAGentAugmentedAPIInstance)
+    api.hass = search.hass
+    api.tools = [search]
+    api.llm_context = None
+    api._wrapped_api = SimpleNamespace(async_call_tool=AsyncMock(side_effect=action))
+    requests = []
+    completed_results = []
+
+    async def send(_config, messages, tools):
+        requests.append(([tool.name for tool in tools], messages[:]))
+        iteration = len(requests)
+        results = [message["content"] for message in messages if message["role"] == "tool"]
+        if not tools:
+            if scenario == "final_tool_attempt":
+                yield '```homeassistant\n{"tool":"VendorAction","arguments":{}}\n```'
+            yield "The office lights are off."
+            return
+        if scenario in {"changed_query", "changed_query_same_results", "changed_filter", "after_action"} and iteration == 4:
+            completed_results.extend(results)
+            yield "Done."
+            return
+        arguments = {"search_queries": ["office lights"]}
+        tool_name = search.name
+        if scenario == "invalid":
+            arguments["unknown_argument"] = True
+        elif scenario in {"detail", "detail_small_budget"} and iteration > 1:
+            arguments = {"operation": "detail", "scope": "devices", "result_id": next(iter(search._results))}
+        elif scenario == "equivalent" and iteration > 1:
+            arguments = {"operation": "search", "scope": "devices", "search_queries": ["  OFFICE lights  "]}
+        elif scenario in {"changed_query", "changed_query_same_results"} and iteration == 3:
+            arguments = {"search_queries": ["kitchen lights"]}
+            if scenario == "changed_query":
+                database = search.hass.data[ragent_module.DOMAIN][search.entry_id].vector_db_backend
+                original = database.async_retrieve_scored_objects.side_effect
+
+                async def different_results(*args):
+                    return (await original(*args))[:1]
+
+                database.async_retrieve_scored_objects.side_effect = different_results
+        elif scenario in {"changing_queries", "changing_failed_queries"}:
+            arguments = {"search_queries": [f"office lights query {iteration}"]}
+        elif scenario == "changed_filter":
+            arguments["filters"] = {"state": "on" if iteration == 3 else "off"}
+        elif scenario == "after_action" and iteration == 2:
+            tool_name, arguments = action_name, {}
+        yield "```homeassistant\n" + json.dumps({"tool": tool_name, "arguments": arguments}) + "\n```"
+
+    history = HistoryManager({})
+    history.append_message(ragent_module.conversation.UserContent(content="Check the office lights"))
+    chat_log = SimpleNamespace(content=[])
+    agent = SimpleNamespace(
+        hass=search.hass,
+        entry=SimpleNamespace(llm_backend=SimpleNamespace(async_send_chat_request=send),
+                              translations=RAGentTranslations.default("en")),
+        subentry=SimpleNamespace(data={}),
+        runtime_options={CONF_MAX_TOOL_CALL_ITERATIONS: {"small_budget": 2, "detail_small_budget": 4}.get(scenario, 10)},
+        _exclude_prohibited_scheduled_request_tools=ragent_module.RAGent._exclude_prohibited_scheduled_request_tools,
+    )
+    result = asyncio.run(ragent_module.RAGent._async_prompt_model(
+        agent, api, SimpleNamespace(agent_id="agent", language="en", conversation_id="turn"),
+        [LlmTool(search.name, search.description, parameters={"type": "object"}),
+         LlmTool(action_name, "Act", parameters={"type": "object"})],
+        chat_log, history, [], "Check the office lights", ContinuityContext(),
+    ))
+
+    assert len(requests) == requests_expected
+    assert search.async_call.await_count == searches_expected
+    assert (requests[-1][0] == []) is final_only
+    assert not any(isinstance(message, ragent_module.conversation.SystemContent) for message in chat_log.content)
+    if scenario == "small_budget":
+        assert result.response.error_code is not None
+    else:
+        assert result.response.error_code is None
+    assert api._wrapped_api.async_call_tool.await_count == int(scenario == "after_action")
+    if scenario == "after_action":
+        assert completed_results[-1]["status"] == "ok"
+        device = next(item for item in completed_results[-1]["results"] if item["entity_id"] == "light.office_0")
+        assert "on" in device["summary"]
+    elif scenario == "changed_filter":
+        assert completed_results[-1]["status"] == "no_matches"
+
+
+@pytest.mark.parametrize("invalid_arguments", [
+    None,
+    {"area": "Other", "filters": {"area": "Office"}, "scope": "devices"},
+    {"action": "turn_on", "scope": "devices"},
+    {"scope": "tools", "filters": {"scope": "devices"}},
+])
+def test_device_search_recovers_argument_errors_without_detail(compact_search, invalid_arguments):
+    from custom_components.ha_ragent.src.homeassistant.ragent_api import RAGentAugmentedAPIInstance
+
+    search, _ = compact_search
+    api = RAGentAugmentedAPIInstance.__new__(RAGentAugmentedAPIInstance)
+    api.hass = search.hass
+    api.tools = [search]
+    api.llm_context = None
+    api._wrapped_api = SimpleNamespace()
+    api.async_call_tool = AsyncMock(wraps=api.async_call_tool)
+    requests = []
+    correcting = invalid_arguments is not None
+
+    async def send(_config, messages, _tools):
+        requests.append(messages[:])
+        iteration = len(requests)
+        if correcting and iteration == 1:
+            arguments = invalid_arguments
+        elif iteration == 1 + correcting:
+            if correcting:
+                error = [message["content"] for message in messages if message["role"] == "tool"][-1]
+                assert error["status"] == "validation_error"
+                assert "inside filters" in error["error"]
+                assert "candidate_devices" not in error
+            arguments = {
+                "search_queries": ["office lights"], "scope": "devices", "filters": {"area": "Office"},
+            }
+        else:
+            results = [message["content"] for message in messages if message["role"] == "tool"][-1]
+            assert all(item["entity_id"].startswith("light.office_") for item in results["results"])
+            assert all("off" in item["summary"] for item in results["results"])
+            yield "The office lights are off."
+            return
+        yield "```homeassistant\n" + json.dumps({"tool": search.name, "arguments": arguments}) + "\n```"
+
+    agent = SimpleNamespace(
+        hass=search.hass,
+        entry=SimpleNamespace(llm_backend=SimpleNamespace(async_send_chat_request=send),
+                              translations=RAGentTranslations.default("en")),
+        subentry=SimpleNamespace(data={}), runtime_options={CONF_MAX_TOOL_CALL_ITERATIONS: 2 + correcting},
+        _exclude_prohibited_scheduled_request_tools=ragent_module.RAGent._exclude_prohibited_scheduled_request_tools,
+    )
+    result = asyncio.run(ragent_module.RAGent._async_prompt_model(
+        agent, api, SimpleNamespace(agent_id="agent", language="en", conversation_id="turn"),
+        [LlmTool(search.name, search.description, parameters={"type": "object"})],
+        SimpleNamespace(content=[]), HistoryManager({}), [], "Are the office lights on?", ContinuityContext(),
+    ))
+
+    assert result.response.error_code is None
+    assert len(requests) == 2 + correcting
+    assert api.async_call_tool.await_count == 1 + correcting
+    assert search._details == {}
+    assert {candidate["name"] for candidate in search._candidate_context} == {
+        f"light.office_{index}" for index in range(4)
+    }
 
 
 @pytest.mark.parametrize("available,scheduled", [(True, False), (False, False), (True, True)])

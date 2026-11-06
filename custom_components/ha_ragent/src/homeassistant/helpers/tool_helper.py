@@ -255,6 +255,22 @@ class ToolHelper:
         )
 
     @staticmethod
+    def search_result_signature(result: dict[str, Any]) -> str:
+        """Compare search information independently of request and ranking metadata."""
+        content = {
+            key: value for key, value in result.items()
+            if key not in {"search_id", "ignored_filters", "mode"}
+        }
+        if isinstance(content.get("results"), list):
+            results = [
+                {key: value for key, value in item.items() if key != "rationale"}
+                if isinstance(item, dict) else item
+                for item in content["results"]
+            ]
+            content["results"] = sorted(results, key=lambda item: json.dumps(item, sort_keys=True, default=str))
+        return json.dumps(content, sort_keys=True, default=str)
+
+    @staticmethod
     def is_scheduled_action_tool(tool_name: str) -> bool:
         """Return whether a name identifies the scheduled-action tool."""
         base_name = str(tool_name or "").rsplit("__", 1)[-1]

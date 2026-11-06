@@ -1,15 +1,20 @@
 import asyncio
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from homeassistant.helpers import llm
 from probatio import to_openapi
 
 from custom_components.ha_ragent.src import const
 from custom_components.ha_ragent.src.homeassistant.tools.search_tools import (
     RAGentSemanticSearchTool,
 )
+from custom_components.ha_ragent.src.homeassistant.tools import search_tools as search_tools_module
+from custom_components.ha_ragent.src.homeassistant.helpers.message_helper import MessageHelper
 from custom_components.ha_ragent.src.models.embedding.device import Device
+from custom_components.ha_ragent.src.models.embedding.device_embedding import DeviceEmbedding
 from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
 from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
@@ -29,6 +34,57 @@ def _candidates(tool, result, kind):
     return [tool._results[r["id"]]["data"] for r in result["results"] if r["type"] == kind]
 
 
+def test_device_search_provides_ids_and_context_without_detail(compact_search):
+    search, _ = compact_search
+    call = SimpleNamespace(tool_args={"search_queries": ["office lights"], "scope": "devices"})
+
+    result = asyncio.run(search._async_call(call))
+    devices, tools = search.result_context(result)
+
+    assert result["status"] == "ok"
+    assert {item["entity_id"] for item in result["results"]} == {
+        f"light.office_{index}" for index in range(4)
+    }
+    assert all("off" in item["summary"] for item in result["results"])
+    assert all("attributes" not in item for item in result["results"])
+    assert {device["name"] for device in devices} == {item["entity_id"] for item in result["results"]}
+    assert tools == []
+    assert search._details == {}
+
+    repeated = asyncio.run(search._async_call(call))
+    assert repeated["status"] == "same_as"
+    assert search.result_context(repeated) == (devices, [])
+    search.reset_turn()
+    assert search.result_context(result) == ([], [])
+
+
+def test_detail_remains_available_for_missing_facts_and_unexposed_tools(compact_search):
+    search, actions = compact_search
+    devices = asyncio.run(search._async_call(SimpleNamespace(tool_args={
+        "search_queries": ["office lights"], "scope": "devices",
+    })))
+    device = devices["results"][0]
+    search.hass.states.get(device["entity_id"]).attributes["brightness"] = 128
+    detail_call = SimpleNamespace(tool_args={
+        "operation": "detail", "result_id": device["id"], "scope": "devices",
+    })
+
+    detail = asyncio.run(search._async_call(detail_call))
+    assert detail["detail"]["attributes"]["brightness_percent"] == 50
+    assert asyncio.run(search._async_call(detail_call))["status"] == "same_as"
+
+    tools = asyncio.run(search._async_call(SimpleNamespace(tool_args={
+        "search_queries": ["office lights"], "scope": "tools",
+    })))
+    assert search.result_context(tools) == ([], [])
+    assert "parameters" not in tools["results"][0]
+    tool_detail = asyncio.run(search._async_call(SimpleNamespace(tool_args={
+        "operation": "detail", "result_id": tools["results"][0]["id"], "scope": "tools",
+    })))
+    assert search.result_context(tool_detail) == ([], [actions[0].name])
+    assert tool_detail["detail"]["parameters"] == actions[0].parameters
+
+
 def test_semantic_search_schema_explains_parallel_structured_capabilities() -> None:
     schema = to_openapi(RAGentSemanticSearchTool.parameters, openapi_version="3.1.0")
 
@@ -40,6 +96,210 @@ def test_semantic_search_schema_explains_parallel_structured_capabilities() -> N
     action_schema = schema["properties"]["capabilities"]["items"]["properties"]["action"]
     assert "canonical action ID" in action_schema["description"]
     assert "action" not in schema["properties"]["capabilities"]["items"].get("required", [])
+
+
+def test_search_schema_exposes_typed_nested_filters():
+    schema = to_openapi(RAGentSemanticSearchTool.parameters, openapi_version="3.1.0")
+    filters = schema["properties"]["filters"]
+
+    assert filters["properties"]["area"] == {"type": "string"}
+    assert filters["properties"]["domain"]["anyOf"] == [
+        {"type": "string"}, {"type": "array", "items": {"type": "string"}},
+    ]
+    assert filters["additionalProperties"] is False
+    assert "area" not in schema["properties"]
+    assert "domain" not in schema["properties"]
+    assert "scope" not in schema.get("required", [])
+    assert schema["properties"]["scope"]["default"] == "devices"
+
+
+@pytest.mark.parametrize("arguments", [
+    {"scope": "devices", "filters": {"domain": [None]}},
+    {"scope": "devices", "filters": {"unknown": "Bedroom 1"}},
+    {"scope": "devices", "area": "Office", "filters": {"area": "Bedroom 1"}},
+    {"scope": "tools", "filters": {"scope": "devices"}},
+    {"scope": "devices", "action": "turn_on"},
+])
+def test_malformed_search_calls_return_correction_without_retrieval(compact_search, arguments):
+    search, _ = compact_search
+    call = llm.ToolInput(tool_name=search.name, tool_args=arguments)
+
+    result = asyncio.run(search.async_call(search.hass, call, None))
+    data = getattr(result, "data", result)
+
+    assert data["status"] == "validation_error"
+    assert "inside filters" in data["error"]
+    assert "scope is devices" in data["error"]
+    assert "Correct the arguments and retry" in data["error"]
+    assert "results" not in data
+    assert getattr(result, "error", True) is True
+    entry = search.hass.data[const.DOMAIN][search.entry_id]
+    entry.embedder_backend.async_embed_text.assert_not_awaited()
+    entry.vector_db_backend.async_retrieve_scored_objects.assert_not_awaited()
+
+
+@pytest.mark.parametrize("arguments", [
+    {"area": "Office", "domain": ["light"], "scope": "devices"},
+    {"action": "search", "domain": ["light", "fan", "sensor"], "area": "Office", "scope": "devices"},
+    {"operation": "search", "area": "Office", "domain": ["light"]},
+    {"filters": {"area": "Office", "scope": "devices", "domain": "light"}},
+])
+def test_search_repairs_logged_argument_shapes_without_dropping_filters(compact_search, arguments):
+    search, _ = compact_search
+    search.set_search_context(latest_request="office devices")
+    original = deepcopy(arguments)
+    call = llm.ToolInput(tool_name=search.name, tool_args=arguments)
+
+    result = asyncio.run(search.async_call(search.hass, call, None))
+    data = getattr(result, "data", result)
+
+    assert data["status"] == "ok"
+    assert len(data["results"]) == 4
+    assert arguments == original
+    repaired = search._repair_arguments(arguments)
+    assert repaired["filters"]["area"] == "Office"
+    assert repaired["filters"]["domain"] == arguments.get("domain", arguments.get("filters", {}).get("domain"))
+    assert search._details == {}
+
+
+@pytest.mark.parametrize("domains,count", [(["fan", "light"], 4), (["fan", "sensor"], 0)])
+def test_domain_alternatives_preserve_filtering(compact_search, domains, count):
+    search, _ = compact_search
+    result = asyncio.run(search.async_call(search.hass, llm.ToolInput(tool_name=search.name, tool_args={
+        "search_queries": ["office devices"], "filters": {"area": "Office", "domain": domains},
+    }), None))
+    data = getattr(result, "data", result)
+
+    assert data["status"] == ("ok" if count else "no_matches")
+    assert len(data["results"]) == count
+
+
+@pytest.mark.parametrize("field,value", [
+    ("area", "  OFFICE  "), ("area", "office_area"), ("area", "BÜRO"),
+    ("floor", "  GROUND  "), ("floor", "ground_floor"), ("floor", "Erdgeschoss"),
+])
+def test_location_filters_resolve_registry_names_ids_and_aliases(compact_search, field, value):
+    search, _ = compact_search
+    result = asyncio.run(search._async_call(SimpleNamespace(tool_args={
+        "search_queries": ["office lights"], "filters": {field: value},
+    })))
+
+    assert result["status"] == "ok"
+    assert len(result["results"]) == 4
+    assert "ignored_filters" not in result
+
+
+@pytest.mark.parametrize("scope", ["devices", "tools"])
+def test_unknown_location_filters_are_reported_with_cached_results(compact_search, scope):
+    search, _ = compact_search
+    arguments = {
+        "scope": scope, "search_queries": ["office lights"],
+        "filters": {"area": "Unknown", "floor": "Missing floor", "domain": "light", "state": "off"},
+    }
+
+    result = asyncio.run(search._async_call(SimpleNamespace(tool_args=arguments)))
+
+    assert result["status"] == "ok"
+    assert len(result["results"]) == (4 if scope == "devices" else 1)
+    assert result["ignored_filters"] == {"area": "Unknown", "floor": "Missing floor"}
+    assert MessageHelper.compact_tool_result_value(search.name, result)["ignored_filters"] == result["ignored_filters"]
+    assert arguments["filters"]["area"] == "Unknown"
+
+    repeated = asyncio.run(search._async_call(SimpleNamespace(tool_args=arguments)))
+    assert repeated["status"] == "same_as"
+    assert repeated["ignored_filters"] == result["ignored_filters"]
+
+    arguments["filters"]["area"] = "Another missing room"
+    another = asyncio.run(search._async_call(SimpleNamespace(tool_args=arguments)))
+    assert another["status"] == "same_as"
+    assert another["ignored_filters"]["area"] == "Another missing room"
+    assert result["ignored_filters"]["area"] == "Unknown"
+
+    del arguments["filters"]["area"]
+    del arguments["filters"]["floor"]
+    unfiltered = asyncio.run(search._async_call(SimpleNamespace(tool_args=arguments)))
+    assert unfiltered["status"] == "same_as"
+    assert "ignored_filters" not in unfiltered
+
+
+@pytest.mark.parametrize("filters,ignored,effective", [
+    ({"area": "Kitchen", "floor": "Missing"}, {"floor": "Missing"}, {"area": "kitchen"}),
+    ({"area": "Missing", "floor": "Upper"}, {"area": "Missing"}, {"floor": "upper"}),
+    ({"area": "Missing", "domain": "fan"}, {"area": "Missing"}, {"domain": "fan"}),
+    ({"area": "Missing", "state": "on"}, {"area": "Missing"}, {"state": {"operator": "eq", "value": "on"}}),
+])
+def test_ignoring_unknown_location_preserves_other_constraints(compact_search, filters, ignored, effective):
+    search, _ = compact_search
+    result = asyncio.run(search._async_call(SimpleNamespace(tool_args={
+        "search_queries": ["office lights"], "filters": filters,
+    })))
+
+    assert result["status"] == "no_matches"
+    assert result["results"] == []
+    assert result["ignored_filters"] == ignored
+    assert result["filters"] == effective
+
+
+@pytest.mark.parametrize("field", ["area", "floor"])
+def test_location_resolution_preserves_input_length_validation(compact_search, field):
+    search, _ = compact_search
+    result = asyncio.run(search._async_call(SimpleNamespace(tool_args={
+        "search_queries": ["office lights"], "filters": {field: "x" * 257},
+    })))
+
+    assert result["status"] == "validation_error"
+    assert "256" in result["error"]
+
+
+def test_ambiguous_alias_is_ignored_but_real_unknown_room_is_preserved(compact_search):
+    search, _ = compact_search
+    areas = search_tools_module.area_registry.async_get(search.hass).async_list_areas()
+    for area in areas:
+        area.aliases.add("Shared alias")
+    areas.append(SimpleNamespace(id="unknown_area", name="Unknown", aliases=set()))
+
+    ambiguous = asyncio.run(search._async_call(SimpleNamespace(tool_args={
+        "search_queries": ["office lights"], "filters": {"area": "Shared alias"},
+    })))
+    assert ambiguous["status"] == "ok"
+    assert ambiguous["ignored_filters"] == {"area": "Shared alias"}
+
+    known = asyncio.run(search._async_call(SimpleNamespace(tool_args={
+        "search_queries": ["office lights"], "filters": {"area": "Unknown"},
+    })))
+    assert known["status"] == "no_matches"
+    assert "ignored_filters" not in known
+
+
+def test_unassigned_devices_remain_eligible_when_location_is_ignored(compact_search):
+    search, _ = compact_search
+    entry = search.hass.data[const.DOMAIN][search.entry_id]
+    devices = asyncio.run(entry.vector_db_backend.async_get_lexical_objects(DeviceEmbedding, {}, "devices_agent"))
+    devices[0].area_name = ""
+    devices[0].floor_name = ""
+
+    result = asyncio.run(search._async_call(SimpleNamespace(tool_args={
+        "search_queries": ["office lights"], "filters": {"area": ""},
+    })))
+
+    assert result["status"] == "ok"
+    assert result["ignored_filters"] == {"area": ""}
+    assert devices[0].id in {item["entity_id"] for item in result["results"]}
+
+
+@pytest.mark.parametrize("state", ["off", {"operator": "eq", "value": "off"}])
+def test_native_search_accepts_location_domain_and_state_filters(compact_search, state):
+    search, _ = compact_search
+    call = llm.ToolInput(tool_name=search.name, tool_args={
+        "scope": "devices", "search_queries": ["office lights"],
+        "filters": {"area": "Office", "domain": "light", "state": state},
+    })
+
+    result = asyncio.run(search.async_call(search.hass, call, None))
+    data = getattr(result, "data", result)
+
+    assert data["status"] == "ok"
+    assert len(data["results"]) == 4
 
 
 def test_model_search_query_can_search_outside_user_request() -> None:

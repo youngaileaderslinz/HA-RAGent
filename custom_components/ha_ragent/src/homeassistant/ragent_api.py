@@ -185,10 +185,14 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
                     continuity=continuity,
                 )
 
-    def refresh_search_candidates(self, candidates: list[dict[str, object]]) -> None:
+    def refresh_search_candidates(
+        self, candidates: list[dict[str, object]], *, invalidate_results: bool = False,
+    ) -> None:
         """Replace semantic-search candidates for the active turn."""
         for tool in self.tools:
             if isinstance(tool, RAGentSemanticSearchTool):
+                if invalidate_results:
+                    tool.invalidate_results()
                 tool.refresh_candidates(candidates)
 
 

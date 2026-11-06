@@ -20,14 +20,15 @@ def opaque_id(*parts: object) -> str:
 class SearchFilters:
     """Validated AND constraints; string fields use exact normalized matching."""
 
+    FIELDS = frozenset({"area", "floor", "domain", "integration", "entity_type", "device_type", "state"})
+
     values: dict
 
     @classmethod
     def parse(cls, raw: object) -> SearchFilters:
         if not isinstance(raw, dict):
             raise ValueError("filters must be an object")
-        fields = {"area", "floor", "domain", "integration", "entity_type", "device_type", "state"}
-        if raw.keys() - fields:
+        if raw.keys() - cls.FIELDS:
             raise ValueError("Unknown filter field")
         values = {}
         for key, value in sorted(raw.items()):
@@ -61,6 +62,10 @@ class SearchFilters:
                     if not finite:
                         raise ValueError("State value must be finite")
                 values[key] = {"operator": operator, "value": target}
+            elif key == "domain" and isinstance(value, list):
+                if not value or any(not isinstance(item, str) or not item.strip() or len(item) > 256 for item in value):
+                    raise ValueError("domain must be a nonempty string or list of nonempty strings")
+                values[key] = sorted({normalized(item) for item in value})
             else:
                 if not isinstance(value, str) or not value.strip() or len(value) > 256:
                     raise ValueError(f"{key} must be a nonempty string of at most 256 characters")
@@ -90,6 +95,7 @@ class SearchFilters:
                         return False
             else:
                 actual = actual if isinstance(actual, (list, tuple, set)) else [actual]
-                if not any(isinstance(item, str) and normalized(item) == target for item in actual):
+                targets = target if isinstance(target, list) else [target]
+                if not any(isinstance(item, str) and normalized(item) in targets for item in actual):
                     return False
         return True
