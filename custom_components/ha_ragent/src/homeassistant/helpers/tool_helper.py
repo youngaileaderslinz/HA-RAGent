@@ -1,5 +1,4 @@
 import logging
-from custom_components.ha_ragent.src.homeassistant.helpers.source_ranker import SourceRanker
 from custom_components.ha_ragent.src.logging.base_logger import BaseLogger
 import json
 from typing import Any, Dict, List, Tuple
@@ -254,11 +253,6 @@ class ToolHelper:
             },
             sort_keys=True
         )
-
-    @staticmethod
-    def _normalize_search_query(query: object) -> str:
-        """Normalize semantically identical search text for turn-local reuse."""
-        return SourceRanker.canonical_search_signature(query)
 
     @staticmethod
     def is_scheduled_action_tool(tool_name: str) -> bool:

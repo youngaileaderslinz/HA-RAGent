@@ -48,11 +48,11 @@
     "tool_calling_inactive": "Tool calling is not active for this instance. Ask the user to enable it manually."
   },
   "Tools": {
-    "HassRememberFact": "Use only when explicitly asked to remember one stable, non-sensitive fact. Never store instructions, commands, secrets or temporary state.",
-    "HassForgetFact": "Delete one stored fact only when explicitly asked, using its exact recalled memory_id.",
-    "HassSemanticSearch": "Find devices/tools; results are candidates, not actions. Use operation: detail with one result_id for an exact entity ID or callable tool schema. Reuse same_as references; change the search after no_matches.",
-    "HassScheduleAction": "Schedule an explicitly requested action 1-1440 minutes ahead. Resolve references now. Make action_request self-contained with the action, target/location, settings, exclusions and required parameters. Ask only if essential details are missing. Delay must be in minutes. Schedule only; do not execute now.",
-    "HassCancelScheduledActions": "Cancel all pending one-time actions only when explicitly asked to cancel all.",
-    "HassListScheduledActions": "List pending one-time scheduled actions without changing them."
+    "HassRememberFact": "On explicit request, save one stable, non-sensitive fact. No instructions, commands, secrets or temporary state.",
+    "HassForgetFact": "On explicit request, delete one fact by its exact recalled memory_id.",
+    "HassSemanticSearch": "Find device/tool candidates. detail + result_id gets an exact entity ID or exposes a tool. Reuse same_as; revise no_matches.",
+    "HassScheduleAction": "Schedule once on explicit request, 1-1440 minutes ahead. Resolve references now; action_request must include action, target/location, settings, exclusions and required parameters. Do not execute now.",
+    "HassCancelScheduledActions": "Cancel pending one-time actions only when asked to cancel all.",
+    "HassListScheduledActions": "List pending one-time actions; read-only."
   }
 }

@@ -29,7 +29,7 @@ export_memories:
 
 import_memories:
   name: Import Memories
-  description: Select one agent's conversation entity to import JSON memories and rebuild their embeddings.
+  description: Select one agent's conversation entity to replace its existing memories with imported JSON memories and rebuild their embeddings. An empty memories list clears its memories.
   target:
     entity:
       domain: conversation

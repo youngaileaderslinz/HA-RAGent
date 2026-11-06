@@ -179,33 +179,11 @@ class ConversationRetriever:
     
     @staticmethod
     def _required_tools(llm_api: Any) -> list[LlmTool]:
-        """Build required tools from the live API and are not embedded."""
+        """Build required tools from the live API without embedding them."""
         # ToolExtractor imports the LLM API and search tool, so import it after module load.
         from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
-        api_tools = {
-            tool.name: tool
-            for tool in getattr(llm_api, "tools", ()) or ()
-            if getattr(tool, "name", None) in RAGENT_PREFIXED_REQUIRED_TOOL_NAMES
-        }
-        result: list[LlmTool] = []
-        for name in RAGENT_PREFIXED_REQUIRED_TOOL_NAMES:
-            tool = api_tools.get(name)
-            if tool is None:
-                continue
-            try:
-                parameters = ToolExtractor._tool_parameters(
-                    tool, getattr(llm_api, "custom_serializer", None)
-                )
-            except Exception as err:
-                _logger.log_string(logging.WARNING, f"Could not convert parameters for tool {name}: {err}")
-                continue
-            result.append(LlmTool(
-                name=tool.name,
-                description=getattr(tool, "description", ""),
-                parameters=parameters,
-                metadata=ToolExtractor.extract_tool_metadata(tool, parameters),
-            ))
-        return result
+
+        return ToolExtractor.tools_from_api(llm_api, RAGENT_PREFIXED_REQUIRED_TOOL_NAMES)
     
     async def async_retrieve_tools(
         self,

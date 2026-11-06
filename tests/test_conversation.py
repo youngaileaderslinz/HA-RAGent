@@ -30,10 +30,9 @@ from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 @pytest.mark.parametrize("available,scheduled", [(True, False), (False, False), (True, True)])
 @pytest.mark.parametrize("discover_device", [False, True])
-def test_compact_search_defers_live_schema_until_detail_and_executes(available, scheduled, discover_device):
-    from tests.retrieval.benchmark_search_tokens import fixture
+def test_compact_search_defers_live_schema_until_detail_and_executes(available, scheduled, discover_device, compact_search):
     from custom_components.ha_ragent.src.homeassistant.ragent_api import RAGentAugmentedAPIInstance
-    search, actions = fixture()
+    search, actions = compact_search
     action = actions[0]
     if scheduled:
         action.name = RAGENT_PREFIXED_SCHEDULED_REQUEST_PROHIBITED_TOOL_NAMES[0]
@@ -112,7 +111,7 @@ def test_compact_search_defers_live_schema_until_detail_and_executes(available, 
     if available and not scheduled:
         assert detail["detail"]["name"] == action.name
         assert "parameters" not in detail["detail"]  # exactly one copy in tools
-        assert schemas[2][action.name] == {**live_action.parameters, "additionalProperties": False}
+        assert schemas[2][action.name] == live_action.parameters
     else:
         assert detail["status"] == "detail_error"
 

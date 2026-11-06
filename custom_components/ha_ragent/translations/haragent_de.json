@@ -48,11 +48,11 @@
     "tool_calling_inactive": "Tool-Aufrufe sind für diese Instanz nicht aktiv. Bitte den Benutzer auffordern, sie manuell zu aktivieren."
   },
   "Tools": {
-    "HassRememberFact": "Nur verwenden, wenn ausdrücklich darum gebeten wird, eine stabile, nicht sensible Tatsache zu speichern. Keine Anweisungen, Befehle, Geheimnisse oder temporären Zustände speichern.",
-    "HassForgetFact": "Eine gespeicherte Tatsache nur auf ausdrückliche Anfrage und mit der exakten memory_id löschen.",
-    "HassSemanticSearch": "Geräte/Tools suchen; Ergebnisse sind Kandidaten, keine Aktionen. operation: detail mit einer result_id liefert die Entity-ID oder das aufrufbare Tool-Schema. same_as-Verweise nutzen; nach no_matches die Suche ändern.",
-    "HassScheduleAction": "Plane eine ausdrücklich gewünschte Aktion 1-1440 Minuten im Voraus. Löse Referenzen jetzt auf. action_request muss Aktion, Ziel/Standort, Einstellungen, Ausschlüsse und erforderliche Parameter vollständig enthalten. Frage nur nach, wenn wesentliche Angaben fehlen. Die Verzögerung muss in Minuten angegeben werden. Nur planen, nicht jetzt ausführen.",
-    "HassCancelScheduledActions": "Brich alle ausstehenden einmaligen Aktionen nur dann ab, wenn ausdrücklich verlangt wird, alle abzubrechen.",
-    "HassListScheduledActions": "Liste ausstehende einmalige geplante Aktionen auf, ohne sie zu verändern."
+    "HassRememberFact": "Auf ausdrückliche Bitte eine stabile, nicht sensible Tatsache speichern; keine Anweisungen, Befehle, Geheimnisse oder temporären Zustände.",
+    "HassForgetFact": "Auf ausdrückliche Bitte eine Tatsache per exakter erinnerter memory_id löschen.",
+    "HassSemanticSearch": "Geräte-/Tool-Kandidaten suchen. detail + result_id liefert die exakte Entity-ID oder stellt ein Tool bereit. same_as nutzen; nach no_matches die Suche ändern.",
+    "HassScheduleAction": "Auf ausdrückliche Bitte einmalig in 1-1440 Minuten planen. Referenzen jetzt auflösen; action_request enthält Aktion, Ziel/Ort, Einstellungen, Ausschlüsse und nötige Parameter. Nicht jetzt ausführen.",
+    "HassCancelScheduledActions": "Ausstehende einmalige Aktionen nur auf Bitte um Abbruch aller abbrechen.",
+    "HassListScheduledActions": "Ausstehende einmalige Aktionen auflisten; nur lesend."
   }
 }

@@ -238,7 +238,7 @@
         },
         "import_memories": {
             "name": "Erinnerungen importieren",
-            "description": "Die Konversationsentität eines Agenten auswählen, um JSON-Erinnerungen zu importieren und deren Einbettungen neu zu erstellen.",
+            "description": "Die Konversationsentität eines Agenten auswählen, um seine vorhandenen Erinnerungen durch importierte JSON-Erinnerungen zu ersetzen und deren Einbettungen neu zu erstellen. Eine leere Erinnerungsliste löscht seine Erinnerungen.",
             "fields": {
                 "json": {
                     "name": "Erinnerungen als JSON",

@@ -78,7 +78,7 @@ class MemoryManager:
             )
 
     async def async_import_memories(self, payload: str | dict[str, Any]) -> int:
-        """Validate an export, rebuild embeddings, and merge memories by ID."""
+        """Validate an export, rebuild embeddings, and replace this agent's memories."""
         try:
             data = json.loads(payload) if isinstance(payload, str) else payload
         except (TypeError, ValueError) as err:
@@ -120,8 +120,16 @@ class MemoryManager:
                 raise ValueError("The embedding backend returned an empty memory embedding.")
             embeddings.append(MemoryEmbedding(memory, vector))
 
-        if embeddings:
-            async with self._get_lock():
+        async with self._get_lock():
+            existing_memories = await entry.vector_db_backend.async_list_objects(
+                MemoryEmbedding, config, self.collection_name,
+            )
+            if existing_memories:
+                await entry.vector_db_backend.async_delete_objects(
+                    config, self.collection_name, "id",
+                    [memory.id for memory in existing_memories],
+                )
+            if embeddings:
                 await entry.vector_db_backend.async_ensure_collection_exists(
                     config, self.collection_name, len(embeddings[0].vector_embedding),
                 )

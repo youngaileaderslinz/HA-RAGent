@@ -1,4 +1,5 @@
 import asyncio
+from copy import deepcopy
 from functools import wraps
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -66,8 +67,8 @@ def test_live_tool_selection_passes_api_custom_serializer(monkeypatch) -> None:
     source, serializer = object(), object()
     calls = []
 
-    def convert(parameters, *, custom_serializer):
-        calls.append((parameters, custom_serializer))
+    def convert(parameters, *, custom_serializer, openapi_version):
+        calls.append((parameters, custom_serializer, openapi_version))
         return {"type": "object", "properties": {}}
 
     monkeypatch.setattr(
@@ -80,7 +81,7 @@ def test_live_tool_selection_passes_api_custom_serializer(monkeypatch) -> None:
     )
 
     assert tool.name == raw.name
-    assert calls == [(source, serializer)]
+    assert calls == [(source, serializer, "3.1.0")]
 
 
 def _run_async(function):
@@ -122,12 +123,9 @@ async def test_startup_extraction_embeds_more_than_zero_tools(monkeypatch) -> No
     assert len(tools) > 0
     assert tools[0].metadata.supported_domains == ("fan",)
     assert tools[0].parameters == {
-        "type": "object",
         "properties": {
-            "domain": {"type": ["string", "null"], "enum": ["fan", None]},
+            "domain": {"enum": ["fan"]},
         },
-        "required": [],
-        "additionalProperties": False,
     }
 
 
@@ -199,7 +197,7 @@ async def test_startup_embedding_persists_more_than_zero_tools(monkeypatch) -> N
 
 
 @_run_async
-async def test_extractor_preserves_openai_parameter_schema(monkeypatch) -> None:
+async def test_extractor_preserves_preconverted_parameter_schema(monkeypatch) -> None:
     schema = {
         "type": "object",
         "properties": {"mode": {"type": "string", "enum": ["auto", "manual"]}},
@@ -233,7 +231,7 @@ async def test_extractor_preserves_openai_parameter_schema(monkeypatch) -> None:
     assert [tool.parameters for tool in tools] == [schema, schema]
 
 
-def test_tool_dict_includes_empty_openai_parameters() -> None:
+def test_tool_dict_includes_empty_function_parameters() -> None:
     tool = LlmTool("NoArguments", "Run without arguments")
 
     assert tool.to_tool_dict() == {
@@ -251,153 +249,101 @@ def test_tool_dict_includes_empty_openai_parameters() -> None:
     }
 
 
-def test_openai_parameters_normalizes_nested_optional_fields_without_mutating_input() -> None:
-    schema = {
+@pytest.mark.parametrize("schema", [
+    {
         "type": "object",
         "properties": {
             "device": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string"},
-                    "tags": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "integer"}}}},
+                    "tags": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": ["name"],
+                "additionalProperties": True,
             },
         },
         "required": ["device"],
-    }
-
-    normalized = ToolExtractor._openai_parameters(schema)
-
-    assert schema["properties"]["device"]["required"] == ["name"]
-    assert normalized["required"] == ["device"]
-    assert normalized["additionalProperties"] is False
-    device = normalized["properties"]["device"]
-    assert device["required"] == ["name"]
-    assert device["additionalProperties"] is False
-    assert device["properties"]["tags"]["type"] == ["array", "null"]
-    item = device["properties"]["tags"]["items"]
-    assert item["required"] == []
-    assert item["additionalProperties"] is False
-    assert item["properties"]["id"]["type"] == ["integer", "null"]
-
-
-def test_openai_parameters_removes_required_only_root_anyof() -> None:
-    schema = {
+    },
+    {
         "type": "object",
         "properties": {"hours": {"type": "integer"}, "minutes": {"type": "integer"}},
         "anyOf": [{"required": ["hours"]}, {"required": ["minutes"]}],
-    }
-
-    normalized = ToolExtractor._openai_parameters(schema)
-
-    assert "anyOf" not in normalized
-    assert normalized["required"] == []
-    assert normalized["additionalProperties"] is False
-
-
-def test_openai_parameters_flattens_compatible_composition() -> None:
-    schema = {
-        "type": "object",
-        "properties": {"value": {"allOf": [{"type": "string"}]}},
-    }
-
-    normalized = ToolExtractor._openai_parameters(schema)
-
-    assert normalized["properties"]["value"] == {"type": ["string", "null"]}
-
-
-def test_openai_parameters_rejects_conflicting_composition() -> None:
-    schema = {
-        "type": "object",
-        "properties": {"value": {"type": "integer", "allOf": [{"type": "string"}]}},
-    }
-
-    with pytest.raises(ValueError, match="allOf"):
-        ToolExtractor._openai_parameters(schema)
-
-
-def test_optional_string_uses_nullable_type_union() -> None:
-    schema = {
-        "type": "object",
-        "properties": {"conversation_command": {"type": "string"}},
-    }
-
-    normalized = ToolExtractor._openai_parameters(schema)
-
-    assert normalized["properties"]["conversation_command"] == {
-        "type": ["string", "null"],
-    }
-    assert normalized["required"] == []
-
-
-def test_existing_nullable_object_type_is_preserved() -> None:
-    schema = {
-        "type": "object",
-        "properties": {
-            "device": {
-                "type": ["object", "null"],
-                "properties": {"name": {"type": "string"}},
-                "required": ["name"],
-            },
-        },
-    }
-
-    normalized = ToolExtractor._openai_parameters(schema)
-
-    assert normalized["properties"]["device"]["type"] == ["object", "null"]
-
-
-def test_optional_integer_from_probatio_uses_nullable_type_union() -> None:
-    schema = {
-        "type": "object",
-        "properties": {
-            "minutes": {"type": "integer", "minimum": 1},
-            "hours": {"type": "integer", "nullable": True},
-        },
-        "required": [],
-    }
-
-    normalized = ToolExtractor._openai_parameters(schema)
-
-    assert normalized["properties"]["minutes"] == {
-        "type": ["integer", "null"], "minimum": 1,
-    }
-    assert normalized["properties"]["hours"] == {"type": ["integer", "null"]}
-    assert normalized["required"] == []
-
-
-def test_probatio_alternative_types_no_longer_use_anyof() -> None:
-    schema = {
+    },
+    {
         "type": "object",
         "properties": {
             "action": {"anyOf": [
-                {"type": "string"},
-                {"type": "array", "items": {"type": "string"}},
+                {"type": "string"}, {"type": "array", "items": {"type": "string"}},
             ]},
+            "mode": {"oneOf": [{"const": "auto"}, {"const": "manual"}]},
         },
-    }
+    },
+    {
+        "type": "object",
+        "properties": {"value": {"allOf": [{"type": "integer"}, {"minimum": 1}]}},
+    },
+    {
+        "type": "object",
+        "properties": {
+            "email": {"type": "string", "format": "email", "default": "user@example.com"},
+            "label": {"type": ["string", "null"]},
+            "mode": {"const": "auto"},
+        },
+        "dependentRequired": {"email": ["label"]},
+        "if": {"required": ["email"]},
+        "then": {"required": ["label"]},
+        "else": {"not": {"required": ["label"]}},
+        "additionalProperties": {"type": "string"},
+    },
+    {
+        "type": "object",
+        "properties": {"target": {"$ref": "#/$defs/target"}},
+        "$defs": {"target": {"type": "string", "pattern": "^light\\."}},
+        "patternProperties": {"^vendor_": {"type": "string"}},
+        "propertyNames": {"minLength": 1},
+    },
+])
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_preconverted_schema_preserves_constraints_without_mutating_input(schema, wrapped) -> None:
+    original = deepcopy(schema)
+    source = {"type": "function", "function": {"parameters": schema}} if wrapped else schema
 
-    normalized = ToolExtractor._openai_parameters(schema)
+    parameters = ToolExtractor._tool_parameters(SimpleNamespace(parameters=source), None)
 
-    assert normalized["properties"]["action"] == {
-        "type": ["string", "array", "null"],
-        "items": {"type": "string"},
-    }
+    assert parameters == original
+    assert schema == original
 
 
-def test_native_probatio_intent_schema_converts_optional_integer() -> None:
-    tool = SimpleNamespace(parameters=probatio.Schema({
+def test_native_probatio_schema_matches_home_assistant_formatters() -> None:
+    from homeassistant.components.llama_cpp.entity import _format_tool as llama_format
+    from homeassistant.components.ollama.entity import _format_tool as ollama_format
+
+    raw = SimpleNamespace(name="ExampleAction", description="Example action", parameters=probatio.Schema({
         probatio.Required("name"): str,
-        probatio.Optional("minutes"): int,
+        probatio.Optional("minutes"): probatio.All(int, probatio.Range(min=1)),
+        probatio.Optional("target"): probatio.Any(str, [str]),
+        probatio.Optional("mode"): probatio.In(["auto", "manual"]),
     }))
 
-    parameters = ToolExtractor._tool_parameters(tool, None)
+    parameters = ToolExtractor._tool_parameters(raw, None)
+    tool = LlmTool(raw.name, raw.description, parameters=parameters)
 
-    assert parameters["properties"]["name"] == {"type": "string"}
-    assert parameters["properties"]["minutes"] == {"type": ["integer", "null"]}
+    assert tool.to_tool_dict() == ollama_format(raw, None) == llama_format(raw, None)
+    assert parameters["properties"]["minutes"] == {"type": "integer", "minimum": 1}
     assert parameters["required"] == ["name"]
-    assert parameters["additionalProperties"] is False
+
+
+def test_native_conversion_preserves_explicit_null_as_openapi_31() -> None:
+    raw = SimpleNamespace(parameters=probatio.Schema({
+        probatio.Optional("label"): probatio.Any(str, None),
+    }))
+
+    parameters = ToolExtractor._tool_parameters(raw, None)
+
+    assert parameters["properties"]["label"] == {
+        "anyOf": [{"type": "string"}, {"type": "null"}],
+    }
 
 
 @_run_async
@@ -406,12 +352,7 @@ async def test_invalid_parameter_schema_skips_only_affected_tool(monkeypatch) ->
         tools=[
             SimpleNamespace(
                 name="Invalid", description="", metadata=None,
-                parameters={
-                    "type": "object",
-                    "properties": {"value": {
-                        "type": "integer", "allOf": [{"type": "string"}],
-                    }},
-                },
+                parameters={"type": "function", "function": {"parameters": {"type": "array"}}},
             ),
             SimpleNamespace(
                 name="Valid", description="", metadata=None,
@@ -431,19 +372,4 @@ async def test_invalid_parameter_schema_skips_only_affected_tool(monkeypatch) ->
     tools = await extractor._async_get_embeddable_tools(_subentry())
 
     assert [tool.name for tool in tools] == ["Valid"]
-    assert tools[0].parameters["properties"]["count"]["type"] == ["integer", "null"]
-
-
-def test_probatio_literal_alternatives_become_enum() -> None:
-    schema = {
-        "type": "object",
-        "properties": {
-            "mode": {"anyOf": [{"const": "auto"}, {"const": "manual"}]},
-        },
-    }
-
-    normalized = ToolExtractor._openai_parameters(schema)
-
-    assert normalized["properties"]["mode"] == {
-        "type": ["string", "null"], "enum": ["auto", "manual", None],
-    }
+    assert tools[0].parameters == api.tools[1].parameters
