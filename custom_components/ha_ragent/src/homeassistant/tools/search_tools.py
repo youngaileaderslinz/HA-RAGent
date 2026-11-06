@@ -144,6 +144,11 @@ class RAGentSemanticSearchTool(RAGentTool):
         self._details: dict[str, str] = {}
         self._requested_capabilities = []
 
+    def invalidate_results(self) -> None:
+        """Allow fresh searches after actions while retaining scoped result IDs."""
+        self._searches.clear()
+        self._details.clear()
+
     @staticmethod
     def _clean(value: object) -> str:
         return " ".join(str(value or "").split())

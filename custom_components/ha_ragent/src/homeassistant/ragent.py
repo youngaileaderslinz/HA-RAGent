@@ -68,6 +68,7 @@ from custom_components.ha_ragent.src.const import (
     RETRIEVAL_METHOD_LEXICAL,
     TRACE,
     TRANSLATION_PROMPT_SCHEDULED_ACTION,
+    TRANSLATION_PROMPT_SEARCH_STALLED,
     TRANSLATION_PROMPT_PERSONA,
     TRANSLATION_PROMPT_AREAS,
     TRANSLATION_PROMPT_DEVICES,
@@ -284,6 +285,10 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
         formatted_messages: list[ChatMessage] = []
                 
         failed_signatures: set[str] = set()
+        completed_search_signatures: set[str] = set()
+        seen_search_results: set[str] = set()
+        stalled_search_iterations = 0
+        final_response_only = False
         tool_calls_overall: List[Tuple[llm.ToolInput, Any]] = []
 
         final_model_speech = ""
@@ -299,20 +304,28 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
 
             tool_calls_in_iteration = []
             executed_signatures_in_iteration: set[str] = set()
+            search_loop_blocked = False
+            iteration_progress = False
             try:
+                request_tools = [] if final_response_only else tool_list
+                request_messages = formatted_messages
+                if final_response_only:
+                    request_messages = [*formatted_messages, ChatMessage(
+                        role="system", content=self.entry.translations.prompt(TRANSLATION_PROMPT_SEARCH_STALLED),
+                    )]
                 _logger.log_payload(
                     "conversation.llm_request",
                     level=logging.DEBUG,
                     iteration=idx + 1,
-                    messages=formatted_messages,
-                    tools=[tool.to_tool_dict() for tool in tool_list],
+                    messages=request_messages,
+                    tools=[tool.to_tool_dict() for tool in request_tools],
                 )
 
                 timing_logger.reset_timing()
                 response_stream = AssistantStream(self.entry.llm_backend.async_send_chat_request(
                     dict(self.subentry.data),
-                    formatted_messages,
-                    tool_list,
+                    request_messages,
+                    request_tools,
                 ))
                 async with aclosing(response_stream.async_deltas()) as deltas:
                     if hasattr(chat_log, "async_add_delta_content_stream"):
@@ -325,7 +338,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 assistant_content = response_stream.response
                 timing_logger.log_timed_string(logging.DEBUG, f"LLM iteration {idx + 1} completed")
 
-                tool_calls_in_iteration = tool_helper.parse_tool_calls(assistant_content)
+                tool_calls_in_iteration = [] if final_response_only else tool_helper.parse_tool_calls(assistant_content)
                 tool_calls_in_iteration = [
                     tool_helper.normalize_exposed_tool_call(call, exposed_tool_names) or call
                     for call in tool_calls_in_iteration
@@ -348,10 +361,14 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                 
                 for tool_call in tool_calls_in_iteration:
                     tool_name = tool_call.tool_name
+                    is_search_tool = tool_helper.is_semantic_search_tool(tool_name)
                     call_signature = tool_helper.tool_call_signature(tool_call)
                     timing_logger.log_timed_string(logging.DEBUG, f"Processing tool call: {call_signature}")
 
                     if tool_name not in exposed_tool_names:
+                        search_loop_blocked = search_loop_blocked or (
+                            is_search_tool and call_signature in failed_signatures
+                        )
                         history_manager.append_message(
                             MessageHelper.create_tool_failure_message(
                                 agent_id=user_input.agent_id,
@@ -364,6 +381,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                         continue
 
                     if call_signature in failed_signatures:
+                        search_loop_blocked = search_loop_blocked or is_search_tool
                         history_manager.append_message(
                             MessageHelper.create_tool_failure_message(
                                 agent_id=user_input.agent_id,
@@ -374,7 +392,11 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                         )
                         continue
 
-                    if call_signature in executed_signatures_in_iteration:
+                    if (
+                        call_signature in executed_signatures_in_iteration
+                        or is_search_tool and call_signature in completed_search_signatures
+                    ):
+                        search_loop_blocked = search_loop_blocked or is_search_tool
                         history_manager.append_message(
                             MessageHelper.create_tool_failure_message(
                                 agent_id=user_input.agent_id,
@@ -400,7 +422,6 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                     else:
                         try:
                             is_custom_api = isinstance(llm_api, RAGentAugmentedAPIInstance)
-                            is_search_tool = tool_helper.is_semantic_search_tool(tool_name)
                             is_custom_search_tool = tool_helper.is_scheduled_action_tool(tool_name)
                             sanitized_tool_call = tool_helper.sanitize_tool_call(tool_call, active_candidate_context)
                             
@@ -411,6 +432,21 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                             parsed_tool_result = tool_helper.parse_tool_results(tool_result)
                             tool_succeeded = MessageHelper.tool_result_succeeded(parsed_tool_result)
                             history_candidates = None
+                            if is_search_tool:
+                                if not tool_succeeded:
+                                    failed_signatures.add(call_signature)
+                                else:
+                                    completed_search_signatures.add(call_signature)
+                                result_signature = tool_helper.search_result_signature(parsed_tool_result)
+                                if parsed_tool_result.get("status") == "same_as" or result_signature in seen_search_results:
+                                    search_loop_blocked = True
+                                else:
+                                    seen_search_results.add(result_signature)
+                                    iteration_progress = True
+                            elif tool_succeeded:
+                                iteration_progress = True
+                                completed_search_signatures.clear()
+                                seen_search_results.clear()
 
                             if tool_succeeded and is_search_tool:
                                 compact_search = "status" in parsed_tool_result
@@ -475,7 +511,7 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
                                             llm_api.refresh_search_candidates(active_candidate_context)
                             elif tool_succeeded:
                                 if is_custom_api:
-                                    llm_api.refresh_search_candidates(active_candidate_context)
+                                    llm_api.refresh_search_candidates(active_candidate_context, invalidate_results=True)
                                 tool_calls_overall.append((tool_call, parsed_tool_result))
 
                             history_manager.append_message(
@@ -511,6 +547,15 @@ class RAGent(ConversationEntity, AbstractConversationAgent, RAGentEntity):
             if not tool_calls_in_iteration:
                 final_model_speech = message_content.strip()
                 break
+
+            if search_loop_blocked and not iteration_progress:
+                stalled_search_iterations += 1
+                # Allow one round to revise the search before disabling tools.
+                final_response_only = (
+                    stalled_search_iterations >= 2 or idx + 2 == max_tool_call_iterations
+                )
+            else:
+                stalled_search_iterations = 0
 
             if idx + 1 == max_tool_call_iterations:
                 intent_response = intent.IntentResponse(language=user_input.language)
