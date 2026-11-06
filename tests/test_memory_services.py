@@ -108,11 +108,18 @@ def test_services_round_trip_preserves_metadata_and_subentry_isolation(memory_ha
         register_import_memories_service(SimpleNamespace(services=services))
         schema = services.async_register.call_args.kwargs["schema"]
         payload = json.loads(response["json"]) if native_json else response["json"]
+        writes = Mock()
+        writes.attach_mock(entry.vector_db_backend.async_delete_objects, "delete")
+        writes.attach_mock(entry.vector_db_backend.async_upsert_objects, "upsert")
         await _handle_import_memories(hass, SimpleNamespace(data=schema({
             "entity_id": "conversation.destination", "json": payload,
         })))
         assert objects["memories_source"] == {original.id: original}
-        assert objects["memories_destination"] == {original.id: original, existing.id: existing}
+        assert objects["memories_destination"] == {original.id: original}
+        entry.vector_db_backend.async_delete_objects.assert_awaited_once_with(
+            entry.subentries["destination"].data, "memories_destination", "id", [existing.id],
+        )
+        assert [call[0] for call in writes.mock_calls] == ["delete", "upsert"]
         entry.embedder_backend.async_embed_text.assert_awaited_once_with(
             entry.subentries["destination"].data,
             original.to_embedding_text(entry.translations), input_type="document",
@@ -121,12 +128,12 @@ def test_services_round_trip_preserves_metadata_and_subentry_isolation(memory_ha
         assert isinstance(embedding, MemoryEmbedding)
         assert embedding.vector_embedding == [1.0, 0.5]
 
-        # Repeated imports update IDs instead of creating duplicates.
+        # Repeated imports replace the previous imported memories as well.
         await _handle_import_memories(hass, SimpleNamespace(data={
             "entity_id": "conversation.destination",
             "json": json.dumps({"memories": [record(content="Updated fact.")]}),
         }))
-        assert len(objects["memories_destination"]) == 2
+        assert len(objects["memories_destination"]) == 1
         assert objects["memories_destination"][original.id].content == "Updated fact."
 
     asyncio.run(run())
@@ -147,13 +154,17 @@ def test_services_round_trip_preserves_metadata_and_subentry_isolation(memory_ha
     {}, {"memories": {}}, {"memories": [record(content=None)]},
 ])
 def test_invalid_import_does_not_embed_or_write(memory_hass, payload):
-    hass, entry, _ = memory_hass
+    hass, entry, objects = memory_hass
+    existing = Memory.from_dict(record(3))
+    objects["memories_source"] = {existing.id: existing}
     with pytest.raises(ServiceValidationError):
         asyncio.run(_handle_import_memories(hass, SimpleNamespace(data={
             "entity_id": "conversation.source", "json": payload,
         })))
     entry.embedder_backend.async_embed_text.assert_not_awaited()
     entry.vector_db_backend.async_upsert_objects.assert_not_awaited()
+    entry.vector_db_backend.async_delete_objects.assert_not_awaited()
+    assert objects["memories_source"] == {existing.id: existing}
 
 
 @pytest.mark.parametrize("handler", [_handle_export_memories, _handle_import_memories])
@@ -204,22 +215,36 @@ def test_indirect_target_resolves_to_one_subentry(memory_hass, monkeypatch):
     )
 
 
-def test_empty_memory_transfer_does_not_create_collection(memory_hass):
+@pytest.mark.parametrize("has_existing_memories", [False, True])
+def test_empty_memory_import_clears_memories_without_creating_collection(memory_hass, has_existing_memories):
     async def run():
-        hass, entry, _ = memory_hass
+        hass, entry, objects = memory_hass
         manager = MemoryManager(hass, "entry", "source")
         payload = await manager.async_export_memories()
         assert json.loads(payload) == {"memories": []}
+        existing = Memory.from_dict(record())
+        if has_existing_memories:
+            objects["memories_source"] = {existing.id: existing}
         assert await manager.async_import_memories(payload) == 0
+        assert objects.get("memories_source", {}) == {}
+        if has_existing_memories:
+            entry.vector_db_backend.async_delete_objects.assert_awaited_once_with(
+                entry.subentries["source"].data, "memories_source", "id", [existing.id],
+            )
+        else:
+            entry.vector_db_backend.async_delete_objects.assert_not_awaited()
         entry.vector_db_backend.async_ensure_collection_exists.assert_not_awaited()
         entry.vector_db_backend.async_upsert_objects.assert_not_awaited()
+        entry.embedder_backend.async_embed_text.assert_not_awaited()
 
     asyncio.run(run())
 
 
 @pytest.mark.parametrize("failure", [[], RuntimeError("Embedding failed")])
 def test_embedding_failure_does_not_write_partial_import(memory_hass, failure):
-    hass, entry, _ = memory_hass
+    hass, entry, objects = memory_hass
+    existing = Memory.from_dict(record(3))
+    objects["memories_source"] = {existing.id: existing}
     entry.embedder_backend.async_embed_text.side_effect = [[1.0, 0.5], failure]
     with pytest.raises((ServiceValidationError, RuntimeError)):
         asyncio.run(_handle_import_memories(hass, SimpleNamespace(data={
@@ -227,6 +252,8 @@ def test_embedding_failure_does_not_write_partial_import(memory_hass, failure):
         })))
     entry.vector_db_backend.async_ensure_collection_exists.assert_not_awaited()
     entry.vector_db_backend.async_upsert_objects.assert_not_awaited()
+    entry.vector_db_backend.async_delete_objects.assert_not_awaited()
+    assert objects["memories_source"] == {existing.id: existing}
 
 
 def test_import_enforces_subentry_storage_limit(memory_hass):
