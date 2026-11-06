@@ -28,6 +28,69 @@ from custom_components.ha_ragent.src.models.retrieval.continuity_context import 
 from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 
+@pytest.mark.parametrize("invalid_arguments", [
+    None,
+    {"area": "Other", "filters": {"area": "Office"}, "scope": "devices"},
+    {"action": "turn_on", "scope": "devices"},
+    {"scope": "tools", "filters": {"scope": "devices"}},
+])
+def test_device_search_recovers_argument_errors_without_detail(compact_search, invalid_arguments):
+    from custom_components.ha_ragent.src.homeassistant.ragent_api import RAGentAugmentedAPIInstance
+
+    search, _ = compact_search
+    api = RAGentAugmentedAPIInstance.__new__(RAGentAugmentedAPIInstance)
+    api.hass = search.hass
+    api.tools = [search]
+    api.llm_context = None
+    api._wrapped_api = SimpleNamespace()
+    api.async_call_tool = AsyncMock(wraps=api.async_call_tool)
+    requests = []
+    correcting = invalid_arguments is not None
+
+    async def send(_config, messages, _tools):
+        requests.append(messages[:])
+        iteration = len(requests)
+        if correcting and iteration == 1:
+            arguments = invalid_arguments
+        elif iteration == 1 + correcting:
+            if correcting:
+                error = [message["content"] for message in messages if message["role"] == "tool"][-1]
+                assert error["status"] == "validation_error"
+                assert "inside filters" in error["error"]
+                assert "candidate_devices" not in error
+            arguments = {
+                "search_queries": ["office lights"], "scope": "devices", "filters": {"area": "Office"},
+            }
+        else:
+            results = [message["content"] for message in messages if message["role"] == "tool"][-1]
+            assert all(item["entity_id"].startswith("light.office_") for item in results["results"])
+            assert all("off" in item["summary"] for item in results["results"])
+            yield "The office lights are off."
+            return
+        yield "```homeassistant\n" + json.dumps({"tool": search.name, "arguments": arguments}) + "\n```"
+
+    agent = SimpleNamespace(
+        hass=search.hass,
+        entry=SimpleNamespace(llm_backend=SimpleNamespace(async_send_chat_request=send),
+                              translations=RAGentTranslations.default("en")),
+        subentry=SimpleNamespace(data={}), runtime_options={CONF_MAX_TOOL_CALL_ITERATIONS: 2 + correcting},
+        _exclude_prohibited_scheduled_request_tools=ragent_module.RAGent._exclude_prohibited_scheduled_request_tools,
+    )
+    result = asyncio.run(ragent_module.RAGent._async_prompt_model(
+        agent, api, SimpleNamespace(agent_id="agent", language="en", conversation_id="turn"),
+        [LlmTool(search.name, search.description, parameters={"type": "object"})],
+        SimpleNamespace(content=[]), HistoryManager({}), [], "Are the office lights on?", ContinuityContext(),
+    ))
+
+    assert result.response.error_code is None
+    assert len(requests) == 2 + correcting
+    assert api.async_call_tool.await_count == 1 + correcting
+    assert search._details == {}
+    assert {candidate["name"] for candidate in search._candidate_context} == {
+        f"light.office_{index}" for index in range(4)
+    }
+
+
 @pytest.mark.parametrize("available,scheduled", [(True, False), (False, False), (True, True)])
 @pytest.mark.parametrize("discover_device", [False, True])
 def test_compact_search_defers_live_schema_until_detail_and_executes(available, scheduled, discover_device, compact_search):

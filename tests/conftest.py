@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.helpers import area_registry, floor_registry
 
 from custom_components.ha_ragent.src.const import (
     CONF_MAX_DEVICES_TO_EXTRACT,
@@ -23,7 +24,7 @@ from custom_components.ha_ragent.src.translation import RAGentTranslations
 
 
 @pytest.fixture
-def compact_search():
+def compact_search(monkeypatch):
     """Provide four office lights and one action through an in-memory backend."""
     devices = [
         Device(f"light.office_{index}", f"Office light {index}", "Office", "Ground", domain=["light"])
@@ -58,6 +59,18 @@ def compact_search():
     )
     states = {device.id: SimpleNamespace(state="off", attributes={}) for device in devices}
     hass = SimpleNamespace(data={DOMAIN: {"entry": entry}}, states=SimpleNamespace(get=states.get))
+    areas = [
+        SimpleNamespace(id="office_area", name="Office", aliases={"Workroom", "Büro"}),
+        SimpleNamespace(id="kitchen_area", name="Kitchen", aliases={"Küche"}),
+    ]
+    floors = [
+        SimpleNamespace(floor_id="ground_floor", name="Ground", aliases={"Downstairs", "Erdgeschoss"}),
+        SimpleNamespace(floor_id="upper_floor", name="Upper", aliases={"Upstairs"}),
+    ]
+    area_reg = SimpleNamespace(async_list_areas=lambda: areas)
+    floor_reg = SimpleNamespace(async_list_floors=lambda: floors)
+    monkeypatch.setattr(area_registry, "async_get", lambda _hass: area_reg)
+    monkeypatch.setattr(floor_registry, "async_get", lambda _hass: floor_reg)
     RAGentTranslations.default("en")
     search = RAGentSemanticSearchTool(hass, "entry", "agent", "en")
     search.name = RAGENT_PREFIXED_TOOL_NAMES_BY_NAME[search.name]

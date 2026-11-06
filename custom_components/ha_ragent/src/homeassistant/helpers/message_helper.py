@@ -106,7 +106,7 @@ class MessageHelper:
             if result.get("status") in ("ok", "no_matches", "same_as", "validation_error", "detail_error", "retrieval_error"):
                 # Search owns the bounded contract. In particular, a selected
                 # detail schema must not be truncated into invalid JSON Schema.
-                keys = ("status", "search_id", "mode", "results", "result_ids", "filters", "detail", "error")
+                keys = ("status", "search_id", "mode", "results", "result_ids", "filters", "ignored_filters", "detail", "error")
                 return {key: result[key] for key in keys if key in result}
             devices = result.get("candidate_devices", result.get("devices", []))
             available_tools = result.get("available_tools", [])

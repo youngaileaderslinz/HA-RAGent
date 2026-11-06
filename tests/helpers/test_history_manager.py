@@ -53,7 +53,7 @@ def test_compact_search_and_duplicate_references_retain_weak_canonical_continuit
     assert continuity.successful_target_score(device) == 0
     wire = str(MessageHelper.message_to_chat_messages(messages))
     assert "_candidate_entities" not in wire
-    assert "light.office_0" not in wire
+    assert "light.office_0" in wire
 
 
 def test_compact_candidate_names_and_tool_ids_are_not_used_as_entity_ids():

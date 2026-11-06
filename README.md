@@ -179,10 +179,8 @@ Selecting **Assist** adds these tools to the Home Assistant API. Apart from sema
 | `HassForgetFact` | Deletes one recalled fact using its exact memory ID. |
 
 Semantic search accepts up to four self-contained `search_queries`. Optional
-`capabilities` match queries by position. Required `scope` selects either
-`devices` or `tools`. The agent's retrieval setting controls the search method.
-Optional AND filters constrain area, floor, domain, integration, entity
-type, device class or explicit state values/comparisons.
+`capabilities` match queries by position. `scope` selects either
+`devices` (default) or `tools`.
 
 Scheduled actions are held in memory. A Home Assistant restart or integration reload cancels them.
 

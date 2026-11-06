@@ -10,7 +10,7 @@ import probatio
 
 from homeassistant.const import CONF_LLM_HASS_API
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import llm, entity_registry
+from homeassistant.helpers import area_registry, entity_registry, floor_registry, llm
 from custom_components.ha_ragent.src.homeassistant.tools.base_tool import RAGentTool
 
 from custom_components.ha_ragent.src.const import (
@@ -42,9 +42,19 @@ class RAGentSemanticSearchTool(RAGentTool):
             probatio.Optional("operation", description="Default: search."): probatio.In(["search", "detail"]),
             probatio.Optional("result_id", description="Current result ID for detail."): str,
             probatio.Optional("filters", description=(
-                "AND: area, floor, domain, integration, entity_type=domain, device_type=device class, "
-                "state=value or {operator:eq/ne/gt/gte/lt/lte,value}."
-            )): dict,
+                "AND constraints; include only fields requested by the user."
+            )): {
+                probatio.Optional("area"): str,
+                probatio.Optional("floor"): str,
+                probatio.Optional("domain", description="Omit unless the user specifies device types."): probatio.Any(str, [str]),
+                probatio.Optional("integration"): str,
+                probatio.Optional("entity_type", description="Entity domain."): str,
+                probatio.Optional("device_type", description="Device class."): str,
+                probatio.Optional("state"): probatio.Any(str, {
+                    probatio.Required("operator"): probatio.In(["eq", "ne", "gt", "gte", "lt", "lte"]),
+                    probatio.Required("value"): probatio.Any(str, int, float),
+                }),
+            },
             probatio.Optional("search_queries", description="Self-contained target-group queries; capabilities align by position."
             ): probatio.All([str], probatio.Length(min=1, max=RAGENT_MAX_SEARCH_QUERIES)),
             probatio.Optional("capabilities", description=(
@@ -58,7 +68,7 @@ class RAGentSemanticSearchTool(RAGentTool):
                 }],
                 probatio.Length(min=1, max=RAGENT_MAX_SEARCH_QUERIES),
             ),
-            probatio.Required("scope", description="Scope for search/detail.",
+            probatio.Optional("scope", default="devices", description="devices (default) or tools.",
             ): probatio.In(["devices", "tools"]),
         }
     )
@@ -74,6 +84,58 @@ class RAGentSemanticSearchTool(RAGentTool):
         self._candidate_context: list[dict[str, object]] = []
         self._requested_capabilities: list[dict[str, object]] = []
         self.reset_turn()
+
+    async def async_call(
+        self, hass: HomeAssistant, tool_input: llm.ToolInput, llm_context: llm.LLMContext,
+    ) -> llm.ToolResult | dict[str, object]:
+        """Repair search input and distinguish invalid arguments from no matches."""
+        try:
+            arguments = self._repair_arguments(tool_input.tool_args)
+            repaired_input = llm.ToolInput(
+                tool_name=tool_input.tool_name, tool_args=arguments,
+                id=tool_input.id, external=tool_input.external,
+            )
+            return await super().async_call(hass, repaired_input, llm_context)
+        except (probatio.Invalid, ValueError) as error:
+            data = {
+                "status": "validation_error",
+                "error": (
+                    f"Invalid search arguments: {error}. "
+                    "scope is devices (default) or tools. Put area/floor strings and domain strings/lists "
+                    "inside filters. Use operation, not action; omit operation for search. "
+                    "Correct the arguments and retry. This is not a no_matches result."
+                ),
+            }
+            result_type = getattr(llm, "ToolResult", None)
+            return result_type(data=data, error=True) if result_type else data
+
+    @staticmethod
+    def _repair_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+        """Repair misplaced search fields without guessing or discarding constraints."""
+        repaired = dict(arguments)
+        if repaired.get("action") in ("search", "detail"):
+            action = repaired.pop("action")
+            if "operation" in repaired and repaired["operation"] != action:
+                raise ValueError("Conflicting action and operation")
+            repaired["operation"] = action
+        filters = repaired.get("filters", {})
+        if not isinstance(filters, dict):
+            return repaired
+        filters = dict(filters)
+        if "scope" in filters:
+            scope = filters.pop("scope")
+            if "scope" in repaired and repaired["scope"] != scope:
+                raise ValueError("Conflicting scope values")
+            repaired["scope"] = scope
+        for field in SearchFilters.FIELDS:
+            if field in repaired:
+                value = repaired.pop(field)
+                if field in filters and filters[field] != value:
+                    raise ValueError(f"Conflicting {field} filters")
+                filters[field] = value
+        if filters or "filters" in repaired:
+            repaired["filters"] = filters
+        return repaired
 
     def reset_turn(self) -> None:
         """Invalidate cached searches and detail access at a turn/scope boundary."""
@@ -328,6 +390,39 @@ class RAGentSemanticSearchTool(RAGentTool):
     def _result_id(self, kind: str, identity: str) -> str:
         return opaque_id(self.entry_id, self.subentry_id, kind, identity)
 
+    def _resolve_location_filters(self, raw: object) -> tuple[SearchFilters, dict[str, str]]:
+        """Resolve registry locations and report omitted discovery constraints."""
+        if not isinstance(raw, dict):
+            raise ValueError("filters must be an object")
+        values = dict(raw)
+        ignored: dict[str, str] = {}
+        for field in ("area", "floor"):
+            value = values.get(field)
+            if not isinstance(value, str):
+                continue
+            if len(value) > 256:
+                raise ValueError(f"{field} must be at most 256 characters")
+            if field == "area":
+                entries = area_registry.async_get(self.hass).async_list_areas()
+                id_field = "id"
+            else:
+                entries = floor_registry.async_get(self.hass).async_list_floors()
+                id_field = "floor_id"
+            key = normalized(value)
+            exact = []
+            aliases = []
+            for entry in entries:
+                if key in {normalized(entry.name), normalized(getattr(entry, id_field))}:
+                    exact.append(entry)
+                elif key in {normalized(alias) for alias in entry.aliases}:
+                    aliases.append(entry)
+            matches = exact or aliases
+            if len(matches) == 1:
+                values[field] = matches[0].name
+            else:
+                ignored[field] = values.pop(field)
+        return SearchFilters.parse(values), ignored
+
     def result_context(self, result: dict) -> tuple[list[dict], list[str]]:
         """Resolve device matches and selected tool details to trusted context."""
         if result.get("status") not in ("ok", "same_as"):
@@ -337,7 +432,8 @@ class RAGentSemanticSearchTool(RAGentTool):
             if not record:
                 return [], []
             return ([record["data"]], []) if record["type"] == "device" else ([], [record["data"]["name"]])
-        return [self._results[result_id]["data"] for result_id in self.history_candidate_entities(result)], []
+        devices = [self._results[result_id]["data"] for result_id in self.history_candidate_entities(result)]
+        return devices, []
 
     def history_candidate_entities(self, result: dict) -> dict[str, str]:
         """Resolve compact references to canonical device IDs for internal history."""
@@ -446,10 +542,10 @@ class RAGentSemanticSearchTool(RAGentTool):
     async def _async_call(self, tool_input, *args, **kwargs) -> dict[str, object]:
         arguments = tool_input.tool_args
         operation = arguments.get("operation", "search")
-        scope = arguments.get("scope")
+        scope = arguments.get("scope", "devices")
         if scope not in ("devices", "tools"):
             return {"status": "detail_error" if operation == "detail" else "validation_error",
-                    "error": "scope is required and must be devices or tools"}
+                    "error": "scope must be devices or tools"}
         if operation == "detail":
             return self._detail(arguments)
         try:
@@ -457,7 +553,7 @@ class RAGentSemanticSearchTool(RAGentTool):
                 "operation", "search_queries", "search_query", "scope", "filters", "capabilities"
             }:
                 raise ValueError("Invalid search operation or arguments")
-            filters = SearchFilters.parse(arguments.get("filters", {}))
+            filters, ignored_filters = self._resolve_location_filters(arguments.get("filters", {}))
             raw_queries = arguments.get("search_queries", [arguments.get("search_query", "")])
             if not isinstance(raw_queries, list) or not 1 <= len(raw_queries) <= RAGENT_MAX_SEARCH_QUERIES:
                 raise ValueError(f"Supply 1 to {RAGENT_MAX_SEARCH_QUERIES} search_queries")
@@ -491,6 +587,7 @@ class RAGentSemanticSearchTool(RAGentTool):
         except (ValueError, TypeError) as error:
             return {"status": "validation_error", "error": str(error)}
 
+        metadata = {"ignored_filters": ignored_filters} if ignored_filters else {}
         searchable_entries = list(self._iter_searchable_entries())
         options = {}
         if searchable_entries:
@@ -506,7 +603,7 @@ class RAGentSemanticSearchTool(RAGentTool):
         if key in self._searches:
             previous = self._searches[key]
             return {"status": "same_as", "search_id": previous["search_id"],
-                    "result_ids": [result["id"] for result in previous["results"]]}
+                    "result_ids": [result["id"] for result in previous["results"]], **metadata}
         device_batches, tool_batches = [], []
         device_limit = tool_limit = 0
         embedding_cache = {}
@@ -526,7 +623,7 @@ class RAGentSemanticSearchTool(RAGentTool):
                         entry.vector_db_backend, DeviceEmbedding,
                         {**getattr(entry, "options", {}), **subentry.data}, f"devices_{subentry_id}", failures)
                     if failures:
-                        return {"status": "retrieval_error", "error": failures[0]}
+                        return {"status": "retrieval_error", "error": failures[0], **metadata}
                     devices = [d for d in catalog if self._device_filter(filters, d)]
                 if scope == "devices" and max_devices > 0:
                     devices = await retriever.async_retrieve_search_devices(
@@ -534,7 +631,7 @@ class RAGentSemanticSearchTool(RAGentTool):
                         predicate=(lambda d: self._device_filter(filters, d)) if filters.values else None,
                         failures=failures)
                     if failures:
-                        return {"status": "retrieval_error", "error": failures[0]}
+                        return {"status": "retrieval_error", "error": failures[0], **metadata}
                     device_batches.append([self._device_candidate(d) for d in devices])
                 if scope == "tools" and max_tools > 0:
                     tool_query = self._tool_search_query(query, devices, capability)
@@ -545,7 +642,7 @@ class RAGentSemanticSearchTool(RAGentTool):
                         predicate=(lambda t: self._tool_filter(filters, t, [d for d in devices if isinstance(d, Device)]))
                         if filters.values else None, failures=failures)
                     if failures:
-                        return {"status": "retrieval_error", "error": failures[0]}
+                        return {"status": "retrieval_error", "error": failures[0], **metadata}
                     _logger.log_payload("search.ranking", query=tool_query, vector=scored, evidence=evidence)
                     tool_batches.append([{
                         "name": t.name, "description": t.description, "parameters": t.parameters or {},
@@ -556,7 +653,8 @@ class RAGentSemanticSearchTool(RAGentTool):
         tools = self._merge_query_candidates(tool_batches, tool_limit)
         results = [self._compact_result(kind, data, pairs[0][0], filters)
                    for kind, batch in (("device", devices), ("tool", tools)) for data in batch]
-        response = {"status": "ok" if results else "no_matches", "search_id": key, "mode": mode, "results": results}
+        response = {"status": "ok" if results else "no_matches", "search_id": key, "mode": mode,
+                    "results": results, **metadata}
         if not results and filters.values:
             response["filters"] = filters.values
         self._searches[key] = response
