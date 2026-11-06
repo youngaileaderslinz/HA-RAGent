@@ -201,7 +201,7 @@ class RAGentAugmentedAPIInstance(llm.APIInstance):
         return []
 
     def search_result_context(self, result: dict) -> tuple[list[dict], list[str]]:
-        """Keep canonical identities private until a result is selected."""
+        """Resolve device matches and selected tool schemas for execution."""
         for tool in self.tools:
             if isinstance(tool, RAGentSemanticSearchTool):
                 return tool.result_context(result)
