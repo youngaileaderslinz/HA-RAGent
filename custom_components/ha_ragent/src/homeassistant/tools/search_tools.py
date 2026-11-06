@@ -39,27 +39,26 @@ class RAGentSemanticSearchTool(RAGentTool):
     name = RAGENT_SEMANTIC_SEARCH_TOOL_NAME
     parameters = probatio.Schema(
         {
-            probatio.Optional("operation", description="Default: search. detail selects one result."): probatio.In(["search", "detail"]),
-            probatio.Optional("result_id", description="One current result ID for detail."): str,
+            probatio.Optional("operation", description="Default: search."): probatio.In(["search", "detail"]),
+            probatio.Optional("result_id", description="Current result ID for detail."): str,
             probatio.Optional("filters", description=(
-                "AND constraints: area, floor, domain, integration, entity_type (domain), "
-                "device_type (device class), state (value or {operator: eq/ne/gt/gte/lt/lte, value})."
+                "AND: area, floor, domain, integration, entity_type=domain, device_type=device class, "
+                "state=value or {operator:eq/ne/gt/gte/lt/lte,value}."
             )): dict,
-            probatio.Optional("search_queries", description="One self-contained query per target group; align capabilities by position."
+            probatio.Optional("search_queries", description="Self-contained target-group queries; capabilities align by position."
             ): probatio.All([str], probatio.Length(min=1, max=RAGENT_MAX_SEARCH_QUERIES)),
             probatio.Optional("capabilities", description=(
-                "Optional list with exactly one entry per search query, in the same order, "
-                "e.g. {action: turn_on, domain: light}. Use {} for a query without a hint, "
-                "or omit capabilities entirely. Without search_queries, supply one entry for the context query."
+                "One hint/query in order; {} for no hint. Without search_queries, one context hint. "
+                "E.g. {action:turn_on,domain:light}."
             )
             ): probatio.All(
                 [{
-                    probatio.Optional("action", description=("Stable canonical action ID, e.g. turn_on, turn_off, fan_set_speed.")): str,
-                    probatio.Optional("domain", description="Home Assistant domain or domains."): probatio.Any(str, [str]),
+                    probatio.Optional("action", description="Stable canonical action ID, e.g. turn_on."): str,
+                    probatio.Optional("domain", description="HA domain(s)."): probatio.Any(str, [str]),
                 }],
                 probatio.Length(min=1, max=RAGENT_MAX_SEARCH_QUERIES),
             ),
-            probatio.Required("scope", description=("Choose devices or tools for search and detail."),
+            probatio.Required("scope", description="Scope for search/detail.",
             ): probatio.In(["devices", "tools"]),
         }
     )
