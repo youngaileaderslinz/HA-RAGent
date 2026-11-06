@@ -329,13 +329,15 @@ class RAGentSemanticSearchTool(RAGentTool):
         return opaque_id(self.entry_id, self.subentry_id, kind, identity)
 
     def result_context(self, result: dict) -> tuple[list[dict], list[str]]:
-        """Return trusted execution data only after an explicit detail lookup."""
-        if result.get("status") != "ok" or "detail" not in result:
+        """Resolve device matches and selected tool details to trusted context."""
+        if result.get("status") not in ("ok", "same_as"):
             return [], []
-        record = self._results.get(result["detail"].get("id"))
-        if not record:
-            return [], []
-        return ([record["data"]], []) if record["type"] == "device" else ([], [record["data"]["name"]])
+        if "detail" in result:
+            record = self._results.get(result["detail"].get("id"))
+            if not record:
+                return [], []
+            return ([record["data"]], []) if record["type"] == "device" else ([], [record["data"]["name"]])
+        return [self._results[result_id]["data"] for result_id in self.history_candidate_entities(result)], []
 
     def history_candidate_entities(self, result: dict) -> dict[str, str]:
         """Resolve compact references to canonical device IDs for internal history."""
@@ -409,6 +411,8 @@ class RAGentSemanticSearchTool(RAGentTool):
         else:
             rationale = None
         compact = {"id": result_id, "type": kind, "name": str(name)[:160], "summary": str(summary)[:160]}
+        if kind == "device":
+            compact["entity_id"] = identity
         if location:
             compact["location"] = location[:160]
         if rationale:
