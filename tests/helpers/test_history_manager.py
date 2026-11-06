@@ -16,7 +16,6 @@ from custom_components.ha_ragent.src.models.embedding.tool import LlmTool
 from custom_components.ha_ragent.src.models.embedding.tool_metadata import ToolMetadata
 from custom_components.ha_ragent.src.models.retrieval.scored_result import ScoredResult
 from custom_components.ha_ragent.src.homeassistant.helpers.message_helper import MessageHelper
-from tests.retrieval.benchmark_search_tokens import fixture
 import asyncio
 
 
@@ -28,8 +27,8 @@ def test_empty_history_produces_no_structured_or_prompt_history() -> None:
     assert manager.filter_prompt_history(chat_log) == []
 
 
-def test_compact_search_and_duplicate_references_retain_weak_canonical_continuity():
-    search, _ = fixture()
+def test_compact_search_and_duplicate_references_retain_weak_canonical_continuity(compact_search):
+    search, _ = compact_search
     search_call = SimpleNamespace(tool_args={"search_queries": ["office"], "scope": "devices"})
     messages = [conversation.UserContent(content="Find the office lights")]
     for call_id in ("first", "duplicate"):

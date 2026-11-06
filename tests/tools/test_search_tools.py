@@ -30,7 +30,7 @@ def _candidates(tool, result, kind):
 
 
 def test_semantic_search_schema_explains_parallel_structured_capabilities() -> None:
-    schema = to_openapi(RAGentSemanticSearchTool.parameters)
+    schema = to_openapi(RAGentSemanticSearchTool.parameters, openapi_version="3.1.0")
 
     assert "search_queries" not in schema.get("required", [])
     assert "capabilities" not in schema.get("required", [])

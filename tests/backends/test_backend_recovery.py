@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import aiohttp
 import httpx
 from openai import AsyncOpenAI, APIConnectionError
+import probatio
 import pytest
 
 from custom_components.ha_ragent.src import const
@@ -14,6 +15,7 @@ from custom_components.ha_ragent.src.backends.llm import ollama_backend as ollam
 from custom_components.ha_ragent.src.backends.embedder import ollama_backend as ollama_embedder
 from custom_components.ha_ragent.src.backends.llm.openai_backend import OpenAiLlmBackend
 from custom_components.ha_ragent.src.backends.embedder.openai_backend import OpenAiEmbedder
+from custom_components.ha_ragent.src.homeassistant.extractors.tool_extractor import ToolExtractor
 
 
 CONFIG = {
@@ -88,6 +90,79 @@ def ollama_backend(monkeypatch, session, embedding=False):
 
 async def chat(backend):
     return [chunk async for chunk in backend.async_send_chat_request(CONFIG, MESSAGES, [])]
+
+
+@pytest.mark.parametrize("provider", ["ollama", "openai"])
+def test_native_tool_schemas_reach_both_backends_unchanged(monkeypatch, provider):
+    native = SimpleNamespace(
+        name="NativeAction", description="Perform an action",
+        parameters=probatio.Schema({
+            probatio.Required("name"): str,
+            probatio.Optional("minutes"): int,
+            probatio.Optional("target"): probatio.Any(str, [str]),
+        }),
+    )
+    alternatives = {
+        "type": "object",
+        "properties": {
+            "hours": {"type": "integer", "minimum": 1, "default": 1},
+            "minutes": {"type": "integer", "minimum": 1},
+            "label": {"type": ["string", "null"]},
+        },
+        "anyOf": [{"required": ["hours"]}, {"required": ["minutes"]}],
+        "additionalProperties": True,
+    }
+    raw_tools = [
+        native,
+        SimpleNamespace(name="TimerAction", description="Set a timer", parameters=alternatives),
+    ]
+    expected_schemas = [
+        probatio.to_openapi(native.parameters, openapi_version="3.1.0"),
+        deepcopy(alternatives),
+    ]
+    expected = [
+        {"type": "function", "function": {
+            "name": raw.name, "description": raw.description, "parameters": schema,
+        }}
+        for raw, schema in zip(raw_tools, expected_schemas, strict=True)
+    ]
+    tools = ToolExtractor.tools_from_api(
+        SimpleNamespace(tools=raw_tools, custom_serializer=None), [tool.name for tool in raw_tools],
+    )
+    requests = []
+
+    async def send(backend):
+        return [chunk async for chunk in backend.async_send_chat_request(CONFIG, MESSAGES, tools)]
+
+    if provider == "ollama":
+        session = Session(Response(lines=[{"message": {"content": "done"}, "done": True}]))
+        assert asyncio.run(send(ollama_backend(monkeypatch, session))) == ["done"]
+        requests.append(session.requests[0][2]["json"])
+    else:
+        def handler(request):
+            requests.append(json.loads(request.content))
+            chunk = {
+                "id": "test", "object": "chat.completion.chunk", "created": 0, "model": "test",
+                "choices": [{"index": 0, "delta": {"content": "done"}, "finish_reason": "stop"}],
+            }
+            return httpx.Response(
+                200, headers={"content-type": "text/event-stream"},
+                content=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode(),
+            )
+
+        async def run():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as transport:
+                async with AsyncOpenAI(api_key="test", http_client=transport, max_retries=0) as client:
+                    backend = OpenAiLlmBackend(SimpleNamespace(), {})
+                    backend._client = client
+                    return await send(backend)
+
+        assert asyncio.run(run()) == ["done"]
+
+    assert len(requests) == 1
+    assert requests[0]["tools"] == expected
+    assert tools[0].parameters["properties"]["minutes"] == {"type": "integer"}
+    assert alternatives == expected_schemas[1]
 
 
 @pytest.mark.parametrize("error", [aiohttp.ClientConnectionError(), TimeoutError(),
